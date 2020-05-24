@@ -29,7 +29,6 @@ func handleTextEvent(event *gomatrix.Event) {
 	if event.Content["msgtype"] == "m.text" && event.Sender != matrixClient.UserID {
 		if strings.HasPrefix(event.Content["body"].(string), "!ping") {
 			split := strings.Split(event.Content["body"].(string), " ")
-			log.Print(split)
 			if len(split) < 2 {
 				matrixClient.SendMessage(event.RoomID, "Usage: !ping <host> <count>")
 				return
@@ -40,12 +39,13 @@ func handleTextEvent(event *gomatrix.Event) {
 					count = i
 				}
 			}
-			log.Print(count)
+			command := "/bin/ping"
 			countFlag := "-c"
 			if runtime.GOOS == "windows" {
+				command = "ping"
 				countFlag = "-n"
 			}
-			cmd := exec.Command("ping", countFlag, strconv.Itoa(count), split[1])
+			cmd := exec.Command(command, countFlag, strconv.Itoa(count), split[1])
 
 			cmdReader, err := cmd.StdoutPipe()
 			if err != nil {
