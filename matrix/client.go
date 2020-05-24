@@ -48,7 +48,7 @@ type httpError struct {
 }
 
 func (c Client) sendMessage(roomID string, message interface{}, retryOnFailure bool) <-chan string {
-	done := make(chan string)
+	done := make(chan string, 1)
 	c.outboundEvents <- OutboundEvent{roomID, "m.room.message", message, retryOnFailure, done}
 	return done
 }
