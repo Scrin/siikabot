@@ -43,10 +43,9 @@ func (bot SiikaBot) Run() error {
 }
 
 func NewSiikaBot(homeserverURL string, userID string, accessToken string) SiikaBot {
-	matrixClient := matrix.NewClient(homeserverURL, userID, accessToken)
-	bot := SiikaBot{matrixClient}
-	syncer := matrixClient.Syncer
-	syncer.OnEventType("m.room.member", bot.handleMemberEvent)
-	syncer.OnEventType("m.room.message", bot.handleTextEvent)
+	c := matrix.NewClient(homeserverURL, userID, accessToken)
+	bot := SiikaBot{c}
+	c.OnEvent("m.room.member", bot.handleMemberEvent)
+	c.OnEvent("m.room.message", bot.handleTextEvent)
 	return bot
 }

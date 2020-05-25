@@ -8,19 +8,18 @@ import (
 	"github.com/matrix-org/gomatrix"
 )
 
-type OutboundEvent struct {
+type Client struct {
+	UserID         string
+	client         *gomatrix.Client
+	outboundEvents chan outboundEvent
+}
+
+type outboundEvent struct {
 	RoomID         string
 	EventType      string
 	Content        interface{}
 	RetryOnFailure bool
 	done           chan<- string
-}
-
-type Client struct {
-	UserID         string
-	Syncer         *gomatrix.DefaultSyncer
-	client         *gomatrix.Client
-	outboundEvents chan OutboundEvent
 }
 
 type simpleMessage struct {
@@ -49,7 +48,7 @@ type httpError struct {
 
 func (c Client) sendMessage(roomID string, message interface{}, retryOnFailure bool) <-chan string {
 	done := make(chan string, 1)
-	c.outboundEvents <- OutboundEvent{roomID, "m.room.message", message, retryOnFailure, done}
+	c.outboundEvents <- outboundEvent{roomID, "m.room.message", message, retryOnFailure, done}
 	return done
 }
 
@@ -65,6 +64,10 @@ func (c Client) InitialSync() *gomatrix.RespSync {
 // Sync begins synchronizing the events from the server and returns only in case of a severe error
 func (c Client) Sync() error {
 	return c.client.Sync()
+}
+
+func (c Client) OnEvent(eventType string, callback gomatrix.OnEventListener) {
+	c.client.Syncer.(*gomatrix.DefaultSyncer).OnEventType(eventType, callback)
 }
 
 func (c Client) JoinRoom(roomID string) {
@@ -162,12 +165,10 @@ func NewClient(homeserverURL, userID, accessToken string) Client {
 	if err != nil {
 		log.Fatal(err)
 	}
-	syncer := client.Syncer.(*gomatrix.DefaultSyncer)
 	c := Client{
 		userID,
-		syncer,
 		client,
-		make(chan OutboundEvent, 256),
+		make(chan outboundEvent, 256),
 	}
 	go processOutboundEvents(c)
 	return c
