@@ -20,13 +20,51 @@ func (bot SiikaBot) ping(roomID string, msg string) {
 			count = i
 		}
 	}
-	command := "/bin/ping"
+	command := "ping"
 	countFlag := "-c"
 	if runtime.GOOS == "windows" {
-		command = "ping"
 		countFlag = "-n"
 	}
 	cmd := exec.Command(command, countFlag, strconv.Itoa(count), split[1])
+
+	cmdReader, err := cmd.StdoutPipe()
+	if err != nil {
+		bot.client.SendMessage(roomID, err.Error())
+		return
+	}
+
+	scanner := bufio.NewScanner(cmdReader)
+	go func() {
+		outChan, done := bot.client.SendStreamingMessage(roomID)
+		var output []string
+		for scanner.Scan() {
+			output = append(output, scanner.Text())
+			outChan <- strings.Join(output, "\n")
+		}
+		close(done)
+		if err = cmd.Wait(); err != nil {
+			bot.client.SendMessage(roomID, err.Error())
+		}
+	}()
+
+	err = cmd.Start()
+	if err != nil {
+		bot.client.SendMessage(roomID, err.Error())
+		return
+	}
+}
+
+func (bot SiikaBot) traceroute(roomID string, msg string) {
+	split := strings.Split(msg, " ")
+	if len(split) < 2 {
+		bot.client.SendMessage(roomID, "Usage: !traceroute <host>")
+		return
+	}
+	command := "traceroute"
+	if runtime.GOOS == "windows" {
+		command = "tracert"
+	}
+	cmd := exec.Command(command, split[1])
 
 	cmdReader, err := cmd.StdoutPipe()
 	if err != nil {

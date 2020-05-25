@@ -16,6 +16,8 @@ func (bot SiikaBot) handleTextEvent(event *gomatrix.Event) {
 	if event.Content["msgtype"] == "m.text" && event.Sender != bot.client.UserID {
 		if strings.HasPrefix(event.Content["body"].(string), "!ping") {
 			bot.ping(event.RoomID, event.Content["body"].(string))
+		} else if strings.HasPrefix(event.Content["body"].(string), "!traceroute") {
+			bot.traceroute(event.RoomID, event.Content["body"].(string))
 		}
 	}
 }
