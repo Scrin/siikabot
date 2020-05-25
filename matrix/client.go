@@ -18,8 +18,8 @@ type OutboundEvent struct {
 
 type Client struct {
 	UserID         string
-	Client         *gomatrix.Client
 	Syncer         *gomatrix.DefaultSyncer
+	client         *gomatrix.Client
 	outboundEvents chan OutboundEvent
 }
 
@@ -51,6 +51,27 @@ func (c Client) sendMessage(roomID string, message interface{}, retryOnFailure b
 	done := make(chan string, 1)
 	c.outboundEvents <- OutboundEvent{roomID, "m.room.message", message, retryOnFailure, done}
 	return done
+}
+
+// InitialSync gets the initial sync from the server for catching up with important missed event such as invites
+func (c Client) InitialSync() *gomatrix.RespSync {
+	resp, err := c.client.SyncRequest(0, "", "", false, "")
+	if err != nil {
+		log.Fatal(err)
+	}
+	return resp
+}
+
+// Sync begins synchronizing the events from the server and returns only in case of a severe error
+func (c Client) Sync() error {
+	return c.client.Sync()
+}
+
+func (c Client) JoinRoom(roomID string) {
+	_, err := c.client.JoinRoom(roomID, "", nil)
+	if err != nil {
+		log.Print("Failed to join room "+roomID+": ", err)
+	}
 }
 
 // SendMessage queues a message to be sent and returns immediatedly.
@@ -108,7 +129,7 @@ func (c Client) SendStreamingMessage(roomID string) (messageUpdate chan<- string
 func processOutboundEvents(client Client) {
 	for event := range client.outboundEvents {
 		for {
-			resp, err := client.Client.SendMessageEvent(event.RoomID, event.EventType, event.Content)
+			resp, err := client.client.SendMessageEvent(event.RoomID, event.EventType, event.Content)
 			if err == nil {
 				if event.done != nil {
 					event.done <- resp.EventID
@@ -144,8 +165,8 @@ func NewClient(homeserverURL, userID, accessToken string) Client {
 	syncer := client.Syncer.(*gomatrix.DefaultSyncer)
 	c := Client{
 		userID,
-		client,
 		syncer,
+		client,
 		make(chan OutboundEvent, 256),
 	}
 	go processOutboundEvents(c)
