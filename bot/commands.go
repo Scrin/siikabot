@@ -8,10 +8,10 @@ import (
 	"strings"
 )
 
-func (bot SiikaBot) ping(roomID string, msg string) {
+func ping(roomID string, msg string) {
 	split := strings.Split(msg, " ")
 	if len(split) < 2 {
-		bot.client.SendMessage(roomID, "Usage: !ping <host> <count>")
+		client.SendMessage(roomID, "Usage: !ping <host> <count>")
 		return
 	}
 	count := 5
@@ -29,13 +29,13 @@ func (bot SiikaBot) ping(roomID string, msg string) {
 
 	cmdReader, err := cmd.StdoutPipe()
 	if err != nil {
-		bot.client.SendMessage(roomID, err.Error())
+		client.SendMessage(roomID, err.Error())
 		return
 	}
 
 	scanner := bufio.NewScanner(cmdReader)
 	go func() {
-		outChan, done := bot.client.SendStreamingMessage(roomID)
+		outChan, done := client.SendStreamingMessage(roomID)
 		var output []string
 		for scanner.Scan() {
 			output = append(output, scanner.Text())
@@ -43,21 +43,21 @@ func (bot SiikaBot) ping(roomID string, msg string) {
 		}
 		close(done)
 		if err = cmd.Wait(); err != nil {
-			bot.client.SendMessage(roomID, err.Error())
+			client.SendMessage(roomID, err.Error())
 		}
 	}()
 
 	err = cmd.Start()
 	if err != nil {
-		bot.client.SendMessage(roomID, err.Error())
+		client.SendMessage(roomID, err.Error())
 		return
 	}
 }
 
-func (bot SiikaBot) traceroute(roomID string, msg string) {
+func traceroute(roomID string, msg string) {
 	split := strings.Split(msg, " ")
 	if len(split) < 2 {
-		bot.client.SendMessage(roomID, "Usage: !traceroute <host>")
+		client.SendMessage(roomID, "Usage: !traceroute <host>")
 		return
 	}
 	command := "traceroute"
@@ -68,13 +68,13 @@ func (bot SiikaBot) traceroute(roomID string, msg string) {
 
 	cmdReader, err := cmd.StdoutPipe()
 	if err != nil {
-		bot.client.SendMessage(roomID, err.Error())
+		client.SendMessage(roomID, err.Error())
 		return
 	}
 
 	scanner := bufio.NewScanner(cmdReader)
 	go func() {
-		outChan, done := bot.client.SendStreamingMessage(roomID)
+		outChan, done := client.SendStreamingMessage(roomID)
 		var output []string
 		for scanner.Scan() {
 			output = append(output, scanner.Text())
@@ -82,13 +82,13 @@ func (bot SiikaBot) traceroute(roomID string, msg string) {
 		}
 		close(done)
 		if err = cmd.Wait(); err != nil {
-			bot.client.SendMessage(roomID, err.Error())
+			client.SendMessage(roomID, err.Error())
 		}
 	}()
 
 	err = cmd.Start()
 	if err != nil {
-		bot.client.SendMessage(roomID, err.Error())
+		client.SendMessage(roomID, err.Error())
 		return
 	}
 }

@@ -34,5 +34,5 @@ func main() {
 		log.Fatal("invalid config")
 	}
 
-	log.Fatal(bot.NewSiikaBot(homeserverURL, userID, accessToken).Run())
+	log.Fatal(bot.Run(homeserverURL, userID, accessToken))
 }

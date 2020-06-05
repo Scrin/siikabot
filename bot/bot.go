@@ -8,44 +8,35 @@ import (
 	"github.com/matrix-org/gomatrix"
 )
 
-type SiikaBot struct {
+var (
 	client matrix.Client
-}
+)
 
-func (bot SiikaBot) handleTextEvent(event *gomatrix.Event) {
-	if event.Content["msgtype"] == "m.text" && event.Sender != bot.client.UserID {
+func handleTextEvent(event *gomatrix.Event) {
+	if event.Content["msgtype"] == "m.text" && event.Sender != client.UserID {
 		if strings.HasPrefix(event.Content["body"].(string), "!ping") {
-			bot.ping(event.RoomID, event.Content["body"].(string))
+			ping(event.RoomID, event.Content["body"].(string))
 		} else if strings.HasPrefix(event.Content["body"].(string), "!traceroute") {
-			bot.traceroute(event.RoomID, event.Content["body"].(string))
+			traceroute(event.RoomID, event.Content["body"].(string))
 		}
 	}
 }
 
-func (bot SiikaBot) handleMemberEvent(event *gomatrix.Event) {
-	if event.Content["membership"] == "invite" && *event.StateKey == bot.client.UserID {
-		bot.client.JoinRoom(event.RoomID)
+func handleMemberEvent(event *gomatrix.Event) {
+	if event.Content["membership"] == "invite" && *event.StateKey == client.UserID {
+		client.JoinRoom(event.RoomID)
 		log.Print("Joined room " + event.RoomID)
 	}
 }
 
-func (bot SiikaBot) initialSync() {
-	resp := bot.client.InitialSync()
+func Run(homeserverURL string, userID string, accessToken string) error {
+	client = matrix.NewClient(homeserverURL, userID, accessToken)
+	client.OnEvent("m.room.member", handleMemberEvent)
+	client.OnEvent("m.room.message", handleTextEvent)
+	resp := client.InitialSync()
 	for roomID, _ := range resp.Rooms.Invite {
-		bot.client.JoinRoom(roomID)
+		client.JoinRoom(roomID)
 		log.Print("Joined room " + roomID)
 	}
-}
-
-func (bot SiikaBot) Run() error {
-	bot.initialSync()
-	return bot.client.Sync()
-}
-
-func NewSiikaBot(homeserverURL string, userID string, accessToken string) SiikaBot {
-	c := matrix.NewClient(homeserverURL, userID, accessToken)
-	bot := SiikaBot{c}
-	c.OnEvent("m.room.member", bot.handleMemberEvent)
-	c.OnEvent("m.room.message", bot.handleTextEvent)
-	return bot
+	return client.Sync()
 }
