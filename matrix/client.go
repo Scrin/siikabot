@@ -3,6 +3,7 @@ package matrix
 import (
 	"encoding/json"
 	"log"
+	"strings"
 	"time"
 
 	strip "github.com/grokify/html-strip-tags-go"
@@ -91,7 +92,8 @@ func (c Client) SendMessage(roomID string, message string) <-chan string {
 //
 // The returned channel will provide the event ID of the message after the message has been sent
 func (c Client) SendFormattedMessage(roomID string, message string) <-chan string {
-	return c.sendMessage(roomID, simpleMessage{"m.text", strip.StripTags(message), "org.matrix.custom.html", message}, true)
+	stripped := strip.StripTags(strings.Replace(message, "<br />", "\n", -1))
+	return c.sendMessage(roomID, simpleMessage{"m.text", stripped, "org.matrix.custom.html", message}, true)
 }
 
 // SendStreamingMessage creates a pair of channels that can be used to send and update (by editing) a message in place.
