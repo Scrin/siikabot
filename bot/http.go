@@ -51,15 +51,16 @@ func sendGitlabMsg(push GitlabPush, roomID string) {
 	before := push.BeforeCommit[0:7]
 	after := push.AfterCommit[0:7]
 
-	output := []string{"[<font color=\"#0000FC\">" + push.Project.Name + "</font>] " + push.UserName + " pushed " + strconv.Itoa(push.TotalCommitsCount) +
-		" commits to <font color=\"#7F0000\">" + branch + "</font> " + push.Project.WebUrl + "/compare/" + before + "..." + after}
+	output := []string{"[<font color=\"#0000FC\">" + push.Project.Name + "</font>] " +
+		"<font color=\"#9C009C\">" + push.UserName + "</font> pushed " + strconv.Itoa(push.TotalCommitsCount) + " commits " +
+		"to <font color=\"#7F0000\">" + branch + "</font> " + push.Project.WebUrl + "/compare/" + before + "..." + after}
 
 	for _, commit := range push.Commits {
 		added := strconv.Itoa(+len(commit.Added))
 		modified := strconv.Itoa(+len(commit.Modified))
 		removed := strconv.Itoa(+len(commit.Removed))
 		output = append(output, "<font color=\"#D2D2D2\">"+commit.ID[0:7]+"</font> "+
-			"(<font color=\"#009300\">+"+added+"</font>|<font color=\"#000000\">±"+modified+"</font>|<font color=\"#FF0000\">-"+removed+"</font>) "+
+			"(<font color=\"#009300\">+"+added+"</font>|<font color=\"#555555\">±"+modified+"</font>|<font color=\"#FF0000\">-"+removed+"</font>) "+
 			"<font color=\"#9C009C\">"+commit.Author.Name+"</font>: "+commit.Message)
 	}
 
