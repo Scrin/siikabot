@@ -29,7 +29,7 @@ func handleMemberEvent(event *gomatrix.Event) {
 	}
 }
 
-func Run(homeserverURL string, userID string, accessToken string) error {
+func Run(homeserverURL, userID, accessToken, hookSecret string) error {
 	client = matrix.NewClient(homeserverURL, userID, accessToken)
 	client.OnEvent("m.room.member", handleMemberEvent)
 	client.OnEvent("m.room.message", handleTextEvent)
@@ -38,5 +38,6 @@ func Run(homeserverURL string, userID string, accessToken string) error {
 		client.JoinRoom(roomID)
 		log.Print("Joined room " + roomID)
 	}
+	initHTTP(hookSecret)
 	return client.Sync()
 }

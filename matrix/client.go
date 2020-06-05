@@ -5,6 +5,7 @@ import (
 	"log"
 	"time"
 
+	strip "github.com/grokify/html-strip-tags-go"
 	"github.com/matrix-org/gomatrix"
 )
 
@@ -23,8 +24,10 @@ type outboundEvent struct {
 }
 
 type simpleMessage struct {
-	MsgType string `json:"msgtype"`
-	Body    string `json:"body"`
+	MsgType       string `json:"msgtype"`
+	Body          string `json:"body"`
+	Format        string `json:"format,omitempty"`
+	FormattedBody string `json:"formatted_body,omitempty"`
 }
 
 type messageEdit struct {
@@ -81,7 +84,14 @@ func (c Client) JoinRoom(roomID string) {
 //
 // The returned channel will provide the event ID of the message after the message has been sent
 func (c Client) SendMessage(roomID string, message string) <-chan string {
-	return c.sendMessage(roomID, simpleMessage{"m.text", message}, true)
+	return c.sendMessage(roomID, simpleMessage{"m.text", message, "", ""}, true)
+}
+
+// SendFormattedMessage queues a html-formatted message to be sent and returns immediatedly.
+//
+// The returned channel will provide the event ID of the message after the message has been sent
+func (c Client) SendFormattedMessage(roomID string, message string) <-chan string {
+	return c.sendMessage(roomID, simpleMessage{"m.text", strip.StripTags(message), "org.matrix.custom.html", message}, true)
 }
 
 // SendStreamingMessage creates a pair of channels that can be used to send and update (by editing) a message in place.
