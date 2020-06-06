@@ -22,12 +22,15 @@ type GithubPush struct {
 		Name string `json:"name"`
 	} `json:"pusher"`
 	Repository struct {
-		Name string `json:"name"`
+		FullName string `json:"full_name"`
 	} `json:"repository"`
 	Commits []struct {
-		Sha     string `json:"sha"`
-		Message string `json:"message"`
-		Author  struct {
+		ID       string   `json:"id"`
+		Message  string   `json:"message"`
+		Added    []string `json:"added"`
+		Modified []string `json:"modified"`
+		Removed  []string `json:"removed"`
+		Author   struct {
 			Name string `json:"name"`
 		} `json:"author"`
 	} `json:"commits"`
@@ -49,12 +52,16 @@ func sendGithubMsg(push GithubPush, roomID string) {
 		branch = ref[2]
 	}
 
-	output := []string{"[<font color=\"#0000FC\">" + push.Repository.Name + "</font>] " +
+	output := []string{"[<font color=\"#0000FC\">" + push.Repository.FullName + "</font>] " +
 		"<font color=\"#9C009C\">" + push.Pusher.Name + "</font> pushed " + strconv.Itoa(len(push.Commits)) + " commits " +
 		"to <font color=\"#7F0000\">" + branch + "</font> " + push.Compare}
 
 	for _, commit := range push.Commits {
-		output = append(output, "<font color=\"#D2D2D2\">"+commit.Sha[0:7]+"</font> "+
+		added := strconv.Itoa(len(commit.Added))
+		modified := strconv.Itoa(len(commit.Modified))
+		removed := strconv.Itoa(len(commit.Removed))
+		output = append(output, "<font color=\"#D2D2D2\">"+commit.ID[0:7]+"</font> "+
+			"(<font color=\"#009300\">+"+added+"</font>|<font color=\"#555555\">±"+modified+"</font>|<font color=\"#FF0000\">-"+removed+"</font>) "+
 			"<font color=\"#9C009C\">"+commit.Author.Name+"</font>: "+commit.Message)
 	}
 
