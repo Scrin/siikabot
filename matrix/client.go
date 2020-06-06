@@ -153,7 +153,13 @@ func processOutboundEvents(client Client) {
 				break // Success, break the retry loop
 			}
 			var httpErr httpError
-			if jsonErr := json.Unmarshal(err.(gomatrix.HTTPError).Contents, &httpErr); jsonErr != nil {
+			httpError, isHttpError := err.(gomatrix.HTTPError)
+			if !isHttpError {
+				log.Print("Failed to parse error response of unexpected type!", err)
+				event.done <- ""
+				break
+			}
+			if jsonErr := json.Unmarshal(httpError.Contents, &httpErr); jsonErr != nil {
 				log.Print("Failed to parse error response!", jsonErr)
 			}
 
