@@ -99,6 +99,8 @@ func printRuuviData(roomID string) {
 			var grafanaResp grafanaResponse
 			if err = json.NewDecoder(resp.Body).Decode(&grafanaResp); err != nil {
 				respLines = append(respLines, e.Name+" error: "+err.Error())
+			} else if len(grafanaResp.Results) < 1 || len(grafanaResp.Results[0].Series) < 1 {
+				respLines = append(respLines, e.Name+": No data")
 			} else {
 				allValues := grafanaResp.Results[0].Series[0].Values
 				latestValues := allValues[len(allValues)-1]
