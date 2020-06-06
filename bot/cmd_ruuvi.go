@@ -100,11 +100,13 @@ func printRuuviData(roomID string) {
 			if err = json.NewDecoder(resp.Body).Decode(&grafanaResp); err != nil {
 				respLines = append(respLines, e.Name+" error: "+err.Error())
 			} else {
-				temps := grafanaResp.Results[0].Series[0].Values
-				currentTemp := strconv.FormatFloat(temps[len(temps)-1][1].(float64), 'f', 2, 64)
-				respLines = append(respLines, e.Name+": "+currentTemp+"ºC")
+				allValues := grafanaResp.Results[0].Series[0].Values
+				latestValues := allValues[len(allValues)-1]
+				temp := strconv.FormatFloat(latestValues[1].(float64), 'f', 2, 64)
+				humi := strconv.FormatFloat(latestValues[2].(float64), 'f', 2, 64)
+				respLines = append(respLines, e.Name+": <b>"+temp+"</b> ºC - <b>"+humi+"</b> %")
 			}
 		}
 	}
-	client.SendMessage(roomID, strings.Join(respLines, "\n"))
+	client.SendFormattedMessage(roomID, strings.Join(respLines, "<br />"))
 }
