@@ -143,6 +143,7 @@ func (c Client) SendStreamingMessage(roomID string) (messageUpdate chan<- string
 
 func processOutboundEvents(client Client) {
 	for event := range client.outboundEvents {
+	retry:
 		for {
 			resp, err := client.client.SendMessageEvent(event.RoomID, event.EventType, event.Content)
 			if err == nil {
@@ -159,6 +160,11 @@ func processOutboundEvents(client Client) {
 			switch e := httpErr.Errcode; e {
 			case "M_LIMIT_EXCEEDED":
 				time.Sleep(time.Duration(httpErr.RetryAfterMs) * time.Millisecond)
+			case "M_FORBIDDEN":
+				log.Print("Failed to send message to room "+event.RoomID+" err: ", err)
+				log.Print(string(err.(gomatrix.HTTPError).Contents))
+				event.done <- ""
+				break retry
 			default:
 				log.Print("Failed to send message to room "+event.RoomID+" err: ", err)
 				log.Print(string(err.(gomatrix.HTTPError).Contents))

@@ -69,8 +69,8 @@ func sendGitlabMsg(push GitlabPush, roomID string) {
 
 func initHTTP(hookSecret string) {
 	http.HandleFunc("/hooks/gitlab", func(w http.ResponseWriter, req *http.Request) {
-		token := strings.Split(req.Header.Get("X-Gitlab-Token"), " ")
-		if len(token) != 2 || token[0] != hookSecret {
+		roomID := req.URL.Query().Get("room_id")
+		if req.Header.Get("X-Gitlab-Token") != hookSecret || roomID == "" {
 			return
 		}
 		msg := GitlabPush{}
@@ -80,7 +80,7 @@ func initHTTP(hookSecret string) {
 			return
 		}
 		req.Body.Close()
-		sendGitlabMsg(msg, token[1])
+		sendGitlabMsg(msg, roomID)
 	})
 	go http.ListenAndServe(":8080", nil)
 }
