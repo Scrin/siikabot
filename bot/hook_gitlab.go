@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 type GitlabPush struct {
@@ -67,7 +69,9 @@ func sendGitlabMsg(push GitlabPush, roomID string) {
 }
 
 func gitlabHandler(hookSecret string) func(w http.ResponseWriter, req *http.Request) {
+	labels := prometheus.Labels{"hook": "gitlab"}
 	return func(w http.ResponseWriter, req *http.Request) {
+		metrics.webhooksHandled.With(labels).Inc()
 		roomID := req.URL.Query().Get("room_id")
 		if req.Header.Get("X-Gitlab-Token") != hookSecret || roomID == "" {
 			return
