@@ -30,10 +30,8 @@ type GitlabPush struct {
 	TotalCommitsCount int `json:"total_commits_count"`
 }
 
-const nullCommit = "0000000000000000000000000000000000000000"
-
 func sendGitlabMsg(push GitlabPush, roomID string) {
-
+	nullCommit := "0000000000000000000000000000000000000000"
 	if push.AfterCommit == nullCommit {
 		// TODO branch was deleted
 		return
