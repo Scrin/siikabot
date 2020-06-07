@@ -45,6 +45,15 @@ func ruuvi(roomID, sender, msg string) {
 		return
 	}
 	switch params[1] {
+	case "query":
+		switch len(params) {
+		case 3:
+			queryRuuviData(roomID, "", "", params[2])
+		case 5:
+			queryRuuviData(roomID, params[2], params[3], params[4])
+		default:
+			client.SendMessage(roomID, "Usage: !ruuvi query [<name> <tag_name>] <field>")
+		}
 	case "config":
 		client.SendMessage(roomID, formatRuuviEndpoints(getRuuviEndpoints()))
 	case "add":
@@ -89,11 +98,67 @@ func ruuvi(roomID, sender, msg string) {
 	}
 }
 
+func queryRuuviData(roomID, name, tagName, field string) {
+	tagName = strings.Replace(tagName, `"`, "", -1)
+	field = strings.Replace(field, `"`, "", -1)
+	endpoints := getRuuviEndpoints()
+	if name == "" && tagName == "" {
+		var respLines []string
+		for _, e := range endpoints {
+			resp, err := http.Get(e.BaseURL + `&q=SELECT%20last("` + field + `")%20FROM%20"ruuvi_measurements"%20WHERE%20("name"%20%3D%20%27` + e.TagName + `%27)%20AND%20time%20>%3D%20now()%20-%201h`)
+			if err != nil {
+				respLines = append(respLines, e.Name+" error: "+err.Error())
+			} else {
+				var grafanaResp grafanaResponse
+				if err = json.NewDecoder(resp.Body).Decode(&grafanaResp); err != nil {
+					respLines = append(respLines, e.Name+" error: "+err.Error())
+				} else if len(grafanaResp.Results) < 1 || len(grafanaResp.Results[0].Series) < 1 {
+					respLines = append(respLines, e.Name+": No data")
+				} else {
+					allValues := grafanaResp.Results[0].Series[0].Values
+					latestValues := allValues[len(allValues)-1]
+					value := strconv.FormatFloat(latestValues[1].(float64), 'f', 2, 64)
+					respLines = append(respLines, e.Name+" "+field+": <b>"+value+"</b>")
+				}
+			}
+		}
+		client.SendFormattedMessage(roomID, strings.Join(respLines, "<br />"))
+	} else {
+		ok := false
+		for _, e := range endpoints {
+			if e.Name != name {
+				continue
+			}
+			resp, err := http.Get(e.BaseURL + `&q=SELECT%20last("` + field + `")%20FROM%20"ruuvi_measurements"%20WHERE%20("name"%20%3D%20%27` + tagName + `%27)%20AND%20time%20>%3D%20now()%20-%201h`)
+			if err != nil {
+				client.SendFormattedMessage(roomID, err.Error())
+			} else {
+				var grafanaResp grafanaResponse
+				if err = json.NewDecoder(resp.Body).Decode(&grafanaResp); err != nil {
+					client.SendFormattedMessage(roomID, err.Error())
+				} else if len(grafanaResp.Results) < 1 || len(grafanaResp.Results[0].Series) < 1 {
+					client.SendFormattedMessage(roomID, "No data")
+				} else {
+					allValues := grafanaResp.Results[0].Series[0].Values
+					latestValues := allValues[len(allValues)-1]
+					value := strconv.FormatFloat(latestValues[1].(float64), 'f', 2, 64)
+					client.SendFormattedMessage(roomID, e.Name+" "+tagName+" "+field+": <b>"+value+"</b>")
+				}
+			}
+			ok = true
+			break
+		}
+		if !ok {
+			client.SendFormattedMessage(roomID, "No data")
+		}
+	}
+}
+
 func printRuuviData(roomID string) {
 	endpoints := getRuuviEndpoints()
 	var respLines []string
 	for _, e := range endpoints {
-		resp, err := http.Get(e.BaseURL + `&q=SELECT%20last("temperature"),%20last("humidity")%20FROM%20"ruuvi_measurements"%20WHERE%20("name"%20%3D%20%27` + e.TagName + `%27)%20AND%20time%20>%3D%20now()%20-%201h`)
+		resp, err := http.Get(e.BaseURL + `&q=SELECT%20last("temperature"),%20last("humidity"),%20last("pressure")%20FROM%20"ruuvi_measurements"%20WHERE%20("name"%20%3D%20%27` + e.TagName + `%27)%20AND%20time%20>%3D%20now()%20-%201h`)
 		if err != nil {
 			respLines = append(respLines, e.Name+" error: "+err.Error())
 		} else {
@@ -107,7 +172,8 @@ func printRuuviData(roomID string) {
 				latestValues := allValues[len(allValues)-1]
 				temp := strconv.FormatFloat(latestValues[1].(float64), 'f', 2, 64)
 				humi := strconv.FormatFloat(latestValues[2].(float64), 'f', 2, 64)
-				respLines = append(respLines, e.Name+": <b>"+temp+"</b> ºC, <b>"+humi+"</b> %")
+				press := strconv.FormatFloat(latestValues[3].(float64)/100, 'f', 2, 64)
+				respLines = append(respLines, e.Name+": <b>"+temp+"</b> ºC, <b>"+humi+"</b> %, <b>"+press+"</b> hPa")
 			}
 		}
 	}
