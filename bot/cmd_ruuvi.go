@@ -8,8 +8,9 @@ import (
 )
 
 type ruuviEndpoint struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
+	Name    string `json:"name"`
+	BaseURL string `json:"base_url"`
+	TagName string `json:"tag_name"`
 }
 
 type grafanaResponse struct {
@@ -23,7 +24,7 @@ type grafanaResponse struct {
 func formatRuuviEndpoints(endpoints []ruuviEndpoint) string {
 	respLines := []string{"Current ruuvi endpoints: "}
 	for _, endpoint := range endpoints {
-		respLines = append(respLines, endpoint.Name+": "+endpoint.URL)
+		respLines = append(respLines, endpoint.Name+": "+endpoint.BaseURL+" tag name: "+endpoint.TagName)
 	}
 	return strings.Join(respLines, "\n")
 }
@@ -52,10 +53,10 @@ func ruuvi(roomID, sender, msg string) {
 			return
 		}
 		if len(params) < 4 {
-			client.SendMessage(roomID, "Usage: !ruuvi add <url> <name>")
+			client.SendMessage(roomID, "Usage: !ruuvi add <base_url> <tag_name> <name>")
 			return
 		}
-		endpoints := append(getRuuviEndpoints(), ruuviEndpoint{strings.Join(params[3:], " "), params[2]})
+		endpoints := append(getRuuviEndpoints(), ruuviEndpoint{strings.Join(params[4:], " "), params[2], params[3]})
 		res, err := json.Marshal(endpoints)
 		if err != nil {
 			client.SendMessage(roomID, err.Error())
@@ -92,7 +93,7 @@ func printRuuviData(roomID string) {
 	endpoints := getRuuviEndpoints()
 	var respLines []string
 	for _, e := range endpoints {
-		resp, err := http.Get(e.URL)
+		resp, err := http.Get(e.BaseURL + `&q=SELECT%20last("temperature"),%20last("humidity")%20FROM%20"ruuvi_measurements"%20WHERE%20("name"%20%3D%20%27` + e.TagName + `%27)%20AND%20time%20>%3D%20now()%20-%201h`)
 		if err != nil {
 			respLines = append(respLines, e.Name+" error: "+err.Error())
 		} else {
@@ -106,7 +107,7 @@ func printRuuviData(roomID string) {
 				latestValues := allValues[len(allValues)-1]
 				temp := strconv.FormatFloat(latestValues[1].(float64), 'f', 2, 64)
 				humi := strconv.FormatFloat(latestValues[2].(float64), 'f', 2, 64)
-				respLines = append(respLines, e.Name+": <b>"+temp+"</b> ºC - <b>"+humi+"</b> %")
+				respLines = append(respLines, e.Name+": <b>"+temp+"</b> ºC, <b>"+humi+"</b> %")
 			}
 		}
 	}
