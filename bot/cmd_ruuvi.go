@@ -2,9 +2,11 @@ package bot
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type ruuviEndpoint struct {
@@ -98,28 +100,56 @@ func ruuvi(roomID, sender, msg string) {
 	}
 }
 
-func queryRuuviData(roomID, name, tagName, field string) {
+func queryGrafana(baseURL, tagName string, offset time.Duration, fields ...string) (*grafanaResponse, error) {
 	tagName = strings.Replace(tagName, `"`, "", -1)
-	field = strings.Replace(field, `"`, "", -1)
+	var queryBuilder strings.Builder
+	queryBuilder.WriteString(baseURL)
+	queryBuilder.WriteString(`&q=SELECT%20`)
+	first := true
+	for _, f := range fields {
+		if first {
+			first = false
+		} else {
+			queryBuilder.WriteString(",")
+		}
+		queryBuilder.WriteString(`last("`)
+		queryBuilder.WriteString(strings.Replace(f, `"`, "", -1))
+		queryBuilder.WriteString(`")`)
+	}
+	queryBuilder.WriteString(`%20FROM%20"ruuvi_measurements"%20WHERE%20("name"%20%3D%20%27`)
+	queryBuilder.WriteString(tagName)
+	queryBuilder.WriteString(`%27)%20AND%20time%20<%3D%20now()%20-%20`)
+	queryBuilder.WriteString(strconv.FormatInt(int64(offset/time.Second), 10))
+	queryBuilder.WriteString(`s%20AND%20time%20>%3D%20now()%20-%20`)
+	queryBuilder.WriteString(strconv.FormatInt(int64((offset+time.Hour)/time.Second), 10))
+	queryBuilder.WriteString(`s`)
+	resp, err := http.Get(queryBuilder.String())
+	if err != nil {
+		return nil, err
+	}
+	var grafanaResp grafanaResponse
+	if err = json.NewDecoder(resp.Body).Decode(&grafanaResp); err != nil {
+		return nil, err
+	} else if len(grafanaResp.Results) < 1 || len(grafanaResp.Results[0].Series) < 1 {
+		return nil, errors.New("No data")
+	}
+	return &grafanaResp, nil
+
+}
+
+func queryRuuviData(roomID, name, tagName, field string) {
 	endpoints := getRuuviEndpoints()
 	if name == "" && tagName == "" {
 		var respLines []string
 		for _, e := range endpoints {
-			resp, err := http.Get(e.BaseURL + `&q=SELECT%20last("` + field + `")%20FROM%20"ruuvi_measurements"%20WHERE%20("name"%20%3D%20%27` + e.TagName + `%27)%20AND%20time%20>%3D%20now()%20-%201h`)
+			grafanaResp, err := queryGrafana(e.BaseURL, e.TagName, 0, field)
 			if err != nil {
 				respLines = append(respLines, e.Name+" error: "+err.Error())
 			} else {
-				var grafanaResp grafanaResponse
-				if err = json.NewDecoder(resp.Body).Decode(&grafanaResp); err != nil {
-					respLines = append(respLines, e.Name+" error: "+err.Error())
-				} else if len(grafanaResp.Results) < 1 || len(grafanaResp.Results[0].Series) < 1 {
-					respLines = append(respLines, e.Name+": No data")
-				} else {
-					allValues := grafanaResp.Results[0].Series[0].Values
-					latestValues := allValues[len(allValues)-1]
-					value := strconv.FormatFloat(latestValues[1].(float64), 'f', 2, 64)
-					respLines = append(respLines, e.Name+" "+field+": <b>"+value+"</b>")
-				}
+				allValues := grafanaResp.Results[0].Series[0].Values
+				latestValues := allValues[len(allValues)-1]
+				value := strconv.FormatFloat(latestValues[1].(float64), 'f', 2, 64)
+				respLines = append(respLines, e.Name+" "+field+": <b>"+value+"</b>")
 			}
 		}
 		client.SendFormattedMessage(roomID, strings.Join(respLines, "<br />"))
@@ -129,27 +159,20 @@ func queryRuuviData(roomID, name, tagName, field string) {
 			if e.Name != name {
 				continue
 			}
-			resp, err := http.Get(e.BaseURL + `&q=SELECT%20last("` + field + `")%20FROM%20"ruuvi_measurements"%20WHERE%20("name"%20%3D%20%27` + tagName + `%27)%20AND%20time%20>%3D%20now()%20-%201h`)
+			grafanaResp, err := queryGrafana(e.BaseURL, tagName, 0, field)
 			if err != nil {
-				client.SendFormattedMessage(roomID, err.Error())
+				client.SendMessage(roomID, err.Error())
 			} else {
-				var grafanaResp grafanaResponse
-				if err = json.NewDecoder(resp.Body).Decode(&grafanaResp); err != nil {
-					client.SendFormattedMessage(roomID, err.Error())
-				} else if len(grafanaResp.Results) < 1 || len(grafanaResp.Results[0].Series) < 1 {
-					client.SendFormattedMessage(roomID, "No data")
-				} else {
-					allValues := grafanaResp.Results[0].Series[0].Values
-					latestValues := allValues[len(allValues)-1]
-					value := strconv.FormatFloat(latestValues[1].(float64), 'f', 2, 64)
-					client.SendFormattedMessage(roomID, e.Name+" "+tagName+" "+field+": <b>"+value+"</b>")
-				}
+				allValues := grafanaResp.Results[0].Series[0].Values
+				latestValues := allValues[len(allValues)-1]
+				value := strconv.FormatFloat(latestValues[1].(float64), 'f', 2, 64)
+				client.SendFormattedMessage(roomID, e.Name+" "+tagName+" "+field+": <b>"+value+"</b>")
 			}
 			ok = true
 			break
 		}
 		if !ok {
-			client.SendFormattedMessage(roomID, "No data")
+			client.SendMessage(roomID, name+" not found")
 		}
 	}
 }
@@ -158,24 +181,31 @@ func printRuuviData(roomID string) {
 	endpoints := getRuuviEndpoints()
 	var respLines []string
 	for _, e := range endpoints {
-		resp, err := http.Get(e.BaseURL + `&q=SELECT%20last("temperature"),%20last("humidity"),%20last("pressure")%20FROM%20"ruuvi_measurements"%20WHERE%20("name"%20%3D%20%27` + e.TagName + `%27)%20AND%20time%20>%3D%20now()%20-%201h`)
+		current, err := queryGrafana(e.BaseURL, e.TagName, 0, "temperature", "humidity", "pressure")
 		if err != nil {
-			respLines = append(respLines, e.Name+" error: "+err.Error())
-		} else {
-			var grafanaResp grafanaResponse
-			if err = json.NewDecoder(resp.Body).Decode(&grafanaResp); err != nil {
-				respLines = append(respLines, e.Name+" error: "+err.Error())
-			} else if len(grafanaResp.Results) < 1 || len(grafanaResp.Results[0].Series) < 1 {
-				respLines = append(respLines, e.Name+": No data")
-			} else {
-				allValues := grafanaResp.Results[0].Series[0].Values
-				latestValues := allValues[len(allValues)-1]
-				temp := strconv.FormatFloat(latestValues[1].(float64), 'f', 2, 64)
-				humi := strconv.FormatFloat(latestValues[2].(float64), 'f', 2, 64)
-				press := strconv.FormatFloat(latestValues[3].(float64)/100, 'f', 2, 64)
-				respLines = append(respLines, e.Name+": <b>"+temp+"</b> ºC, <b>"+humi+"</b> %, <b>"+press+"</b> hPa")
-			}
+			respLines = append(respLines, "<tr><td>"+e.Name+"</td><td>error: "+err.Error()+"</td></tr>")
+			respLines = append(respLines, "<tr><td></td><td></td></tr>")
+			continue
 		}
+		hourAgo, err := queryGrafana(e.BaseURL, e.TagName, time.Hour, "temperature", "humidity", "pressure")
+		if err != nil {
+			respLines = append(respLines, "<tr><td>"+e.Name+"</td><td>error: "+err.Error()+"</td></tr>")
+			respLines = append(respLines, "<tr><td></td><td></td></tr>")
+			continue
+		}
+		yesterday, err := queryGrafana(e.BaseURL, e.TagName, 24*time.Hour, "temperature", "humidity", "pressure")
+		if err != nil {
+			respLines = append(respLines, "<tr><td>"+e.Name+"</td><td>error: "+err.Error()+"</td></tr>")
+			respLines = append(respLines, "<tr><td></td><td></td></tr>")
+			continue
+		}
+		temp := strconv.FormatFloat(current.Results[0].Series[0].Values[0][1].(float64), 'f', 2, 64)
+		humi := strconv.FormatFloat(current.Results[0].Series[0].Values[0][2].(float64), 'f', 2, 64)
+		press := strconv.FormatFloat(current.Results[0].Series[0].Values[0][3].(float64)/100, 'f', 2, 64)
+		lastHourTemp := strconv.FormatFloat(hourAgo.Results[0].Series[0].Values[0][1].(float64), 'f', 2, 64)
+		yesterdayTemp := strconv.FormatFloat(yesterday.Results[0].Series[0].Values[0][1].(float64), 'f', 2, 64)
+		respLines = append(respLines, "<tr><td>"+e.Name+"</td><td><b>"+temp+"</b> ºC, <b>"+humi+"</b> %, <b>"+press+"</b> hPa</td></tr>")
+		respLines = append(respLines, "<tr><td></td><td>1h ago: <b>"+lastHourTemp+"</b> ºC, 24h ago: <b>"+yesterdayTemp+"</b> ºC</td></tr>")
 	}
-	client.SendFormattedMessage(roomID, strings.Join(respLines, "<br />"))
+	client.SendFormattedMessage(roomID, "<table>"+strings.Join(respLines, "")+"</table>")
 }

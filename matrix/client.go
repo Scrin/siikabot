@@ -92,8 +92,31 @@ func (c Client) SendMessage(roomID string, message string) <-chan string {
 //
 // The returned channel will provide the event ID of the message after the message has been sent
 func (c Client) SendFormattedMessage(roomID string, message string) <-chan string {
-	stripped := strip.StripTags(strings.Replace(message, "<br />", "\n", -1))
-	return c.sendMessage(roomID, simpleMessage{"m.text", stripped, "org.matrix.custom.html", message}, true)
+	return c.sendMessage(roomID, simpleMessage{"m.text", stripFormatting(message), "org.matrix.custom.html", message}, true)
+}
+
+func stripFormatting(s string) string {
+	// paragraph and header tags are on their own lines
+	s = strings.Replace(s, "<p>", "\n", -1)
+	s = strings.Replace(s, "<h1>", "\n", -1)
+	s = strings.Replace(s, "<h2>", "\n", -1)
+	s = strings.Replace(s, "<h3>", "\n", -1)
+	s = strings.Replace(s, "<h4>", "\n", -1)
+	s = strings.Replace(s, "<h5>", "\n", -1)
+	s = strings.Replace(s, "<h6>", "\n", -1)
+	s = strings.Replace(s, "</p>", "\n", -1)
+	s = strings.Replace(s, "</h1>", "\n", -1)
+	s = strings.Replace(s, "</h2>", "\n", -1)
+	s = strings.Replace(s, "</h3>", "\n", -1)
+	s = strings.Replace(s, "</h4>", "\n", -1)
+	s = strings.Replace(s, "</h5>", "\n", -1)
+	s = strings.Replace(s, "</h6>", "\n", -1)
+	// table cells have a space between them and row end ends the line
+	s = strings.Replace(s, "</td>", " ", -1)
+	s = strings.Replace(s, "</tr>", "\n", -1)
+	// duh
+	s = strings.Replace(s, "<br />", "\n", -1)
+	return strip.StripTags(s)
 }
 
 // SendStreamingMessage creates a pair of channels that can be used to send and update (by editing) a message in place.
