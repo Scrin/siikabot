@@ -111,6 +111,9 @@ func stripFormatting(s string) string {
 	s = strings.Replace(s, "</h4>", "\n", -1)
 	s = strings.Replace(s, "</h5>", "\n", -1)
 	s = strings.Replace(s, "</h6>", "\n", -1)
+	// beginning of every list element means beginning of a new line, break the line at the end of the list
+	s = strings.Replace(s, "<li>", "\n - ", -1)
+	s = strings.Replace(s, "</ul>", "\n", -1)
 	// table cells have a space between them and row end ends the line
 	s = strings.Replace(s, "</td>", " ", -1)
 	s = strings.Replace(s, "</tr>", "\n", -1)

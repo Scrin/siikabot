@@ -187,25 +187,31 @@ func printRuuviData(roomID string) {
 			respLines = append(respLines, "<tr><td></td><td></td></tr>")
 			continue
 		}
-		hourAgo, err := queryGrafana(e.BaseURL, e.TagName, time.Hour, "temperature", "humidity", "pressure")
+		hourAgo, err := queryGrafana(e.BaseURL, e.TagName, time.Hour, "temperature")
 		if err != nil {
 			respLines = append(respLines, "<tr><td>"+e.Name+"</td><td>error: "+err.Error()+"</td></tr>")
 			respLines = append(respLines, "<tr><td></td><td></td></tr>")
 			continue
 		}
-		yesterday, err := queryGrafana(e.BaseURL, e.TagName, 24*time.Hour, "temperature", "humidity", "pressure")
+		yesterday, err := queryGrafana(e.BaseURL, e.TagName, 24*time.Hour, "temperature")
 		if err != nil {
 			respLines = append(respLines, "<tr><td>"+e.Name+"</td><td>error: "+err.Error()+"</td></tr>")
 			respLines = append(respLines, "<tr><td></td><td></td></tr>")
 			continue
 		}
-		temp := strconv.FormatFloat(current.Results[0].Series[0].Values[0][1].(float64), 'f', 2, 64)
-		humi := strconv.FormatFloat(current.Results[0].Series[0].Values[0][2].(float64), 'f', 2, 64)
-		press := strconv.FormatFloat(current.Results[0].Series[0].Values[0][3].(float64)/100, 'f', 2, 64)
-		lastHourTemp := strconv.FormatFloat(hourAgo.Results[0].Series[0].Values[0][1].(float64), 'f', 2, 64)
-		yesterdayTemp := strconv.FormatFloat(yesterday.Results[0].Series[0].Values[0][1].(float64), 'f', 2, 64)
-		respLines = append(respLines, "<tr><td>"+e.Name+"</td><td><b>"+temp+"</b> ºC, <b>"+humi+"</b> %, <b>"+press+"</b> hPa</td></tr>")
-		respLines = append(respLines, "<tr><td></td><td>1h ago: <b>"+lastHourTemp+"</b> ºC, 24h ago: <b>"+yesterdayTemp+"</b> ºC</td></tr>")
+		currentValues := current.Results[0].Series[0].Values[0]
+		hourAgoValues := hourAgo.Results[0].Series[0].Values[0]
+		yesterdayValues := yesterday.Results[0].Series[0].Values[0]
+		temp := strconv.FormatFloat(currentValues[1].(float64), 'f', 2, 64)
+		humi := strconv.FormatFloat(currentValues[2].(float64), 'f', 2, 64)
+		press := strconv.FormatFloat(currentValues[3].(float64)/100, 'f', 2, 64)
+		lastHourTemp := strconv.FormatFloat(hourAgoValues[1].(float64), 'f', 2, 64)
+		yesterdayTemp := strconv.FormatFloat(yesterdayValues[1].(float64), 'f', 2, 64)
+		lastHourDelta := strconv.FormatFloat(currentValues[1].(float64)-hourAgoValues[1].(float64), 'f', 2, 64)
+		yesterdayDelta := strconv.FormatFloat(currentValues[1].(float64)-yesterdayValues[1].(float64), 'f', 2, 64)
+		respLines = append(respLines, e.Name+": <b>"+temp+"</b> ºC, <b>"+humi+"</b> %, <b>"+press+"</b> hPa <ul>"+
+			"<li>1h ago: <b>"+lastHourTemp+"</b> ºC (changed <b>"+lastHourDelta+"</b> ºC since 1h ago)</li>"+
+			"<li>24h ago: <b>"+yesterdayTemp+"</b> ºC (changed <b>"+yesterdayDelta+"</b> ºC since yesterday)</li></ul>")
 	}
-	client.SendFormattedMessage(roomID, "<table>"+strings.Join(respLines, "")+"</table>")
+	client.SendFormattedMessage(roomID, strings.Join(respLines, ""))
 }
