@@ -209,7 +209,7 @@ func printRuuviData(roomID string) {
 		yesterdayTemp := strconv.FormatFloat(yesterdayValues[1].(float64), 'f', 2, 64)
 		lastHourDelta := strconv.FormatFloat(currentValues[1].(float64)-hourAgoValues[1].(float64), 'f', 2, 64)
 		yesterdayDelta := strconv.FormatFloat(currentValues[1].(float64)-yesterdayValues[1].(float64), 'f', 2, 64)
-		respLines = append(respLines, e.Name+": <b>"+temp+"</b> ºC, <b>"+humi+"</b> %, <b>"+press+"</b> hPa <ul>"+
+		respLines = append(respLines, "<span>"+e.Name+": <b>"+temp+"</b> ºC, <b>"+humi+"</b> %, <b>"+press+"</b> hPa</span><ul>"+
 			"<li>1h ago: <b>"+lastHourTemp+"</b> ºC (changed <b>"+lastHourDelta+"</b> ºC since 1h ago)</li>"+
 			"<li>24h ago: <b>"+yesterdayTemp+"</b> ºC (changed <b>"+yesterdayDelta+"</b> ºC since yesterday)</li></ul>")
 	}
