@@ -33,6 +33,8 @@ func handleTextEvent(event *gomatrix.Event) {
 			traceroute(event.RoomID, msg)
 		case "!ruuvi":
 			ruuvi(event.RoomID, event.Sender, msg)
+		case "!grafana":
+			grafana(event.RoomID, event.Sender, msg)
 		default:
 			isCommand = false
 		}

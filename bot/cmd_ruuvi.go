@@ -15,14 +15,6 @@ type ruuviEndpoint struct {
 	TagName string `json:"tag_name"`
 }
 
-type grafanaResponse struct {
-	Results []struct {
-		Series []struct {
-			Values [][]interface{} `json:"values"`
-		} `json:"series"`
-	} `json:"results"`
-}
-
 func formatRuuviEndpoints(endpoints []ruuviEndpoint) string {
 	respLines := []string{"Current ruuvi endpoints: "}
 	for _, endpoint := range endpoints {
@@ -100,7 +92,7 @@ func ruuvi(roomID, sender, msg string) {
 	}
 }
 
-func queryGrafana(baseURL, tagName string, offset time.Duration, fields ...string) (*grafanaResponse, error) {
+func ruuviQueryGrafana(baseURL, tagName string, offset time.Duration, fields ...string) (*grafanaResponse, error) {
 	tagName = strings.Replace(tagName, `"`, "", -1)
 	var queryBuilder strings.Builder
 	queryBuilder.WriteString(baseURL)
@@ -142,7 +134,7 @@ func queryRuuviData(roomID, name, tagName, field string) {
 	if name == "" && tagName == "" {
 		var respLines []string
 		for _, e := range endpoints {
-			grafanaResp, err := queryGrafana(e.BaseURL, e.TagName, 0, field)
+			grafanaResp, err := ruuviQueryGrafana(e.BaseURL, e.TagName, 0, field)
 			if err != nil {
 				respLines = append(respLines, e.Name+" error: "+err.Error())
 			} else {
@@ -159,7 +151,7 @@ func queryRuuviData(roomID, name, tagName, field string) {
 			if e.Name != name {
 				continue
 			}
-			grafanaResp, err := queryGrafana(e.BaseURL, tagName, 0, field)
+			grafanaResp, err := ruuviQueryGrafana(e.BaseURL, tagName, 0, field)
 			if err != nil {
 				client.SendMessage(roomID, err.Error())
 			} else {
@@ -181,22 +173,19 @@ func printRuuviData(roomID string) {
 	endpoints := getRuuviEndpoints()
 	var respLines []string
 	for _, e := range endpoints {
-		current, err := queryGrafana(e.BaseURL, e.TagName, 0, "temperature", "humidity", "pressure")
+		current, err := ruuviQueryGrafana(e.BaseURL, e.TagName, 0, "temperature", "humidity", "pressure")
 		if err != nil {
-			respLines = append(respLines, "<tr><td>"+e.Name+"</td><td>error: "+err.Error()+"</td></tr>")
-			respLines = append(respLines, "<tr><td></td><td></td></tr>")
+			respLines = append(respLines, "<p>"+e.Name+" error: "+err.Error()+"</p>")
 			continue
 		}
-		hourAgo, err := queryGrafana(e.BaseURL, e.TagName, time.Hour, "temperature")
+		hourAgo, err := ruuviQueryGrafana(e.BaseURL, e.TagName, time.Hour, "temperature")
 		if err != nil {
-			respLines = append(respLines, "<tr><td>"+e.Name+"</td><td>error: "+err.Error()+"</td></tr>")
-			respLines = append(respLines, "<tr><td></td><td></td></tr>")
+			respLines = append(respLines, "<p>"+e.Name+" error: "+err.Error()+"</p>")
 			continue
 		}
-		yesterday, err := queryGrafana(e.BaseURL, e.TagName, 24*time.Hour, "temperature")
+		yesterday, err := ruuviQueryGrafana(e.BaseURL, e.TagName, 24*time.Hour, "temperature")
 		if err != nil {
-			respLines = append(respLines, "<tr><td>"+e.Name+"</td><td>error: "+err.Error()+"</td></tr>")
-			respLines = append(respLines, "<tr><td></td><td></td></tr>")
+			respLines = append(respLines, "<p>"+e.Name+" error: "+err.Error()+"</p>")
 			continue
 		}
 		currentValues := current.Results[0].Series[0].Values[0]
