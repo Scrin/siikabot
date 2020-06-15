@@ -118,6 +118,8 @@ func stripFormatting(s string) string {
 	s = strings.Replace(s, "</td>", " ", -1)
 	s = strings.Replace(s, "</tr>", "\n", -1)
 	// duh
+	s = strings.Replace(s, "<br>", "\n", -1)
+	s = strings.Replace(s, "<br/>", "\n", -1)
 	s = strings.Replace(s, "<br />", "\n", -1)
 	return strip.StripTags(s)
 }

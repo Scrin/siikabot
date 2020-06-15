@@ -1,20 +1,18 @@
 package bot
 
 import (
+	"bytes"
 	"encoding/json"
-	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"text/template"
 )
 
-type grafanaEndpoint struct {
-	Name            string `json:"name"`
-	BaseURL         string `json:"base_url"`
-	ProxyID         string `json:"proxy_id"`
-	DBName          string `json:"db_name"`
-	MeasurementName string `json:"measurement_name"`
-	SelectorTagKey  string `json:"selector_tag_key"`
+type grafanaConfig struct {
+	Template string            `json:"template"`
+	Sources  map[string]string `json:"sources"`
 }
 
 type grafanaResponse struct {
@@ -25,131 +23,209 @@ type grafanaResponse struct {
 	} `json:"results"`
 }
 
-func formatGrafanaEndpoints(endpoints []grafanaEndpoint) string {
-	respLines := []string{"Current Grafana endpoints: "}
-	for _, endpoint := range endpoints {
-		respLines = append(respLines, endpoint.Name+": "+endpoint.BaseURL+
-			" proxy_id: "+endpoint.ProxyID+
-			" db_name: "+endpoint.DBName+
-			" measurement_name: "+endpoint.MeasurementName+
-			" selector_tag_key: "+endpoint.SelectorTagKey)
+func getGrafanaConfigs() map[string]grafanaConfig {
+	endpointsJson := db.Get("grafana_configs")
+	var configs map[string]grafanaConfig
+	if endpointsJson != "" {
+		json.Unmarshal([]byte(endpointsJson), &configs)
 	}
-	return strings.Join(respLines, "\n")
+	if configs == nil {
+		configs = make(map[string]grafanaConfig)
+	}
+	return configs
 }
 
-func getGrafanaEndpoints() []grafanaEndpoint {
-	endpointsJson := db.Get("grafana_endpoints")
-	var endpoints []grafanaEndpoint
-	if endpointsJson != "" {
-		json.Unmarshal([]byte(endpointsJson), &endpoints)
+func saveGrafanaConfigs(configs map[string]grafanaConfig) {
+	res, err := json.Marshal(configs)
+	if err != nil {
+		log.Print(err)
+		return
 	}
-	return endpoints
+	db.Set("grafana_configs", string(res))
+}
+
+func getGrafanaUsers() []string {
+	endpointsJson := db.Get("grafana_users")
+	var users []string
+	if endpointsJson != "" {
+		json.Unmarshal([]byte(endpointsJson), &users)
+	}
+	return users
+}
+
+func saveGrafanaUsers(users []string) {
+	res, err := json.Marshal(users)
+	if err != nil {
+		log.Print(err)
+		return
+	}
+	db.Set("grafana_users", string(res))
+}
+
+func validUser(user string) bool {
+	for _, u := range getGrafanaUsers() {
+		if u == user {
+			return true
+		}
+	}
+	return false
 }
 
 func grafana(roomID, sender, msg string) {
 	params := strings.Split(msg, " ")
 	if len(params) == 1 {
-		client.SendMessage(roomID, "Usage: !grafana <name> <measurement_name> <selector> <field>")
+		client.SendMessage(roomID, "Usage: !grafana <template-name>")
 		return
 	}
 	switch params[1] {
 	case "config":
-		client.SendMessage(roomID, formatGrafanaEndpoints(getGrafanaEndpoints()))
+		if len(params) == 3 {
+			configs := getGrafanaConfigs()
+			config, ok := configs[params[2]]
+			if !ok {
+				client.SendMessage(roomID, "Template "+params[2]+" not found.")
+				return
+			}
+			client.SendMessage(roomID, formatGrafanaConfig(config))
+		} else {
+			client.SendMessage(roomID, formatGrafanaConfigs(getGrafanaConfigs()))
+		}
 	case "add":
-		if sender != adminUser {
-			client.SendMessage(roomID, "Only admins can use this command")
+		if !validUser(sender) {
+			client.SendMessage(roomID, "Only authorized users can use this command")
 			return
 		}
-		if len(params) < 8 {
-			client.SendMessage(roomID, "Usage: !grafana add <name> <base_url> <proxy_id> <db_name> <measurement_name> <selector_tag_key>")
+		if len(params) < 3 {
+			client.SendMessage(roomID, "Usage: !grafana add <template-name>")
 			return
 		}
-		endpoints := append(getGrafanaEndpoints(), grafanaEndpoint{params[2], params[3], params[4], params[5], params[6], params[7]})
-		res, err := json.Marshal(endpoints)
-		if err != nil {
-			client.SendMessage(roomID, err.Error())
-		}
-		db.Set("grafana_endpoints", string(res))
-		client.SendMessage(roomID, formatGrafanaEndpoints(endpoints))
+		configs := getGrafanaConfigs()
+		configs[params[2]] = grafanaConfig{"", nil}
+		saveGrafanaConfigs(configs)
+		client.SendMessage(roomID, formatGrafanaConfigs(configs))
 	case "remove":
-		if sender != adminUser {
-			client.SendMessage(roomID, "Only admins can use this command")
+		if !validUser(sender) {
+			client.SendMessage(roomID, "Only authorized users can use this command")
+			return
+		}
+		if len(params) < 3 {
+			client.SendMessage(roomID, "Usage: !grafana remove <template-name>")
+			return
+		}
+		configs := getGrafanaConfigs()
+		delete(configs, params[2])
+		saveGrafanaConfigs(configs)
+		client.SendMessage(roomID, formatGrafanaConfigs(configs))
+	case "set":
+		if !validUser(sender) {
+			client.SendMessage(roomID, "Only authorized users can use this command")
 			return
 		}
 		if len(params) < 4 {
-			client.SendMessage(roomID, "Usage: !grafana remove <name> <db_name>")
+			client.SendMessage(roomID, "Usage: !grafana set [template/datasource] <...>")
 			return
 		}
-		endpoints := getGrafanaEndpoints()
-		var newEndpoints []grafanaEndpoint
-		for _, e := range endpoints {
-			if e.Name != params[2] || e.DBName != params[3] {
-				newEndpoints = append(newEndpoints, e)
+		configs := getGrafanaConfigs()
+		config, ok := configs[params[3]]
+		if !ok {
+			client.SendMessage(roomID, "Template "+params[3]+" not found. Add it first with !grafana add "+params[3])
+			return
+		}
+		switch params[2] {
+		case "template":
+			if len(params) < 5 {
+				client.SendMessage(roomID, "Usage: !grafana set template <template-name> <templatestring>")
+				return
 			}
+			config.Template = strings.Join(params[4:], " ")
+			configs[params[3]] = config
+			saveGrafanaConfigs(configs)
+			client.SendMessage(roomID, formatGrafanaConfig(config))
+		case "datasource":
+			if len(params) < 6 {
+				client.SendMessage(roomID, "Usage: !grafana set datasource <template-name> <datasource-name> <datasource-url>")
+				return
+			}
+			if config.Sources == nil {
+				config.Sources = make(map[string]string)
+			}
+			config.Sources[params[4]] = params[5]
+			configs[params[3]] = config
+			saveGrafanaConfigs(configs)
+			client.SendMessage(roomID, formatGrafanaConfig(config))
+		default:
+			client.SendMessage(roomID, "Usage: !grafana set [template/datasource]")
 		}
-		res, err := json.Marshal(newEndpoints)
-		if err != nil {
-			client.SendMessage(roomID, err.Error())
+	case "authorize":
+		if sender != adminUser {
+			client.SendMessage(roomID, "Only admins can use this command")
+			return
 		}
-		db.Set("grafana_endpoints", string(res))
-		client.SendMessage(roomID, formatGrafanaEndpoints(newEndpoints))
+		if len(params) < 3 {
+			client.SendMessage(roomID, "Usage: !grafana authorize <user>")
+			return
+		}
+		users := getGrafanaUsers()
+		users = append(users, params[2])
+		saveGrafanaUsers(users)
+		client.SendMessage(roomID, strings.Join(users, " "))
 	default:
-		if len(params) == 5 {
-			queryGrafanaData(roomID, params[1], params[2], params[3], params[4])
+		if len(params) == 2 {
+			configs := getGrafanaConfigs()
+			config, ok := configs[params[1]]
+			if !ok {
+				client.SendMessage(roomID, "Template "+params[1]+" not found.")
+				return
+			}
+			client.SendFormattedMessage(roomID, formatTemplate(config))
 		} else {
-			client.SendMessage(roomID, "Usage: !grafana <name> <db_name> <selector> <field>")
+			client.SendMessage(roomID, "Usage: !grafana <template-name>")
 		}
 	}
 }
 
-func queryGrafana(endpoint grafanaEndpoint, selector, field string) (*grafanaResponse, error) {
-	var queryBuilder strings.Builder
-	queryBuilder.WriteString(endpoint.BaseURL)
-	queryBuilder.WriteString(`/api/datasources/proxy/`)
-	queryBuilder.WriteString(endpoint.ProxyID)
-	queryBuilder.WriteString(`/query?db=`)
-	queryBuilder.WriteString(endpoint.DBName)
-	queryBuilder.WriteString(`&q=SELECT%20last("`)
-	queryBuilder.WriteString(strings.Replace(field, `"`, "", -1))
-	queryBuilder.WriteString(`")%20FROM%20"`)
-	queryBuilder.WriteString(endpoint.MeasurementName)
-	queryBuilder.WriteString(`"%20WHERE%20("`)
-	queryBuilder.WriteString(endpoint.SelectorTagKey)
-	queryBuilder.WriteString(`"%20%3D%20%27`)
-	queryBuilder.WriteString(strings.Replace(selector, `"`, "", -1))
-	queryBuilder.WriteString(`%27)%20AND%20time%20>%3D%20now()%20-%201h`)
-	resp, err := http.Get(queryBuilder.String())
+func formatGrafanaConfigs(configs map[string]grafanaConfig) string {
+	respLines := []string{"Current Grafana configs: "}
+	for name := range configs {
+		respLines = append(respLines, name)
+	}
+	return strings.Join(respLines, "\n")
+}
+
+func formatGrafanaConfig(config grafanaConfig) string {
+	respLines := []string{"Template string: " + config.Template, "Data sources:"}
+	for k, v := range config.Sources {
+		respLines = append(respLines, k+" = "+v)
+	}
+	return strings.Join(respLines, "\n")
+}
+
+func formatTemplate(config grafanaConfig) string {
+	tmpl, err := template.New("").Parse(config.Template)
 	if err != nil {
-		return nil, err
+		return err.Error()
+	}
+	values := make(map[string]string)
+	for k, v := range config.Sources {
+		values[k] = queryGrafana(v)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, values); err != nil {
+		return err.Error()
+	}
+	return buf.String()
+}
+
+func queryGrafana(queryURL string) string {
+	resp, err := http.Get(queryURL)
+	if err != nil {
+		return err.Error()
 	}
 	var grafanaResp grafanaResponse
 	if err = json.NewDecoder(resp.Body).Decode(&grafanaResp); err != nil {
-		return nil, err
+		return err.Error()
 	} else if len(grafanaResp.Results) < 1 || len(grafanaResp.Results[0].Series) < 1 {
-		return nil, errors.New("No data")
+		return "N/A"
 	}
-	return &grafanaResp, nil
-
-}
-
-func queryGrafanaData(roomID, name, dbName, selector, field string) {
-	endpoints := getGrafanaEndpoints()
-	ok := false
-	for _, e := range endpoints {
-		if e.Name != name || e.DBName != dbName {
-			continue
-		}
-		grafanaResp, err := queryGrafana(e, selector, field)
-		if err != nil {
-			client.SendMessage(roomID, err.Error())
-		} else {
-			value := strconv.FormatFloat(grafanaResp.Results[0].Series[0].Values[0][1].(float64), 'f', 2, 64)
-			client.SendFormattedMessage(roomID, name+" "+dbName+" "+selector+" "+field+": <b>"+value+"</b>")
-		}
-		ok = true
-		break
-	}
-	if !ok {
-		client.SendMessage(roomID, name+" not found")
-	}
+	return strconv.FormatFloat(grafanaResp.Results[0].Series[0].Values[0][1].(float64), 'f', 2, 64)
 }
