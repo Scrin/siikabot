@@ -116,6 +116,25 @@ func grafana(roomID, sender, msg string) {
 		delete(configs, params[2])
 		saveGrafanaConfigs(configs)
 		client.SendMessage(roomID, formatGrafanaConfigs(configs))
+	case "rename":
+		if !validUser(sender) {
+			client.SendMessage(roomID, "Only authorized users can use this command")
+			return
+		}
+		if len(params) < 4 {
+			client.SendMessage(roomID, "Usage: !grafana rename <template-name> <new-name>")
+			return
+		}
+		configs := getGrafanaConfigs()
+		config, ok := configs[params[2]]
+		if !ok {
+			client.SendMessage(roomID, "Config "+params[2]+" not found")
+			return
+		}
+		delete(configs, params[2])
+		configs[params[3]] = config
+		saveGrafanaConfigs(configs)
+		client.SendMessage(roomID, formatGrafanaConfigs(configs))
 	case "set":
 		if !validUser(sender) {
 			client.SendMessage(roomID, "Only authorized users can use this command")
@@ -149,7 +168,11 @@ func grafana(roomID, sender, msg string) {
 			if config.Sources == nil {
 				config.Sources = make(map[string]string)
 			}
-			config.Sources[params[4]] = params[5]
+			if params[5] == "-" {
+				delete(config.Sources, params[4])
+			} else {
+				config.Sources[params[4]] = params[5]
+			}
 			configs[params[3]] = config
 			saveGrafanaConfigs(configs)
 			client.SendFormattedMessage(roomID, formatTemplate(config))
