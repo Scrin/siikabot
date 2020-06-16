@@ -140,7 +140,7 @@ func grafana(roomID, sender, msg string) {
 			config.Template = strings.Join(params[4:], " ")
 			configs[params[3]] = config
 			saveGrafanaConfigs(configs)
-			client.SendMessage(roomID, formatGrafanaConfig(config))
+			client.SendFormattedMessage(roomID, formatTemplate(config))
 		case "datasource":
 			if len(params) < 6 {
 				client.SendMessage(roomID, "Usage: !grafana set datasource <template-name> <datasource-name> <datasource-url>")
@@ -152,7 +152,7 @@ func grafana(roomID, sender, msg string) {
 			config.Sources[params[4]] = params[5]
 			configs[params[3]] = config
 			saveGrafanaConfigs(configs)
-			client.SendMessage(roomID, formatGrafanaConfig(config))
+			client.SendFormattedMessage(roomID, formatTemplate(config))
 		default:
 			client.SendMessage(roomID, "Usage: !grafana set [template/datasource]")
 		}

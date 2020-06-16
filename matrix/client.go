@@ -2,6 +2,7 @@ package matrix
 
 import (
 	"encoding/json"
+	"html"
 	"log"
 	"strings"
 	"time"
@@ -121,7 +122,7 @@ func stripFormatting(s string) string {
 	s = strings.Replace(s, "<br>", "\n", -1)
 	s = strings.Replace(s, "<br/>", "\n", -1)
 	s = strings.Replace(s, "<br />", "\n", -1)
-	return strip.StripTags(s)
+	return strip.StripTags(html.UnescapeString(s))
 }
 
 // SendStreamingMessage creates a pair of channels that can be used to send and update (by editing) a message in place.
