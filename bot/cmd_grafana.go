@@ -250,5 +250,10 @@ func queryGrafana(queryURL string) string {
 	} else if len(grafanaResp.Results) < 1 || len(grafanaResp.Results[0].Series) < 1 {
 		return "N/A"
 	}
-	return strconv.FormatFloat(grafanaResp.Results[0].Series[0].Values[0][1].(float64), 'f', 2, 64)
+
+	if floatValue, ok := grafanaResp.Results[0].Series[0].Values[0][1].(float64); ok {
+		return strconv.FormatFloat(floatValue, 'f', 2, 64)
+	} else {
+		return grafanaResp.Results[0].Series[0].Values[0][1].(string)
+	}
 }
