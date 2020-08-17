@@ -65,7 +65,7 @@ func sendGitlabMsg(push GitlabPush, roomID string) {
 			"<font color=\"#9C009C\">"+commit.Author.Name+"</font>: "+commit.Message)
 	}
 
-	client.SendFormattedMessage(roomID, strings.Join(output, "<br />"))
+	client.SendFormattedNotice(roomID, strings.Join(output, "<br />"))
 }
 
 func gitlabHandler(hookSecret string) func(w http.ResponseWriter, req *http.Request) {

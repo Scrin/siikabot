@@ -96,6 +96,20 @@ func (c Client) SendFormattedMessage(roomID string, message string) <-chan strin
 	return c.sendMessage(roomID, simpleMessage{"m.text", stripFormatting(message), "org.matrix.custom.html", message}, true)
 }
 
+// SendNotice queues a notice to be sent and returns immediatedly.
+//
+// The returned channel will provide the event ID of the notice after the notice has been sent
+func (c Client) SendNotice(roomID string, notice string) <-chan string {
+	return c.sendMessage(roomID, simpleMessage{"m.notice", notice, "", ""}, true)
+}
+
+// SendFormattedNotice queues a html-formatted notice to be sent and returns immediatedly.
+//
+// The returned channel will provide the event ID of the notice after the notice has been sent
+func (c Client) SendFormattedNotice(roomID string, notice string) <-chan string {
+	return c.sendMessage(roomID, simpleMessage{"m.notice", stripFormatting(notice), "org.matrix.custom.html", notice}, true)
+}
+
 func stripFormatting(s string) string {
 	// paragraph and header tags are on their own lines
 	s = strings.Replace(s, "<p>", "\n", -1)

@@ -67,7 +67,7 @@ func sendGithubMsg(push GithubPush, roomID string) {
 			"<font color=\"#9C009C\">"+commit.Author.Name+"</font>: "+commit.Message)
 	}
 
-	client.SendFormattedMessage(roomID, strings.Join(output, "<br />"))
+	client.SendFormattedNotice(roomID, strings.Join(output, "<br />"))
 }
 
 func verifySignature(secret []byte, signature string, body []byte) bool {
