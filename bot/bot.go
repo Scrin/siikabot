@@ -35,6 +35,8 @@ func handleTextEvent(event *gomatrix.Event) {
 			ruuvi(event.RoomID, event.Sender, msg)
 		case "!grafana":
 			grafana(event.RoomID, event.Sender, msg)
+		case "!remind":
+			remind(event.RoomID, event.Sender, msg)
 		default:
 			isCommand = false
 		}
@@ -65,6 +67,7 @@ func Run(homeserverURL, userID, accessToken, hookSecret, dataPath, admin string)
 		client.JoinRoom(roomID)
 		log.Print("Joined room " + roomID)
 	}
+	initReminder()
 	initHTTP(hookSecret)
 	return client.Sync()
 }
