@@ -78,6 +78,14 @@ func grafana(roomID, sender, msg string) {
 		return
 	}
 	switch params[1] {
+	case "help":
+		client.SendFormattedMessage(roomID, "Usage: <br>"+
+			"<b>!grafana config</b> prints the config<br>"+
+			"<b>!grafana add &lt;template-name></b> adds a new template config<br>"+
+			"<b>!grafana remove &lt;template-name></b> removes a template config<br>"+
+			"<b>!grafana rename &lt;template-name></b> renames a template config<br>"+
+			"<b>!grafana set template &lt;template-name> &lt;templatestring></b> sets the template string for a template config<br>"+
+			"<b>!grafana set datasource &lt;template-name> &lt;datasource-name> &lt;datasource-url></b> sets a datasource for a template config. <b>-</b> as url will remove the datasource")
 	case "config":
 		if len(params) == 3 {
 			configs := getGrafanaConfigs()
