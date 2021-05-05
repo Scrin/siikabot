@@ -15,7 +15,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-type GithubPush struct {
+type GithubPayload struct {
+	Action       string `json:"action"`
 	Ref          string `json:"ref"`
 	BeforeCommit string `json:"before"`
 	AfterCommit  string `json:"after"`
@@ -36,29 +37,52 @@ type GithubPush struct {
 			Name string `json:"name"`
 		} `json:"author"`
 	} `json:"commits"`
+	PullRequest struct {
+		HtmlUrl string `json:"html_url"`
+		Title   string `json:"title"`
+	} `json:"pull_request"`
+	Sender struct {
+		Login string `json:"login"`
+	} `json:"sender"`
 }
 
-func sendGithubMsg(push GithubPush, roomID string) {
+func sendGithubMsg(payload GithubPayload, roomID string) {
+	if payload.Pusher.Name != "" {
+		sendGithubPush(payload, roomID)
+	} else if payload.PullRequest.HtmlUrl != "" {
+		sendGithubPullrequest(payload, roomID)
+	} else {
+		client.SendNotice(roomID, "Unknown github hook called")
+	}
+}
+
+func sendGithubPullrequest(payload GithubPayload, roomID string) {
+	client.SendFormattedNotice(roomID, "[<font color=\"#0000FC\">"+payload.Repository.FullName+"</font>] "+
+		"<font color=\"#9C009C\">"+payload.Sender.Login+"</font> "+payload.Action+" a pull request: "+
+		"<font color=\"#7F0000\">"+payload.PullRequest.Title+"</font> "+payload.PullRequest.HtmlUrl)
+}
+
+func sendGithubPush(payload GithubPayload, roomID string) {
 	nullCommit := "0000000000000000000000000000000000000000"
-	if push.AfterCommit == nullCommit {
+	if payload.AfterCommit == nullCommit {
 		// TODO branch was deleted
 		return
-	} else if push.BeforeCommit == nullCommit {
+	} else if payload.BeforeCommit == nullCommit {
 		// TODO branch was created
 		return
 	}
 
-	ref := strings.Split(push.Ref, "/")
-	branch := push.Ref
+	ref := strings.Split(payload.Ref, "/")
+	branch := payload.Ref
 	if len(ref) == 3 {
 		branch = ref[2]
 	}
 
-	output := []string{"[<font color=\"#0000FC\">" + push.Repository.FullName + "</font>] " +
-		"<font color=\"#9C009C\">" + push.Pusher.Name + "</font> pushed " + strconv.Itoa(len(push.Commits)) + " commits " +
-		"to <font color=\"#7F0000\">" + branch + "</font> " + push.Compare}
+	output := []string{"[<font color=\"#0000FC\">" + payload.Repository.FullName + "</font>] " +
+		"<font color=\"#9C009C\">" + payload.Pusher.Name + "</font> pushed " + strconv.Itoa(len(payload.Commits)) + " commits " +
+		"to <font color=\"#7F0000\">" + branch + "</font> " + payload.Compare}
 
-	for _, commit := range push.Commits {
+	for _, commit := range payload.Commits {
 		added := strconv.Itoa(len(commit.Added))
 		modified := strconv.Itoa(len(commit.Modified))
 		removed := strconv.Itoa(len(commit.Removed))
@@ -112,7 +136,7 @@ func githubHandler(hookSecret string) func(w http.ResponseWriter, req *http.Requ
 		if roomID == "" {
 			return
 		}
-		msg := GithubPush{}
+		msg := GithubPayload{}
 		err = json.Unmarshal(body, &msg)
 		if err != nil {
 			fmt.Fprintf(w, "%v", err)
