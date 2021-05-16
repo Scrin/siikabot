@@ -131,6 +131,12 @@ func ruuviQueryGrafana(baseURL, tagName string, offset time.Duration, fields ...
 	queryBuilder.WriteString(`s`)
 	resp, err := http.Get(queryBuilder.String())
 	if err != nil {
+		if err.Error() != "EOF" {
+			return nil, err
+		}
+		resp, err = http.Get(queryBuilder.String())
+	}
+	if err != nil {
 		return nil, err
 	}
 	var grafanaResp grafanaResponse
