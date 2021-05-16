@@ -63,7 +63,7 @@ func Run(homeserverURL, userID, accessToken, hookSecret, dataPath, admin string)
 	client.OnEvent("m.room.member", handleMemberEvent)
 	client.OnEvent("m.room.message", handleTextEvent)
 	resp := client.InitialSync()
-	for roomID, _ := range resp.Rooms.Invite {
+	for roomID := range resp.Rooms.Invite {
 		client.JoinRoom(roomID)
 		log.Print("Joined room " + roomID)
 	}

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"text/template"
+	"time"
 )
 
 type grafanaConfig struct {
@@ -201,7 +202,8 @@ func grafana(roomID, sender, msg string) {
 		saveGrafanaUsers(users)
 		client.SendMessage(roomID, strings.Join(users, " "))
 	default:
-		if len(params) == 2 {
+		switch len(params) {
+		case 2:
 			configs := getGrafanaConfigs()
 			config, ok := configs[params[1]]
 			if !ok {
@@ -209,7 +211,31 @@ func grafana(roomID, sender, msg string) {
 				return
 			}
 			client.SendFormattedMessage(roomID, formatTemplate(config))
-		} else {
+		case 3:
+			configs := getGrafanaConfigs()
+			config, ok := configs[params[1]]
+			if !ok {
+				client.SendMessage(roomID, "Template "+params[1]+" not found.")
+				return
+			}
+			if params[2] != "-" {
+				client.SendMessage(roomID, "Unknown argument: "+params[2])
+				return
+			}
+			go func() {
+				start := time.Now().Unix()
+				outChan, done := client.SendStreamingFormattedNotice(roomID)
+				for {
+					outChan <- formatTemplate(config) + "<br><font color=\"gray\">[last updated at " + time.Now().Format("15:04:05") + "]</font>"
+					time.Sleep(10 * time.Second)
+					if start+600 < time.Now().Unix() {
+						break
+					}
+				}
+				outChan <- formatTemplate(config)
+				close(done)
+			}()
+		default:
 			client.SendMessage(roomID, "Usage: !grafana <template-name>")
 		}
 	}

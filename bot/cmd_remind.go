@@ -41,7 +41,7 @@ func saveReminders(reminders []reminder) {
 
 func startReminder(rem reminder) {
 	f := func() {
-		client.SendFormattedMessage(rem.RoomID, "<a href=\"https://matrix.to/#/"+rem.User+"\">"+rem.User+"</a> "+rem.Message)
+		client.SendFormattedMessage(rem.RoomID, "<a href=\"https://matrix.to/#/"+rem.User+"\">"+client.GetDisplayName(rem.User)+"</a> "+rem.Message)
 		reminders := getReminders()
 		var newReminders []reminder
 		for _, r := range reminders {

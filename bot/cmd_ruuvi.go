@@ -35,7 +35,7 @@ func getRuuviEndpoints() []ruuviEndpoint {
 func ruuvi(roomID, sender, msg string) {
 	params := strings.Split(msg, " ")
 	if len(params) == 1 {
-		printRuuviData(roomID)
+		client.SendFormattedMessage(roomID, formatRuuviData())
 		return
 	}
 	switch params[1] {
@@ -89,6 +89,20 @@ func ruuvi(roomID, sender, msg string) {
 		}
 		db.Set("ruuvi_endpoints", string(res))
 		client.SendMessage(roomID, formatRuuviEndpoints(newEndpoints))
+	case "-":
+		go func() {
+			start := time.Now().Unix()
+			outChan, done := client.SendStreamingFormattedNotice(roomID)
+			for {
+				outChan <- formatRuuviData() + "<font color=\"gray\">[last updated at " + time.Now().Format("15:04:05") + "]</font>"
+				time.Sleep(10 * time.Second)
+				if start+600 < time.Now().Unix() {
+					break
+				}
+			}
+			outChan <- formatRuuviData()
+			close(done)
+		}()
 	}
 }
 
@@ -169,7 +183,7 @@ func queryRuuviData(roomID, name, tagName, field string) {
 	}
 }
 
-func printRuuviData(roomID string) {
+func formatRuuviData() string {
 	endpoints := getRuuviEndpoints()
 	var respLines []string
 	for _, e := range endpoints {
@@ -202,5 +216,5 @@ func printRuuviData(roomID string) {
 			"<li>1h ago: <b>"+lastHourTemp+"</b> ºC (changed <b>"+lastHourDelta+"</b> ºC since 1h ago)</li>"+
 			"<li>24h ago: <b>"+yesterdayTemp+"</b> ºC (changed <b>"+yesterdayDelta+"</b> ºC since yesterday)</li></ul>")
 	}
-	client.SendFormattedMessage(roomID, strings.Join(respLines, ""))
+	return strings.Join(respLines, "")
 }
