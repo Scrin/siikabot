@@ -10,7 +10,6 @@ import (
 func traceroute(roomID, msg string) {
 	split := strings.Split(msg, " ")
 	if len(split) < 2 {
-		client.SendMessage(roomID, "Usage: !traceroute <host>")
 		return
 	}
 	command := "traceroute"

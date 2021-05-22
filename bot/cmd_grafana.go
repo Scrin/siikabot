@@ -75,7 +75,6 @@ func validUser(user string) bool {
 func grafana(roomID, sender, msg string) {
 	params := strings.Split(msg, " ")
 	if len(params) == 1 {
-		client.SendMessage(roomID, "Usage: !grafana <template-name>")
 		return
 	}
 	switch params[1] {

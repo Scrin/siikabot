@@ -11,7 +11,6 @@ import (
 func ping(roomID, msg string) {
 	split := strings.Split(msg, " ")
 	if len(split) < 2 {
-		client.SendMessage(roomID, "Usage: !ping <host> <count>")
 		return
 	}
 	count := 5
