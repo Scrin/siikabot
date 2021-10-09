@@ -15,6 +15,18 @@ type reminder struct {
 	Message    string `json:"msg"`
 }
 
+var dateTimeFormats = []string{
+	"2.1.2006-15:04", "15:04-2.1.2006",
+	"2.1.2006_15:04", "15:04_2.1.2006",
+	"2006-01-02_15:04", "15:04_2006-01-02"}
+var dateTimeFormatsTZ = []string{
+	time.ANSIC, time.UnixDate,
+	time.RFC822, time.RFC822Z,
+	time.RFC1123, time.RFC1123Z,
+	time.RFC3339, time.RFC3339Nano}
+var timeFormats = []string{"15:04"}
+var dateFormats = []string{"2.1.2006", "2006-1-2"}
+
 func initReminder() {
 	for _, r := range getReminders() {
 		startReminder(r)
@@ -60,9 +72,10 @@ func startReminder(rem reminder) {
 }
 
 func remind(roomID, sender, msg string) {
+	t := time.Now()
 	params := strings.SplitN(msg, " ", 3)
 	if len(params) < 3 {
-		client.SendMessage(roomID, "Usage: !remind <rfc3339 or duration> <message>")
+		client.SendMessage(roomID, "Usage: !remind <time, date, datetime or duration> <message>")
 		return
 	}
 	duration, durationErr := time.ParseDuration(params[1])
@@ -72,17 +85,58 @@ func remind(roomID, sender, msg string) {
 			client.SendMessage(roomID, "Duration must be at least 1s")
 			return
 		}
-		reminder := reminder{time.Now().Unix() + durationSeconds, sender, roomID, params[2]}
+		reminder := reminder{t.Unix() + durationSeconds, sender, roomID, params[2]}
 		startReminder(reminder)
 		saveReminders(append(getReminders(), reminder))
 		client.SendMessage(roomID, "Reminding in "+duration.String()+": "+params[2])
 	} else {
-		reminderTime, err := time.Parse(time.RFC3339, params[1])
+		var reminderTime time.Time
+		var loc *time.Location
+		var err error
+		for _, f := range dateTimeFormatsTZ {
+			reminderTime, err = time.Parse(f, params[1])
+			if err == nil {
+				break
+			}
+		}
 		if err != nil {
-			client.SendFormattedMessage(roomID, "Invalid date/time or duration: "+params[1]+"<br>duration: "+durationErr.Error()+"<br>RFC3339 date/time: "+err.Error())
+			loc, err = time.LoadLocation("Europe/Helsinki")
+			for _, f := range dateTimeFormats {
+				reminderTime, err = time.Parse(f, params[1])
+				if err == nil {
+					reminderTime = time.Date(reminderTime.Year(), reminderTime.Month(), reminderTime.Day(), reminderTime.Hour(), reminderTime.Minute(), reminderTime.Second(), reminderTime.Nanosecond(), loc)
+					break
+				}
+			}
+		}
+		if err != nil {
+			for _, f := range timeFormats {
+				reminderTime, err = time.Parse(f, params[1])
+				if err == nil {
+					reminderTime = time.Date(t.Year(), t.Month(), t.Day(), reminderTime.Hour(), reminderTime.Minute(), reminderTime.Second(), t.Nanosecond(), t.Location())
+					break
+				}
+			}
+		}
+		if err != nil {
+			for _, f := range dateFormats {
+				reminderTime, err = time.Parse(f, params[1])
+				if err == nil {
+					reminderTime = time.Date(reminderTime.Year(), reminderTime.Month(), reminderTime.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
+					break
+				}
+			}
+		}
+		if err != nil {
+			formats := "<br>valid date/time formats:<br>" +
+				strings.Join(dateTimeFormats, "<br>") + "<br>" +
+				strings.Join(dateTimeFormatsTZ, "<br>") + "<br>" +
+				strings.Join(timeFormats, "<br>") + "<br>" +
+				strings.Join(dateFormats, "<br>")
+			client.SendFormattedMessage(roomID, "Invalid date/time or duration: "+params[1]+"<br>duration error: "+durationErr.Error()+formats)
 			return
 		}
-		if reminderTime.Unix() <= time.Now().Unix() {
+		if reminderTime.Unix() <= t.Unix() {
 			client.SendMessage(roomID, "Reminder date/time must be in future")
 			return
 		}
