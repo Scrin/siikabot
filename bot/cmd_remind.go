@@ -91,8 +91,7 @@ func remind(roomID, sender, msg string) {
 		client.SendMessage(roomID, "Reminding in "+duration.String()+": "+params[2])
 	} else {
 		var reminderTime time.Time
-		var loc *time.Location
-		var err error
+		loc, err := time.LoadLocation("Europe/Helsinki")
 		for _, f := range dateTimeFormatsTZ {
 			reminderTime, err = time.Parse(f, params[1])
 			if err == nil {
@@ -100,7 +99,6 @@ func remind(roomID, sender, msg string) {
 			}
 		}
 		if err != nil {
-			loc, err = time.LoadLocation("Europe/Helsinki")
 			for _, f := range dateTimeFormats {
 				reminderTime, err = time.Parse(f, params[1])
 				if err == nil {
@@ -113,7 +111,7 @@ func remind(roomID, sender, msg string) {
 			for _, f := range timeFormats {
 				reminderTime, err = time.Parse(f, params[1])
 				if err == nil {
-					reminderTime = time.Date(t.Year(), t.Month(), t.Day(), reminderTime.Hour(), reminderTime.Minute(), reminderTime.Second(), t.Nanosecond(), t.Location())
+					reminderTime = time.Date(t.Year(), t.Month(), t.Day(), reminderTime.Hour(), reminderTime.Minute(), reminderTime.Second(), t.Nanosecond(), loc)
 					break
 				}
 			}
@@ -122,7 +120,7 @@ func remind(roomID, sender, msg string) {
 			for _, f := range dateFormats {
 				reminderTime, err = time.Parse(f, params[1])
 				if err == nil {
-					reminderTime = time.Date(reminderTime.Year(), reminderTime.Month(), reminderTime.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
+					reminderTime = time.Date(reminderTime.Year(), reminderTime.Month(), reminderTime.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), loc)
 					break
 				}
 			}
