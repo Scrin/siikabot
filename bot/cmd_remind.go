@@ -102,7 +102,7 @@ func remind(roomID, sender, msg string) {
 			for _, f := range dateTimeFormats {
 				reminderTime, err = time.Parse(f, params[1])
 				if err == nil {
-					reminderTime = time.Date(reminderTime.Year(), reminderTime.Month(), reminderTime.Day(), reminderTime.Hour(), reminderTime.Minute(), reminderTime.Second(), reminderTime.Nanosecond(), loc)
+					reminderTime = time.Date(reminderTime.Year(), reminderTime.Month(), reminderTime.Day(), reminderTime.Hour(), reminderTime.Minute(), reminderTime.Second(), 0, loc)
 					break
 				}
 			}
@@ -111,7 +111,7 @@ func remind(roomID, sender, msg string) {
 			for _, f := range timeFormats {
 				reminderTime, err = time.Parse(f, params[1])
 				if err == nil {
-					reminderTime = time.Date(t.Year(), t.Month(), t.Day(), reminderTime.Hour(), reminderTime.Minute(), reminderTime.Second(), t.Nanosecond(), loc)
+					reminderTime = time.Date(t.Year(), t.Month(), t.Day(), reminderTime.Hour(), reminderTime.Minute(), reminderTime.Second(), 0, loc)
 					break
 				}
 			}
@@ -120,7 +120,7 @@ func remind(roomID, sender, msg string) {
 			for _, f := range dateFormats {
 				reminderTime, err = time.Parse(f, params[1])
 				if err == nil {
-					reminderTime = time.Date(reminderTime.Year(), reminderTime.Month(), reminderTime.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), loc)
+					reminderTime = time.Date(reminderTime.Year(), reminderTime.Month(), reminderTime.Day(), t.Hour(), t.Minute(), t.Second(), 0, loc)
 					break
 				}
 			}
