@@ -77,9 +77,8 @@ func remind(roomID, sender, msg string) {
 		client.SendMessage(roomID, "Usage: !remind <time, date, datetime or duration> <message>")
 		return
 	}
-	loc, _ := time.LoadLocation("Europe/Helsinki")
+
 	t := time.Now()
-	t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), loc)
 	reminderTime, durationErr := remindDuration(t, params[1])
 	var timeErr error
 	if durationErr != nil {
@@ -114,7 +113,7 @@ func remindDuration(now time.Time, param string) (time.Time, error) {
 func remindTime(now time.Time, param string) (time.Time, error) {
 	param = strings.Replace(param, "_", "-", -1)
 	var reminderTime time.Time
-	var err error
+	loc, err := time.LoadLocation("Europe/Helsinki")
 	for _, f := range dateTimeFormatsTZ {
 		reminderTime, err = time.Parse(f, param)
 		if err == nil {
@@ -125,7 +124,7 @@ func remindTime(now time.Time, param string) (time.Time, error) {
 		for _, f := range dateTimeFormats {
 			reminderTime, err = time.Parse(f, param)
 			if err == nil {
-				reminderTime = time.Date(reminderTime.Year(), reminderTime.Month(), reminderTime.Day(), reminderTime.Hour(), reminderTime.Minute(), reminderTime.Second(), 0, now.Location())
+				reminderTime = time.Date(reminderTime.Year(), reminderTime.Month(), reminderTime.Day(), reminderTime.Hour(), reminderTime.Minute(), reminderTime.Second(), 0, loc)
 				break
 			}
 		}
@@ -134,7 +133,7 @@ func remindTime(now time.Time, param string) (time.Time, error) {
 		for _, f := range timeFormats {
 			reminderTime, err = time.Parse(f, param)
 			if err == nil {
-				reminderTime = time.Date(now.Year(), now.Month(), now.Day(), reminderTime.Hour(), reminderTime.Minute(), reminderTime.Second(), 0, now.Location())
+				reminderTime = time.Date(now.Year(), now.Month(), now.Day(), reminderTime.Hour(), reminderTime.Minute(), reminderTime.Second(), 0, loc)
 				if reminderTime.Unix() <= now.Unix() {
 					reminderTime = reminderTime.Add(24 * time.Hour)
 				}
@@ -146,7 +145,7 @@ func remindTime(now time.Time, param string) (time.Time, error) {
 		for _, f := range dateFormats {
 			reminderTime, err = time.Parse(f, param)
 			if err == nil {
-				reminderTime = time.Date(reminderTime.Year(), reminderTime.Month(), reminderTime.Day(), now.Hour(), now.Minute(), now.Second(), 0, now.Location())
+				reminderTime = time.Date(reminderTime.Year(), reminderTime.Month(), reminderTime.Day(), now.Hour(), now.Minute(), now.Second(), 0, loc)
 				break
 			}
 		}
