@@ -16,6 +16,8 @@ type reminder struct {
 	Message    string `json:"msg"`
 }
 
+const timezone = "Europe/Helsinki"
+
 var dateTimeFormats = []string{
 	"2.1.2006-15:04", "15:04-2.1.2006",
 	"2006-01-02-15:04", "15:04-2006-01-02"}
@@ -93,7 +95,8 @@ func remind(roomID, sender, msg string) {
 	startReminder(rem)
 	saveReminders(append(getReminders(), rem))
 	duration := reminderTime.Sub(t).Truncate(time.Second)
-	client.SendMessage(roomID, "Reminding at "+reminderTime.Format("15:04:05 on 2.1.2006")+" (in "+duration.String()+"): "+params[2])
+	loc, _ := time.LoadLocation(timezone)
+	client.SendMessage(roomID, "Reminding at "+reminderTime.In(loc).Format("15:04:05 on 2.1.2006")+" (in "+duration.String()+"): "+params[2])
 }
 
 func remindDuration(now time.Time, param string) (time.Time, error) {
@@ -113,7 +116,7 @@ func remindDuration(now time.Time, param string) (time.Time, error) {
 func remindTime(now time.Time, param string) (time.Time, error) {
 	param = strings.Replace(param, "_", "-", -1)
 	var reminderTime time.Time
-	loc, err := time.LoadLocation("Europe/Helsinki")
+	loc, err := time.LoadLocation(timezone)
 	for _, f := range dateTimeFormatsTZ {
 		reminderTime, err = time.Parse(f, param)
 		if err == nil {
