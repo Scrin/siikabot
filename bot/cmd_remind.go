@@ -108,7 +108,8 @@ func remindDuration(now time.Time, param string) (time.Time, error) {
 		return time.Unix(0, 0), errors.New("Duration must be at least 1s")
 	}
 
-	return now.Add(duration), nil
+	t := now.Add(duration)
+	return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), now.Location()), nil
 }
 
 func remindTime(now time.Time, param string) (time.Time, error) {
