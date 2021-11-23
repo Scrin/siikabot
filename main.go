@@ -3,8 +3,9 @@ package main
 import (
 	"log"
 	"os"
-	"siikabot/bot"
 	"strings"
+
+	"github.com/Scrin/siikabot/bot"
 )
 
 func main() {

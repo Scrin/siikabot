@@ -1,4 +1,4 @@
-FROM golang:1.14
+FROM golang:1.17
 
 RUN apt-get update && apt-get install -y traceroute && apt-get clean
 

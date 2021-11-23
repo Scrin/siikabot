@@ -2,9 +2,10 @@ package bot
 
 import (
 	"log"
-	siikadb "siikabot/db"
-	"siikabot/matrix"
 	"strings"
+
+	siikadb "github.com/Scrin/siikabot/db"
+	"github.com/Scrin/siikabot/matrix"
 
 	"github.com/matrix-org/gomatrix"
 	"github.com/prometheus/client_golang/prometheus"
