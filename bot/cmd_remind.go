@@ -20,13 +20,15 @@ const timezone = "Europe/Helsinki"
 
 var dateTimeFormats = []string{
 	"2.1.2006-15:04", "15:04-2.1.2006",
-	"2006-01-02-15:04", "15:04-2006-01-02"}
+	"2.1.2006-15:04:05", "15:04:05-2.1.2006",
+	"2006-01-02-15:04", "15:04-2006-01-02",
+	"2006-01-02-15:04:05", "15:04:05-2006-01-02"}
 var dateTimeFormatsTZ = []string{
 	time.ANSIC, time.UnixDate,
 	time.RFC822, time.RFC822Z,
 	time.RFC1123, time.RFC1123Z,
 	time.RFC3339, time.RFC3339Nano}
-var timeFormats = []string{"15:04"}
+var timeFormats = []string{"15:04", "15:04:05"}
 var dateFormats = []string{"2.1.2006", "2006-1-2"}
 
 func initReminder() {
