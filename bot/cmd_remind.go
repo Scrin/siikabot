@@ -75,7 +75,7 @@ func startReminder(rem reminder) {
 	}
 }
 
-func remind(roomID, sender, msg string) {
+func remind(roomID, sender, msg, msgType, formattedBody string) {
 	params := strings.SplitN(msg, " ", 3)
 	if len(params) < 3 {
 		client.SendMessage(roomID, "Usage: !remind <time, date, datetime or duration> <message>")
@@ -93,12 +93,18 @@ func remind(roomID, sender, msg string) {
 		return
 	}
 
-	rem := reminder{reminderTime.Unix(), sender, roomID, params[2]}
+	var reminderText string
+	if msgType == "org.matrix.custom.html" {
+		reminderText = formattedBody
+	} else {
+		reminderText = strings.Replace(params[2], "\n", "<br>", -1)
+	}
+	rem := reminder{reminderTime.Unix(), sender, roomID, reminderText}
 	startReminder(rem)
 	saveReminders(append(getReminders(), rem))
 	duration := reminderTime.Sub(t).Truncate(time.Second)
 	loc, _ := time.LoadLocation(timezone)
-	client.SendMessage(roomID, "Reminding at "+reminderTime.In(loc).Format("15:04:05 on 2.1.2006")+" (in "+duration.String()+"): "+params[2])
+	client.SendFormattedMessage(roomID, "Reminding at "+reminderTime.In(loc).Format("15:04:05 on 2.1.2006")+" (in "+duration.String()+"): "+reminderText)
 }
 
 func remindDuration(now time.Time, param string) (time.Time, error) {

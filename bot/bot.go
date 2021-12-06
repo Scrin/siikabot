@@ -25,6 +25,8 @@ func handleTextEvent(event *gomatrix.Event) {
 	metrics.eventsHandled.With(prometheus.Labels{"event_type": "m.room.message", "msg_type": msgtype}).Inc()
 	if msgtype == "m.text" && event.Sender != client.UserID {
 		msg := event.Content["body"].(string)
+		format, _ := event.Content["format"].(string)
+		formattedBody, _ := event.Content["formatted_body"].(string)
 		msgCommand := strings.Split(msg, " ")[0]
 		isCommand := true
 		switch msgCommand {
@@ -37,7 +39,7 @@ func handleTextEvent(event *gomatrix.Event) {
 		case "!grafana":
 			grafana(event.RoomID, event.Sender, msg)
 		case "!remind":
-			remind(event.RoomID, event.Sender, msg)
+			remind(event.RoomID, event.Sender, msg, format, formattedBody)
 		default:
 			isCommand = false
 		}
