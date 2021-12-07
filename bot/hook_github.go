@@ -79,8 +79,8 @@ func sendGithubPush(payload GithubPayload, roomID string) {
 	}
 
 	output := []string{"[<font color=\"#0000FC\">" + payload.Repository.FullName + "</font>] " +
-		"<font color=\"#9C009C\">" + payload.Pusher.Name + "</font> pushed " + strconv.Itoa(len(payload.Commits)) + " commits " +
-		"to <font color=\"#7F0000\">" + branch + "</font> " + payload.Compare}
+		"<font color=\"#9C009C\">" + payload.Pusher.Name + "</font> pushed <a href=\"" + payload.Compare + "\">" + strconv.Itoa(len(payload.Commits)) + " commits</a> " +
+		"to <font color=\"#7F0000\">" + branch + "</font> "}
 
 	for _, commit := range payload.Commits {
 		added := strconv.Itoa(len(commit.Added))
