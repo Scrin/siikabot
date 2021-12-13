@@ -58,8 +58,8 @@ func sendGithubMsg(payload GithubPayload, roomID string) {
 
 func sendGithubPullrequest(payload GithubPayload, roomID string) {
 	client.SendFormattedNotice(roomID, "[<font color=\"#0000FC\">"+payload.Repository.FullName+"</font>] "+
-		"<font color=\"#9C009C\">"+payload.Sender.Login+"</font> "+payload.Action+" a pull request: "+
-		"<font color=\"#7F0000\">"+payload.PullRequest.Title+"</font> "+payload.PullRequest.HtmlUrl)
+		"<font color=\"#9C009C\">"+payload.Sender.Login+"</font> <a href=\""+payload.PullRequest.HtmlUrl+"\">"+payload.Action+" a pull request:</a> "+
+		"<font color=\"#7F0000\">"+payload.PullRequest.Title+"</font>")
 }
 
 func sendGithubPush(payload GithubPayload, roomID string) {
