@@ -13,18 +13,38 @@ func ping(roomID, msg string) {
 	if len(split) < 2 {
 		return
 	}
+	target := split[1]
 	count := 5
-	if len(split) > 2 {
-		if i, err := strconv.Atoi(split[2]); err == nil && i > 0 && i <= 20 {
-			count = i
+	isV6 := strings.Contains(split[1], ":")
+	if split[1] == "-6" {
+		target = split[2]
+		isV6 = true
+		if len(split) > 3 {
+			if i, err := strconv.Atoi(split[3]); err == nil && i > 0 && i <= 20 {
+				count = i
+			}
+		}
+	} else {
+		if len(split) > 2 {
+			if i, err := strconv.Atoi(split[2]); err == nil && i > 0 && i <= 20 {
+				count = i
+			}
 		}
 	}
-	command := "ping"
-	countFlag := "-c"
+	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		countFlag = "-n"
+		if isV6 {
+			cmd = exec.Command("ping", "-6", "-n", strconv.Itoa(count), target)
+		} else {
+			cmd = exec.Command("ping", "-n", strconv.Itoa(count), target)
+		}
+	} else {
+		if isV6 {
+			cmd = exec.Command("ping6", "-c", strconv.Itoa(count), target)
+		} else {
+			cmd = exec.Command("ping", "-c", strconv.Itoa(count), target)
+		}
 	}
-	cmd := exec.Command(command, countFlag, strconv.Itoa(count), split[1])
 
 	cmdReader, err := cmd.StdoutPipe()
 	if err != nil {
