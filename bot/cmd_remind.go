@@ -156,7 +156,7 @@ func remindTime(now time.Time, param string) (time.Time, error) {
 		for _, f := range dateFormats {
 			reminderTime, err = time.Parse(f, param)
 			if err == nil {
-				reminderTime = time.Date(reminderTime.Year(), reminderTime.Month(), reminderTime.Day(), now.Hour(), now.Minute(), now.Second(), 0, loc)
+				reminderTime = time.Date(reminderTime.Year(), reminderTime.Month(), reminderTime.Day(), 9, 0, 0, 0, loc)
 				break
 			}
 		}
