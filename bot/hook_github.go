@@ -26,6 +26,7 @@ type GithubPayload struct {
 	} `json:"pusher"`
 	Repository struct {
 		FullName string `json:"full_name"`
+		HtmlUrl  string `json:"html_url"`
 	} `json:"repository"`
 	Commits []struct {
 		ID       string   `json:"id"`
@@ -41,19 +42,29 @@ type GithubPayload struct {
 		HtmlUrl string `json:"html_url"`
 		Title   string `json:"title"`
 	} `json:"pull_request"`
+	Hook struct {
+		Type string `json:"type"`
+	} `json:"hook"`
 	Sender struct {
 		Login string `json:"login"`
 	} `json:"sender"`
 }
 
 func sendGithubMsg(payload GithubPayload, roomID string) {
-	if payload.Pusher.Name != "" {
+	if payload.Hook.Type == "Repository" {
+		sendGithubHookConfig(payload, roomID)
+	} else if payload.Pusher.Name != "" {
 		sendGithubPush(payload, roomID)
 	} else if payload.PullRequest.HtmlUrl != "" {
 		sendGithubPullrequest(payload, roomID)
 	} else {
 		client.SendNotice(roomID, "Unknown github hook called")
 	}
+}
+
+func sendGithubHookConfig(payload GithubPayload, roomID string) {
+	client.SendFormattedNotice(roomID, "[<font color=\"#0000FC\">"+payload.Repository.FullName+"</font>] "+
+		"<font color=\"#9C009C\">"+payload.Sender.Login+"</font> configured a webhook: "+payload.Repository.HtmlUrl)
 }
 
 func sendGithubPullrequest(payload GithubPayload, roomID string) {
