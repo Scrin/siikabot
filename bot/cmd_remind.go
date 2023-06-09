@@ -93,7 +93,7 @@ func remind(roomID, sender, msg, msgType, formattedBody string) {
 		return
 	}
 
-	formattedParams := strings.SplitN(msg, " ", 3)
+	formattedParams := strings.SplitN(formattedBody, " ", 3)
 	var reminderText string
 	if msgType == "org.matrix.custom.html" && len(formattedParams) >= 3 {
 		reminderText = formattedParams[2]
