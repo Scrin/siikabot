@@ -116,7 +116,7 @@ func remindDuration(now time.Time, param string) (time.Time, error) {
 	}
 
 	if int64(duration/time.Second) < 1 {
-		return time.Unix(0, 0), errors.New("Duration must be at least 1s")
+		return time.Unix(0, 0), errors.New("duration must be at least 1s")
 	}
 
 	return now.Add(duration), nil
@@ -168,10 +168,10 @@ func remindTime(now time.Time, param string) (time.Time, error) {
 			strings.Join(dateTimeFormatsTZ, "<br>") + "<br>" +
 			strings.Join(timeFormats, "<br>") + "<br>" +
 			strings.Join(dateFormats, "<br>")
-		return time.Unix(0, 0), errors.New("Invalid date/time. Valid formats: " + formats)
+		return time.Unix(0, 0), errors.New("invalid date/time. Valid formats: " + formats)
 	}
 	if reminderTime.Unix() <= now.Unix() {
-		return time.Unix(0, 0), errors.New("Reminder date/time must be in future")
+		return time.Unix(0, 0), errors.New("reminder date/time must be in future")
 	}
 	return reminderTime, nil
 }

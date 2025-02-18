@@ -143,7 +143,7 @@ func ruuviQueryGrafana(baseURL, tagName string, offset time.Duration, fields ...
 	if err = json.NewDecoder(resp.Body).Decode(&grafanaResp); err != nil {
 		return nil, err
 	} else if len(grafanaResp.Results) < 1 || len(grafanaResp.Results[0].Series) < 1 {
-		return nil, errors.New("No data")
+		return nil, errors.New("no data")
 	}
 	return &grafanaResp, nil
 

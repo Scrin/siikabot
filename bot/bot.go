@@ -40,6 +40,8 @@ func handleTextEvent(event *gomatrix.Event) {
 			grafana(event.RoomID, event.Sender, msg)
 		case "!remind":
 			remind(event.RoomID, event.Sender, msg, format, formattedBody)
+		case "!chat":
+			chat(event.RoomID, event.Sender, msg)
 		default:
 			isCommand = false
 		}
@@ -57,7 +59,7 @@ func handleMemberEvent(event *gomatrix.Event) {
 	}
 }
 
-func Run(homeserverURL, userID, accessToken, hookSecret, dataPath, admin string) error {
+func Run(homeserverURL, userID, accessToken, hookSecret, dataPath, admin, openrouterApiKey string) error {
 	initMetrics()
 	db = siikadb.NewDB(dataPath + "/siikabot.db")
 	client = matrix.NewClient(homeserverURL, userID, accessToken)
@@ -72,5 +74,6 @@ func Run(homeserverURL, userID, accessToken, hookSecret, dataPath, admin string)
 	}
 	initReminder()
 	initHTTP(hookSecret)
+	openrouterAPIKey = openrouterApiKey
 	return client.Sync()
 }
