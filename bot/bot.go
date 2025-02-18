@@ -1,13 +1,14 @@
 package bot
 
 import (
+	"context"
 	"log"
 	"strings"
 
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/matrix"
+	"maunium.net/go/mautrix/event"
 
-	"github.com/matrix-org/gomatrix"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -15,31 +16,36 @@ var (
 	adminUser string
 )
 
-func handleTextEvent(event *gomatrix.Event) {
+func handleTextEvent(ctx context.Context, evt *event.Event) {
+	log.Print(evt.Content.Raw)
+	if evt.Sender.String() == matrix.GetUserID() {
+		log.Print("Skipping event from self")
+		return
+	}
 	msgtype := ""
-	if m, ok := event.Content["msgtype"].(string); ok {
+	if m, ok := evt.Content.Raw["msgtype"].(string); ok {
 		msgtype = m
 	}
 	metrics.eventsHandled.With(prometheus.Labels{"event_type": "m.room.message", "msg_type": msgtype}).Inc()
-	if msgtype == "m.text" && event.Sender != matrix.GetUserID() {
-		msg := event.Content["body"].(string)
-		format, _ := event.Content["format"].(string)
-		formattedBody, _ := event.Content["formatted_body"].(string)
+	if msgtype == "m.text" && evt.Sender.String() != matrix.GetUserID() {
+		msg := evt.Content.Raw["body"].(string)
+		format, _ := evt.Content.Raw["format"].(string)
+		formattedBody, _ := evt.Content.Raw["formatted_body"].(string)
 		msgCommand := strings.Split(msg, " ")[0]
 		isCommand := true
 		switch msgCommand {
 		case "!ping":
-			ping(event.RoomID, msg)
+			ping(evt.RoomID.String(), msg)
 		case "!traceroute":
-			traceroute(event.RoomID, msg)
+			traceroute(evt.RoomID.String(), msg)
 		case "!ruuvi":
-			ruuvi(event.RoomID, event.Sender, msg)
+			ruuvi(evt.RoomID.String(), evt.Sender.String(), msg)
 		case "!grafana":
-			grafana(event.RoomID, event.Sender, msg)
+			grafana(evt.RoomID.String(), evt.Sender.String(), msg)
 		case "!remind":
-			remind(event.RoomID, event.Sender, msg, format, formattedBody)
+			remind(evt.RoomID.String(), evt.Sender.String(), msg, format, formattedBody)
 		case "!chat":
-			chat(event.RoomID, event.Sender, msg)
+			chat(evt.RoomID.String(), evt.Sender.String(), msg)
 		default:
 			isCommand = false
 		}
@@ -49,11 +55,11 @@ func handleTextEvent(event *gomatrix.Event) {
 	}
 }
 
-func handleMemberEvent(event *gomatrix.Event) {
+func handleMemberEvent(ctx context.Context, evt *event.Event) {
 	metrics.eventsHandled.With(prometheus.Labels{"event_type": "m.room.member", "msg_type": ""}).Inc()
-	if event.Content["membership"] == "invite" && *event.StateKey == matrix.GetUserID() {
-		matrix.JoinRoom(event.RoomID)
-		log.Print("Joined room " + event.RoomID)
+	if evt.Content.Raw["membership"] == "invite" && evt.GetStateKey() == matrix.GetUserID() {
+		matrix.JoinRoom(evt.RoomID.String())
+		log.Print("Joined room " + evt.RoomID.String())
 	}
 }
 
@@ -67,15 +73,17 @@ func Run(homeserverURL, userID, accessToken, hookSecret, dataPath, admin, openro
 	}
 	adminUser = admin
 
-	matrix.OnEvent("m.room.member", handleMemberEvent)
-	matrix.OnEvent("m.room.message", handleTextEvent)
 	resp := matrix.InitialSync()
 	for roomID := range resp.Rooms.Invite {
-		matrix.JoinRoom(roomID)
-		log.Print("Joined room " + roomID)
+		matrix.JoinRoom(roomID.String())
+		log.Print("Joined room " + roomID.String())
 	}
 	initReminder()
 	initHTTP(hookSecret)
 	openrouterAPIKey = openrouterApiKey
+
+	matrix.OnEvent("m.room.member", handleMemberEvent)
+	matrix.OnEvent("m.room.message", handleTextEvent)
+
 	return matrix.Sync()
 }

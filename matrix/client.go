@@ -1,6 +1,7 @@
 package matrix
 
 import (
+	"context"
 	"encoding/json"
 	"html"
 	"log"
@@ -8,12 +9,14 @@ import (
 	"time"
 
 	strip "github.com/grokify/html-strip-tags-go"
-	"github.com/matrix-org/gomatrix"
+	"maunium.net/go/mautrix"
+	"maunium.net/go/mautrix/event"
+	"maunium.net/go/mautrix/id"
 )
 
 var (
 	userID         string
-	client         *gomatrix.Client
+	client         *mautrix.Client
 	outboundEvents chan outboundEvent
 )
 
@@ -62,8 +65,8 @@ func sendMessage(roomID string, message interface{}, retryOnFailure bool) <-chan
 }
 
 // InitialSync gets the initial sync from the server for catching up with important missed event such as invites
-func InitialSync() *gomatrix.RespSync {
-	resp, err := client.SyncRequest(0, "", "", false, "")
+func InitialSync() *mautrix.RespSync {
+	resp, err := client.SyncRequest(context.TODO(), 0, "", "", false, "online")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -75,19 +78,19 @@ func Sync() error {
 	return client.Sync()
 }
 
-func OnEvent(eventType string, callback gomatrix.OnEventListener) {
-	client.Syncer.(*gomatrix.DefaultSyncer).OnEventType(eventType, callback)
+func OnEvent(eventType string, handler mautrix.EventHandler) {
+	client.Syncer.(*mautrix.DefaultSyncer).OnEventType(event.NewEventType(eventType), handler)
 }
 
 func JoinRoom(roomID string) {
-	_, err := client.JoinRoom(roomID, "", nil)
+	_, err := client.JoinRoom(context.TODO(), roomID, &mautrix.ReqJoinRoom{})
 	if err != nil {
 		log.Println("Failed to join room "+roomID+": ", err)
 	}
 }
 
 func GetDisplayName(mxid string) string {
-	foo, err := client.GetDisplayName(mxid)
+	foo, err := client.GetDisplayName(context.TODO(), id.UserID(mxid))
 	if err != nil {
 		log.Println(err)
 	}
@@ -253,24 +256,24 @@ func sendStreaming(roomID string, formatted bool, msgType string) (messageUpdate
 }
 
 func processOutboundEvents() {
-	for event := range outboundEvents {
+	for evt := range outboundEvents {
 	retry:
 		for {
-			resp, err := client.SendMessageEvent(event.RoomID, event.EventType, event.Content)
+			resp, err := client.SendMessageEvent(context.TODO(), id.RoomID(evt.RoomID), event.NewEventType(evt.EventType), evt.Content)
 			if err == nil {
-				if event.done != nil {
-					event.done <- resp.EventID
+				if evt.done != nil {
+					evt.done <- string(resp.EventID)
 				}
 				break // Success, break the retry loop
 			}
 			var httpErr httpError
-			httpError, isHttpError := err.(gomatrix.HTTPError)
+			httpError, isHttpError := err.(mautrix.HTTPError)
 			if !isHttpError {
 				log.Print("Failed to parse error response of unexpected type!", err)
-				event.done <- ""
+				evt.done <- ""
 				break
 			}
-			if jsonErr := json.Unmarshal(httpError.Contents, &httpErr); jsonErr != nil {
+			if jsonErr := json.Unmarshal([]byte(httpError.ResponseBody), &httpErr); jsonErr != nil {
 				log.Print("Failed to parse error response!", jsonErr)
 			}
 
@@ -278,16 +281,14 @@ func processOutboundEvents() {
 			case "M_LIMIT_EXCEEDED":
 				time.Sleep(time.Duration(httpErr.RetryAfterMs) * time.Millisecond)
 			case "M_FORBIDDEN":
-				log.Print("Failed to send message to room "+event.RoomID+" err: ", err)
-				log.Print(string(err.(gomatrix.HTTPError).Contents))
-				event.done <- ""
+				log.Print("Failed to send message to room "+evt.RoomID+" err: ", err)
+				evt.done <- ""
 				break retry
 			default:
-				log.Print("Failed to send message to room "+event.RoomID+" err: ", err)
-				log.Print(string(err.(gomatrix.HTTPError).Contents))
+				log.Print("Failed to send message to room "+evt.RoomID+" err: ", err)
 			}
-			if !event.RetryOnFailure {
-				event.done <- ""
+			if !evt.RetryOnFailure {
+				evt.done <- ""
 				break
 			}
 		}
@@ -302,7 +303,7 @@ func GetUserID() string {
 // Init initializes the Matrix client with the given parameters
 func Init(homeserverURL, uid, accessToken string) error {
 	var err error
-	client, err = gomatrix.NewClient(homeserverURL, uid, accessToken)
+	client, err = mautrix.NewClient(homeserverURL, id.UserID(uid), accessToken)
 	if err != nil {
 		return err
 	}
