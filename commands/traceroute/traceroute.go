@@ -1,4 +1,4 @@
-package bot
+package traceroute
 
 import (
 	"bufio"
@@ -9,7 +9,8 @@ import (
 	"github.com/Scrin/siikabot/matrix"
 )
 
-func traceroute(roomID, msg string) {
+// Handle handles the traceroute command
+func Handle(roomID, msg string) {
 	split := strings.Split(msg, " ")
 	if len(split) < 2 {
 		return

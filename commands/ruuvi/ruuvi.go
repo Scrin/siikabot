@@ -1,4 +1,4 @@
-package bot
+package ruuvi
 
 import (
 	"encoding/json"
@@ -12,13 +12,28 @@ import (
 	"github.com/Scrin/siikabot/matrix"
 )
 
-type ruuviEndpoint struct {
+type endpoint struct {
 	Name    string `json:"name"`
 	BaseURL string `json:"base_url"`
 	TagName string `json:"tag_name"`
 }
 
-func formatRuuviEndpoints(endpoints []ruuviEndpoint) string {
+type grafanaResponse struct {
+	Results []struct {
+		Series []struct {
+			Values [][]interface{} `json:"values"`
+		} `json:"series"`
+	} `json:"results"`
+}
+
+var adminUser string
+
+// Init initializes the ruuvi command with the admin user
+func Init(admin string) {
+	adminUser = admin
+}
+
+func formatEndpoints(endpoints []endpoint) string {
 	respLines := []string{"Current ruuvi endpoints: "}
 	for _, endpoint := range endpoints {
 		respLines = append(respLines, endpoint.Name+": "+endpoint.BaseURL+" tag name: "+endpoint.TagName)
@@ -26,16 +41,17 @@ func formatRuuviEndpoints(endpoints []ruuviEndpoint) string {
 	return strings.Join(respLines, "\n")
 }
 
-func getRuuviEndpoints() []ruuviEndpoint {
+func getEndpoints() []endpoint {
 	endpointsJson := db.Get("ruuvi_endpoints")
-	var endpoints []ruuviEndpoint
+	var endpoints []endpoint
 	if endpointsJson != "" {
 		json.Unmarshal([]byte(endpointsJson), &endpoints)
 	}
 	return endpoints
 }
 
-func ruuvi(roomID, sender, msg string) {
+// Handle handles the ruuvi command
+func Handle(roomID, sender, msg string) {
 	params := strings.Split(msg, " ")
 	if len(params) == 1 {
 		matrix.SendFormattedMessage(roomID, formatRuuviData())
@@ -52,7 +68,7 @@ func ruuvi(roomID, sender, msg string) {
 			matrix.SendMessage(roomID, "Usage: !ruuvi query [<n> <tag_name>] <field>")
 		}
 	case "config":
-		matrix.SendMessage(roomID, formatRuuviEndpoints(getRuuviEndpoints()))
+		matrix.SendMessage(roomID, formatEndpoints(getEndpoints()))
 	case "add":
 		if sender != adminUser {
 			matrix.SendMessage(roomID, "Only admins can use this command")
@@ -62,13 +78,13 @@ func ruuvi(roomID, sender, msg string) {
 			matrix.SendMessage(roomID, "Usage: !ruuvi add <base_url> <tag_name> <n>")
 			return
 		}
-		endpoints := append(getRuuviEndpoints(), ruuviEndpoint{strings.Join(params[4:], " "), params[2], params[3]})
+		endpoints := append(getEndpoints(), endpoint{strings.Join(params[4:], " "), params[2], params[3]})
 		res, err := json.Marshal(endpoints)
 		if err != nil {
 			matrix.SendMessage(roomID, err.Error())
 		}
 		db.Set("ruuvi_endpoints", string(res))
-		matrix.SendMessage(roomID, formatRuuviEndpoints(endpoints))
+		matrix.SendMessage(roomID, formatEndpoints(endpoints))
 	case "remove":
 		if sender != adminUser {
 			matrix.SendMessage(roomID, "Only admins can use this command")
@@ -78,8 +94,8 @@ func ruuvi(roomID, sender, msg string) {
 			matrix.SendMessage(roomID, "Usage: !ruuvi remove <n>")
 			return
 		}
-		endpoints := getRuuviEndpoints()
-		var newEndpoints []ruuviEndpoint
+		endpoints := getEndpoints()
+		var newEndpoints []endpoint
 		name := strings.Join(params[2:], " ")
 		for _, e := range endpoints {
 			if e.Name != name {
@@ -91,7 +107,7 @@ func ruuvi(roomID, sender, msg string) {
 			matrix.SendMessage(roomID, err.Error())
 		}
 		db.Set("ruuvi_endpoints", string(res))
-		matrix.SendMessage(roomID, formatRuuviEndpoints(newEndpoints))
+		matrix.SendMessage(roomID, formatEndpoints(newEndpoints))
 	case "-":
 		go func() {
 			start := time.Now().Unix()
@@ -109,7 +125,7 @@ func ruuvi(roomID, sender, msg string) {
 	}
 }
 
-func ruuviQueryGrafana(baseURL, tagName string, offset time.Duration, fields ...string) (*grafanaResponse, error) {
+func queryGrafana(baseURL, tagName string, offset time.Duration, fields ...string) (*grafanaResponse, error) {
 	tagName = strings.Replace(tagName, `"`, "", -1)
 	var queryBuilder strings.Builder
 	queryBuilder.WriteString(baseURL)
@@ -152,11 +168,11 @@ func ruuviQueryGrafana(baseURL, tagName string, offset time.Duration, fields ...
 }
 
 func queryRuuviData(roomID, name, tagName, field string) {
-	endpoints := getRuuviEndpoints()
+	endpoints := getEndpoints()
 	if name == "" && tagName == "" {
 		var respLines []string
 		for _, e := range endpoints {
-			grafanaResp, err := ruuviQueryGrafana(e.BaseURL, e.TagName, 0, field)
+			grafanaResp, err := queryGrafana(e.BaseURL, e.TagName, 0, field)
 			if err != nil {
 				respLines = append(respLines, e.Name+" error: "+err.Error())
 			} else {
@@ -173,7 +189,7 @@ func queryRuuviData(roomID, name, tagName, field string) {
 			if e.Name != name {
 				continue
 			}
-			grafanaResp, err := ruuviQueryGrafana(e.BaseURL, tagName, 0, field)
+			grafanaResp, err := queryGrafana(e.BaseURL, tagName, 0, field)
 			if err != nil {
 				matrix.SendMessage(roomID, err.Error())
 			} else {
@@ -192,20 +208,20 @@ func queryRuuviData(roomID, name, tagName, field string) {
 }
 
 func formatRuuviData() string {
-	endpoints := getRuuviEndpoints()
+	endpoints := getEndpoints()
 	var respLines []string
 	for _, e := range endpoints {
-		current, err := ruuviQueryGrafana(e.BaseURL, e.TagName, 0, "temperature", "humidity", "pressure")
+		current, err := queryGrafana(e.BaseURL, e.TagName, 0, "temperature", "humidity", "pressure")
 		if err != nil {
 			respLines = append(respLines, "<p>"+e.Name+" error: "+err.Error()+"</p>")
 			continue
 		}
-		hourAgo, err := ruuviQueryGrafana(e.BaseURL, e.TagName, time.Hour, "temperature")
+		hourAgo, err := queryGrafana(e.BaseURL, e.TagName, time.Hour, "temperature")
 		if err != nil {
 			respLines = append(respLines, "<p>"+e.Name+" error: "+err.Error()+"</p>")
 			continue
 		}
-		yesterday, err := ruuviQueryGrafana(e.BaseURL, e.TagName, 24*time.Hour, "temperature")
+		yesterday, err := queryGrafana(e.BaseURL, e.TagName, 24*time.Hour, "temperature")
 		if err != nil {
 			respLines = append(respLines, "<p>"+e.Name+" error: "+err.Error()+"</p>")
 			continue

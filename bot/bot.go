@@ -5,6 +5,12 @@ import (
 	"log"
 	"strings"
 
+	"github.com/Scrin/siikabot/commands/chat"
+	"github.com/Scrin/siikabot/commands/grafana"
+	"github.com/Scrin/siikabot/commands/ping"
+	"github.com/Scrin/siikabot/commands/remind"
+	"github.com/Scrin/siikabot/commands/ruuvi"
+	"github.com/Scrin/siikabot/commands/traceroute"
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/matrix"
 	"maunium.net/go/mautrix/event"
@@ -35,17 +41,17 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 		isCommand := true
 		switch msgCommand {
 		case "!ping":
-			ping(evt.RoomID.String(), msg)
+			ping.Handle(evt.RoomID.String(), msg)
 		case "!traceroute":
-			traceroute(evt.RoomID.String(), msg)
+			traceroute.Handle(evt.RoomID.String(), msg)
 		case "!ruuvi":
-			ruuvi(evt.RoomID.String(), evt.Sender.String(), msg)
+			ruuvi.Handle(evt.RoomID.String(), evt.Sender.String(), msg)
 		case "!grafana":
-			grafana(evt.RoomID.String(), evt.Sender.String(), msg)
+			grafana.Handle(evt.RoomID.String(), evt.Sender.String(), msg)
 		case "!remind":
-			remind(evt.RoomID.String(), evt.Sender.String(), msg, format, formattedBody)
+			remind.Handle(evt.RoomID.String(), evt.Sender.String(), msg, format, formattedBody)
 		case "!chat":
-			chat(evt.RoomID.String(), evt.Sender.String(), msg)
+			chat.Handle(evt.RoomID.String(), evt.Sender.String(), msg)
 		default:
 			isCommand = false
 		}
@@ -78,9 +84,11 @@ func Run(homeserverURL, userID, accessToken, hookSecret, dataPath, admin, openro
 		matrix.JoinRoom(roomID.String())
 		log.Print("Joined room " + roomID.String())
 	}
-	initReminder()
+	remind.Init()
+	chat.Init(openrouterApiKey)
+	ruuvi.Init(admin)
+	grafana.Init(admin)
 	initHTTP(hookSecret)
-	openrouterAPIKey = openrouterApiKey
 
 	matrix.OnEvent("m.room.member", handleMemberEvent)
 	matrix.OnEvent("m.room.message", handleTextEvent)

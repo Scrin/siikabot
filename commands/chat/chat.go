@@ -1,4 +1,4 @@
-package bot
+package chat
 
 import (
 	"bytes"
@@ -11,38 +11,44 @@ import (
 	"github.com/Scrin/siikabot/matrix"
 )
 
-type Message struct {
+type message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
 
-type ChatRequest struct {
+type chatRequest struct {
 	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
+	Messages []message `json:"messages"`
 }
 
-type Choice struct {
-	Message Message `json:"message"`
+type choice struct {
+	Message message `json:"message"`
 }
 
-type ChatResponse struct {
-	Choices []Choice `json:"choices"`
+type chatResponse struct {
+	Choices []choice `json:"choices"`
 	Error   *struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
 	} `json:"error,omitempty"`
 }
 
-var openrouterAPIKey string
+var apiKey string
 
-func chat(roomID, sender, msg string) {
+// Init initializes the chat command with the API key
+func Init(openrouterAPIKey string) {
+	apiKey = openrouterAPIKey
+}
+
+// Handle handles the chat command
+func Handle(roomID, sender, msg string) {
 	if strings.TrimSpace(msg) == "" {
 		return
 	}
 
-	req := ChatRequest{
+	req := chatRequest{
 		Model: "google/gemini-2.0-flash-lite-preview-02-05:free",
-		Messages: []Message{
+		Messages: []message{
 			{
 				Role:    "user",
 				Content: msg,
@@ -63,7 +69,7 @@ func chat(roomID, sender, msg string) {
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+openrouterAPIKey)
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 
 	httpClient := &http.Client{}
 	resp, err := httpClient.Do(httpReq)
@@ -79,7 +85,7 @@ func chat(roomID, sender, msg string) {
 		return
 	}
 
-	var chatResp ChatResponse
+	var chatResp chatResponse
 	if err := json.Unmarshal(body, &chatResp); err != nil {
 		matrix.SendMessage(roomID, fmt.Sprintf("Error parsing response: %v", err))
 		return

@@ -1,4 +1,4 @@
-package bot
+package remind
 
 import (
 	"encoding/json"
@@ -34,7 +34,8 @@ var dateTimeFormatsTZ = []string{
 var timeFormats = []string{"15:04", "15:04:05"}
 var dateFormats = []string{"2.1.2006", "2006-1-2"}
 
-func initReminder() {
+// Init initializes the reminder system
+func Init() {
 	for _, r := range getReminders() {
 		startReminder(r)
 	}
@@ -78,7 +79,8 @@ func startReminder(rem reminder) {
 	}
 }
 
-func remind(roomID, sender, msg, msgType, formattedBody string) {
+// Handle handles the remind command
+func Handle(roomID, sender, msg, msgType, formattedBody string) {
 	params := strings.SplitN(msg, " ", 3)
 	if len(params) < 3 {
 		matrix.SendMessage(roomID, "Usage: !remind <time, date, datetime or duration> <message>")

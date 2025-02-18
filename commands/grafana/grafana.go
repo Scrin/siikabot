@@ -1,4 +1,4 @@
-package bot
+package grafana
 
 import (
 	"bytes"
@@ -14,7 +14,7 @@ import (
 	"github.com/Scrin/siikabot/matrix"
 )
 
-type grafanaConfig struct {
+type config struct {
 	Template string            `json:"template"`
 	Sources  map[string]string `json:"sources"`
 }
@@ -27,19 +27,26 @@ type grafanaResponse struct {
 	} `json:"results"`
 }
 
-func getGrafanaConfigs() map[string]grafanaConfig {
+var adminUser string
+
+// Init initializes the grafana command with the admin user
+func Init(admin string) {
+	adminUser = admin
+}
+
+func getConfigs() map[string]config {
 	endpointsJson := db.Get("grafana_configs")
-	var configs map[string]grafanaConfig
+	var configs map[string]config
 	if endpointsJson != "" {
 		json.Unmarshal([]byte(endpointsJson), &configs)
 	}
 	if configs == nil {
-		configs = make(map[string]grafanaConfig)
+		configs = make(map[string]config)
 	}
 	return configs
 }
 
-func saveGrafanaConfigs(configs map[string]grafanaConfig) {
+func saveConfigs(configs map[string]config) {
 	res, err := json.Marshal(configs)
 	if err != nil {
 		log.Print(err)
@@ -48,7 +55,7 @@ func saveGrafanaConfigs(configs map[string]grafanaConfig) {
 	db.Set("grafana_configs", string(res))
 }
 
-func getGrafanaUsers() []string {
+func getUsers() []string {
 	endpointsJson := db.Get("grafana_users")
 	var users []string
 	if endpointsJson != "" {
@@ -57,7 +64,7 @@ func getGrafanaUsers() []string {
 	return users
 }
 
-func saveGrafanaUsers(users []string) {
+func saveUsers(users []string) {
 	res, err := json.Marshal(users)
 	if err != nil {
 		log.Print(err)
@@ -67,7 +74,7 @@ func saveGrafanaUsers(users []string) {
 }
 
 func validUser(user string) bool {
-	for _, u := range getGrafanaUsers() {
+	for _, u := range getUsers() {
 		if u == user {
 			return true
 		}
@@ -75,7 +82,8 @@ func validUser(user string) bool {
 	return false
 }
 
-func grafana(roomID, sender, msg string) {
+// Handle handles the grafana command
+func Handle(roomID, sender, msg string) {
 	params := strings.Split(msg, " ")
 	if len(params) == 1 {
 		return
@@ -91,15 +99,15 @@ func grafana(roomID, sender, msg string) {
 			"<b>!grafana set datasource &lt;template-name> &lt;datasource-name> &lt;datasource-url></b> sets a datasource for a template config. <b>-</b> as url will remove the datasource")
 	case "config":
 		if len(params) == 3 {
-			configs := getGrafanaConfigs()
+			configs := getConfigs()
 			config, ok := configs[params[2]]
 			if !ok {
 				matrix.SendMessage(roomID, "Template "+params[2]+" not found.")
 				return
 			}
-			matrix.SendMessage(roomID, formatGrafanaConfig(config))
+			matrix.SendMessage(roomID, formatConfig(config))
 		} else {
-			matrix.SendMessage(roomID, formatGrafanaConfigs(getGrafanaConfigs()))
+			matrix.SendMessage(roomID, formatConfigs(getConfigs()))
 		}
 	case "add":
 		if !validUser(sender) {
@@ -110,10 +118,10 @@ func grafana(roomID, sender, msg string) {
 			matrix.SendMessage(roomID, "Usage: !grafana add <template-name>")
 			return
 		}
-		configs := getGrafanaConfigs()
-		configs[params[2]] = grafanaConfig{"", nil}
-		saveGrafanaConfigs(configs)
-		matrix.SendMessage(roomID, formatGrafanaConfigs(configs))
+		configs := getConfigs()
+		configs[params[2]] = config{"", nil}
+		saveConfigs(configs)
+		matrix.SendMessage(roomID, formatConfigs(configs))
 	case "remove":
 		if !validUser(sender) {
 			matrix.SendMessage(roomID, "Only authorized users can use this command")
@@ -123,10 +131,10 @@ func grafana(roomID, sender, msg string) {
 			matrix.SendMessage(roomID, "Usage: !grafana remove <template-name>")
 			return
 		}
-		configs := getGrafanaConfigs()
+		configs := getConfigs()
 		delete(configs, params[2])
-		saveGrafanaConfigs(configs)
-		matrix.SendMessage(roomID, formatGrafanaConfigs(configs))
+		saveConfigs(configs)
+		matrix.SendMessage(roomID, formatConfigs(configs))
 	case "rename":
 		if !validUser(sender) {
 			matrix.SendMessage(roomID, "Only authorized users can use this command")
@@ -136,7 +144,7 @@ func grafana(roomID, sender, msg string) {
 			matrix.SendMessage(roomID, "Usage: !grafana rename <template-name> <new-name>")
 			return
 		}
-		configs := getGrafanaConfigs()
+		configs := getConfigs()
 		config, ok := configs[params[2]]
 		if !ok {
 			matrix.SendMessage(roomID, "Config "+params[2]+" not found")
@@ -144,8 +152,8 @@ func grafana(roomID, sender, msg string) {
 		}
 		delete(configs, params[2])
 		configs[params[3]] = config
-		saveGrafanaConfigs(configs)
-		matrix.SendMessage(roomID, formatGrafanaConfigs(configs))
+		saveConfigs(configs)
+		matrix.SendMessage(roomID, formatConfigs(configs))
 	case "set":
 		if !validUser(sender) {
 			matrix.SendMessage(roomID, "Only authorized users can use this command")
@@ -155,7 +163,7 @@ func grafana(roomID, sender, msg string) {
 			matrix.SendMessage(roomID, "Usage: !grafana set [template/datasource] <...>")
 			return
 		}
-		configs := getGrafanaConfigs()
+		configs := getConfigs()
 		config, ok := configs[params[3]]
 		if !ok {
 			matrix.SendMessage(roomID, "Template "+params[3]+" not found. Add it first with !grafana add "+params[3])
@@ -169,7 +177,7 @@ func grafana(roomID, sender, msg string) {
 			}
 			config.Template = strings.Join(params[4:], " ")
 			configs[params[3]] = config
-			saveGrafanaConfigs(configs)
+			saveConfigs(configs)
 			matrix.SendFormattedMessage(roomID, formatTemplate(config))
 		case "datasource":
 			if len(params) < 6 {
@@ -185,7 +193,7 @@ func grafana(roomID, sender, msg string) {
 				config.Sources[params[4]] = params[5]
 			}
 			configs[params[3]] = config
-			saveGrafanaConfigs(configs)
+			saveConfigs(configs)
 			matrix.SendFormattedMessage(roomID, formatTemplate(config))
 		default:
 			matrix.SendMessage(roomID, "Usage: !grafana set [template/datasource]")
@@ -199,14 +207,14 @@ func grafana(roomID, sender, msg string) {
 			matrix.SendMessage(roomID, "Usage: !grafana authorize <user>")
 			return
 		}
-		users := getGrafanaUsers()
+		users := getUsers()
 		users = append(users, params[2])
-		saveGrafanaUsers(users)
+		saveUsers(users)
 		matrix.SendMessage(roomID, strings.Join(users, " "))
 	default:
 		switch len(params) {
 		case 2:
-			configs := getGrafanaConfigs()
+			configs := getConfigs()
 			config, ok := configs[params[1]]
 			if !ok {
 				matrix.SendMessage(roomID, "Template "+params[1]+" not found.")
@@ -214,7 +222,7 @@ func grafana(roomID, sender, msg string) {
 			}
 			matrix.SendFormattedMessage(roomID, formatTemplate(config))
 		case 3:
-			configs := getGrafanaConfigs()
+			configs := getConfigs()
 			config, ok := configs[params[1]]
 			if !ok {
 				matrix.SendMessage(roomID, "Template "+params[1]+" not found.")
@@ -243,7 +251,7 @@ func grafana(roomID, sender, msg string) {
 	}
 }
 
-func formatGrafanaConfigs(configs map[string]grafanaConfig) string {
+func formatConfigs(configs map[string]config) string {
 	respLines := []string{"Current Grafana configs: "}
 	for name := range configs {
 		respLines = append(respLines, name)
@@ -251,7 +259,7 @@ func formatGrafanaConfigs(configs map[string]grafanaConfig) string {
 	return strings.Join(respLines, "\n")
 }
 
-func formatGrafanaConfig(config grafanaConfig) string {
+func formatConfig(config config) string {
 	respLines := []string{"Template string: " + config.Template, "Data sources:"}
 	for k, v := range config.Sources {
 		respLines = append(respLines, k+" = "+v)
@@ -259,7 +267,7 @@ func formatGrafanaConfig(config grafanaConfig) string {
 	return strings.Join(respLines, "\n")
 }
 
-func formatTemplate(config grafanaConfig) string {
+func formatTemplate(config config) string {
 	tmpl, err := template.New("").Parse(config.Template)
 	if err != nil {
 		return err.Error()

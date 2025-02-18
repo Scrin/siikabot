@@ -1,4 +1,4 @@
-package bot
+package ping
 
 import (
 	"bufio"
@@ -10,7 +10,8 @@ import (
 	"github.com/Scrin/siikabot/matrix"
 )
 
-func ping(roomID, msg string) {
+// Handle handles the ping command
+func Handle(roomID, msg string) {
 	split := strings.Split(msg, " ")
 	if len(split) < 2 {
 		return
