@@ -7,6 +7,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Scrin/siikabot/db"
+	"github.com/Scrin/siikabot/matrix"
 )
 
 type ruuviEndpoint struct {
@@ -35,7 +38,7 @@ func getRuuviEndpoints() []ruuviEndpoint {
 func ruuvi(roomID, sender, msg string) {
 	params := strings.Split(msg, " ")
 	if len(params) == 1 {
-		client.SendFormattedMessage(roomID, formatRuuviData())
+		matrix.SendFormattedMessage(roomID, formatRuuviData())
 		return
 	}
 	switch params[1] {
@@ -46,33 +49,33 @@ func ruuvi(roomID, sender, msg string) {
 		case 5:
 			queryRuuviData(roomID, params[2], params[3], params[4])
 		default:
-			client.SendMessage(roomID, "Usage: !ruuvi query [<name> <tag_name>] <field>")
+			matrix.SendMessage(roomID, "Usage: !ruuvi query [<n> <tag_name>] <field>")
 		}
 	case "config":
-		client.SendMessage(roomID, formatRuuviEndpoints(getRuuviEndpoints()))
+		matrix.SendMessage(roomID, formatRuuviEndpoints(getRuuviEndpoints()))
 	case "add":
 		if sender != adminUser {
-			client.SendMessage(roomID, "Only admins can use this command")
+			matrix.SendMessage(roomID, "Only admins can use this command")
 			return
 		}
 		if len(params) < 4 {
-			client.SendMessage(roomID, "Usage: !ruuvi add <base_url> <tag_name> <name>")
+			matrix.SendMessage(roomID, "Usage: !ruuvi add <base_url> <tag_name> <n>")
 			return
 		}
 		endpoints := append(getRuuviEndpoints(), ruuviEndpoint{strings.Join(params[4:], " "), params[2], params[3]})
 		res, err := json.Marshal(endpoints)
 		if err != nil {
-			client.SendMessage(roomID, err.Error())
+			matrix.SendMessage(roomID, err.Error())
 		}
 		db.Set("ruuvi_endpoints", string(res))
-		client.SendMessage(roomID, formatRuuviEndpoints(endpoints))
+		matrix.SendMessage(roomID, formatRuuviEndpoints(endpoints))
 	case "remove":
 		if sender != adminUser {
-			client.SendMessage(roomID, "Only admins can use this command")
+			matrix.SendMessage(roomID, "Only admins can use this command")
 			return
 		}
 		if len(params) < 3 {
-			client.SendMessage(roomID, "Usage: !ruuvi remove <name>")
+			matrix.SendMessage(roomID, "Usage: !ruuvi remove <n>")
 			return
 		}
 		endpoints := getRuuviEndpoints()
@@ -85,14 +88,14 @@ func ruuvi(roomID, sender, msg string) {
 		}
 		res, err := json.Marshal(newEndpoints)
 		if err != nil {
-			client.SendMessage(roomID, err.Error())
+			matrix.SendMessage(roomID, err.Error())
 		}
 		db.Set("ruuvi_endpoints", string(res))
-		client.SendMessage(roomID, formatRuuviEndpoints(newEndpoints))
+		matrix.SendMessage(roomID, formatRuuviEndpoints(newEndpoints))
 	case "-":
 		go func() {
 			start := time.Now().Unix()
-			outChan, done := client.SendStreamingFormattedNotice(roomID)
+			outChan, done := matrix.SendStreamingFormattedNotice(roomID)
 			for {
 				outChan <- formatRuuviData() + "<font color=\"gray\">[last updated at " + time.Now().Format("15:04:05") + "]</font>"
 				time.Sleep(10 * time.Second)
@@ -146,7 +149,6 @@ func ruuviQueryGrafana(baseURL, tagName string, offset time.Duration, fields ...
 		return nil, errors.New("no data")
 	}
 	return &grafanaResp, nil
-
 }
 
 func queryRuuviData(roomID, name, tagName, field string) {
@@ -164,7 +166,7 @@ func queryRuuviData(roomID, name, tagName, field string) {
 				respLines = append(respLines, e.Name+" "+field+": <b>"+value+"</b>")
 			}
 		}
-		client.SendFormattedMessage(roomID, strings.Join(respLines, "<br />"))
+		matrix.SendFormattedMessage(roomID, strings.Join(respLines, "<br />"))
 	} else {
 		ok := false
 		for _, e := range endpoints {
@@ -173,18 +175,18 @@ func queryRuuviData(roomID, name, tagName, field string) {
 			}
 			grafanaResp, err := ruuviQueryGrafana(e.BaseURL, tagName, 0, field)
 			if err != nil {
-				client.SendMessage(roomID, err.Error())
+				matrix.SendMessage(roomID, err.Error())
 			} else {
 				allValues := grafanaResp.Results[0].Series[0].Values
 				latestValues := allValues[len(allValues)-1]
 				value := strconv.FormatFloat(latestValues[1].(float64), 'f', 2, 64)
-				client.SendFormattedMessage(roomID, e.Name+" "+tagName+" "+field+": <b>"+value+"</b>")
+				matrix.SendFormattedMessage(roomID, e.Name+" "+tagName+" "+field+": <b>"+value+"</b>")
 			}
 			ok = true
 			break
 		}
 		if !ok {
-			client.SendMessage(roomID, name+" not found")
+			matrix.SendMessage(roomID, name+" not found")
 		}
 	}
 }

@@ -9,6 +9,9 @@ import (
 	"strings"
 	"text/template"
 	"time"
+
+	"github.com/Scrin/siikabot/db"
+	"github.com/Scrin/siikabot/matrix"
 )
 
 type grafanaConfig struct {
@@ -79,7 +82,7 @@ func grafana(roomID, sender, msg string) {
 	}
 	switch params[1] {
 	case "help":
-		client.SendFormattedMessage(roomID, "Usage: <br>"+
+		matrix.SendFormattedMessage(roomID, "Usage: <br>"+
 			"<b>!grafana config</b> prints the config<br>"+
 			"<b>!grafana add &lt;template-name></b> adds a new template config<br>"+
 			"<b>!grafana remove &lt;template-name></b> removes a template config<br>"+
@@ -91,86 +94,86 @@ func grafana(roomID, sender, msg string) {
 			configs := getGrafanaConfigs()
 			config, ok := configs[params[2]]
 			if !ok {
-				client.SendMessage(roomID, "Template "+params[2]+" not found.")
+				matrix.SendMessage(roomID, "Template "+params[2]+" not found.")
 				return
 			}
-			client.SendMessage(roomID, formatGrafanaConfig(config))
+			matrix.SendMessage(roomID, formatGrafanaConfig(config))
 		} else {
-			client.SendMessage(roomID, formatGrafanaConfigs(getGrafanaConfigs()))
+			matrix.SendMessage(roomID, formatGrafanaConfigs(getGrafanaConfigs()))
 		}
 	case "add":
 		if !validUser(sender) {
-			client.SendMessage(roomID, "Only authorized users can use this command")
+			matrix.SendMessage(roomID, "Only authorized users can use this command")
 			return
 		}
 		if len(params) < 3 {
-			client.SendMessage(roomID, "Usage: !grafana add <template-name>")
+			matrix.SendMessage(roomID, "Usage: !grafana add <template-name>")
 			return
 		}
 		configs := getGrafanaConfigs()
 		configs[params[2]] = grafanaConfig{"", nil}
 		saveGrafanaConfigs(configs)
-		client.SendMessage(roomID, formatGrafanaConfigs(configs))
+		matrix.SendMessage(roomID, formatGrafanaConfigs(configs))
 	case "remove":
 		if !validUser(sender) {
-			client.SendMessage(roomID, "Only authorized users can use this command")
+			matrix.SendMessage(roomID, "Only authorized users can use this command")
 			return
 		}
 		if len(params) < 3 {
-			client.SendMessage(roomID, "Usage: !grafana remove <template-name>")
+			matrix.SendMessage(roomID, "Usage: !grafana remove <template-name>")
 			return
 		}
 		configs := getGrafanaConfigs()
 		delete(configs, params[2])
 		saveGrafanaConfigs(configs)
-		client.SendMessage(roomID, formatGrafanaConfigs(configs))
+		matrix.SendMessage(roomID, formatGrafanaConfigs(configs))
 	case "rename":
 		if !validUser(sender) {
-			client.SendMessage(roomID, "Only authorized users can use this command")
+			matrix.SendMessage(roomID, "Only authorized users can use this command")
 			return
 		}
 		if len(params) < 4 {
-			client.SendMessage(roomID, "Usage: !grafana rename <template-name> <new-name>")
+			matrix.SendMessage(roomID, "Usage: !grafana rename <template-name> <new-name>")
 			return
 		}
 		configs := getGrafanaConfigs()
 		config, ok := configs[params[2]]
 		if !ok {
-			client.SendMessage(roomID, "Config "+params[2]+" not found")
+			matrix.SendMessage(roomID, "Config "+params[2]+" not found")
 			return
 		}
 		delete(configs, params[2])
 		configs[params[3]] = config
 		saveGrafanaConfigs(configs)
-		client.SendMessage(roomID, formatGrafanaConfigs(configs))
+		matrix.SendMessage(roomID, formatGrafanaConfigs(configs))
 	case "set":
 		if !validUser(sender) {
-			client.SendMessage(roomID, "Only authorized users can use this command")
+			matrix.SendMessage(roomID, "Only authorized users can use this command")
 			return
 		}
 		if len(params) < 4 {
-			client.SendMessage(roomID, "Usage: !grafana set [template/datasource] <...>")
+			matrix.SendMessage(roomID, "Usage: !grafana set [template/datasource] <...>")
 			return
 		}
 		configs := getGrafanaConfigs()
 		config, ok := configs[params[3]]
 		if !ok {
-			client.SendMessage(roomID, "Template "+params[3]+" not found. Add it first with !grafana add "+params[3])
+			matrix.SendMessage(roomID, "Template "+params[3]+" not found. Add it first with !grafana add "+params[3])
 			return
 		}
 		switch params[2] {
 		case "template":
 			if len(params) < 5 {
-				client.SendMessage(roomID, "Usage: !grafana set template <template-name> <templatestring>")
+				matrix.SendMessage(roomID, "Usage: !grafana set template <template-name> <templatestring>")
 				return
 			}
 			config.Template = strings.Join(params[4:], " ")
 			configs[params[3]] = config
 			saveGrafanaConfigs(configs)
-			client.SendFormattedMessage(roomID, formatTemplate(config))
+			matrix.SendFormattedMessage(roomID, formatTemplate(config))
 		case "datasource":
 			if len(params) < 6 {
-				client.SendMessage(roomID, "Usage: !grafana set datasource <template-name> <datasource-name> <datasource-url>")
+				matrix.SendMessage(roomID, "Usage: !grafana set datasource <template-name> <datasource-name> <datasource-url>")
 				return
 			}
 			if config.Sources == nil {
@@ -183,47 +186,47 @@ func grafana(roomID, sender, msg string) {
 			}
 			configs[params[3]] = config
 			saveGrafanaConfigs(configs)
-			client.SendFormattedMessage(roomID, formatTemplate(config))
+			matrix.SendFormattedMessage(roomID, formatTemplate(config))
 		default:
-			client.SendMessage(roomID, "Usage: !grafana set [template/datasource]")
+			matrix.SendMessage(roomID, "Usage: !grafana set [template/datasource]")
 		}
 	case "authorize":
 		if sender != adminUser {
-			client.SendMessage(roomID, "Only admins can use this command")
+			matrix.SendMessage(roomID, "Only admins can use this command")
 			return
 		}
 		if len(params) < 3 {
-			client.SendMessage(roomID, "Usage: !grafana authorize <user>")
+			matrix.SendMessage(roomID, "Usage: !grafana authorize <user>")
 			return
 		}
 		users := getGrafanaUsers()
 		users = append(users, params[2])
 		saveGrafanaUsers(users)
-		client.SendMessage(roomID, strings.Join(users, " "))
+		matrix.SendMessage(roomID, strings.Join(users, " "))
 	default:
 		switch len(params) {
 		case 2:
 			configs := getGrafanaConfigs()
 			config, ok := configs[params[1]]
 			if !ok {
-				client.SendMessage(roomID, "Template "+params[1]+" not found.")
+				matrix.SendMessage(roomID, "Template "+params[1]+" not found.")
 				return
 			}
-			client.SendFormattedMessage(roomID, formatTemplate(config))
+			matrix.SendFormattedMessage(roomID, formatTemplate(config))
 		case 3:
 			configs := getGrafanaConfigs()
 			config, ok := configs[params[1]]
 			if !ok {
-				client.SendMessage(roomID, "Template "+params[1]+" not found.")
+				matrix.SendMessage(roomID, "Template "+params[1]+" not found.")
 				return
 			}
 			if params[2] != "-" {
-				client.SendMessage(roomID, "Unknown argument: "+params[2])
+				matrix.SendMessage(roomID, "Unknown argument: "+params[2])
 				return
 			}
 			go func() {
 				start := time.Now().Unix()
-				outChan, done := client.SendStreamingFormattedNotice(roomID)
+				outChan, done := matrix.SendStreamingFormattedNotice(roomID)
 				for {
 					outChan <- formatTemplate(config) + "<br><font color=\"gray\">[last updated at " + time.Now().Format("15:04:05") + "]</font>"
 					time.Sleep(10 * time.Second)
@@ -235,7 +238,7 @@ func grafana(roomID, sender, msg string) {
 				close(done)
 			}()
 		default:
-			client.SendMessage(roomID, "Usage: !grafana <template-name>")
+			matrix.SendMessage(roomID, "Usage: !grafana <template-name>")
 		}
 	}
 }

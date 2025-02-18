@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/Scrin/siikabot/matrix"
 )
 
 type Message struct {
@@ -50,13 +52,13 @@ func chat(roomID, sender, msg string) {
 
 	jsonData, err := json.Marshal(req)
 	if err != nil {
-		client.SendMessage(roomID, fmt.Sprintf("Error marshaling request: %v", err))
+		matrix.SendMessage(roomID, fmt.Sprintf("Error marshaling request: %v", err))
 		return
 	}
 
 	httpReq, err := http.NewRequest("POST", "https://openrouter.ai/api/v1/chat/completions", bytes.NewBuffer(jsonData))
 	if err != nil {
-		client.SendMessage(roomID, fmt.Sprintf("Error creating request: %v", err))
+		matrix.SendMessage(roomID, fmt.Sprintf("Error creating request: %v", err))
 		return
 	}
 
@@ -66,30 +68,30 @@ func chat(roomID, sender, msg string) {
 	httpClient := &http.Client{}
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
-		client.SendMessage(roomID, fmt.Sprintf("Error making request: %v", err))
+		matrix.SendMessage(roomID, fmt.Sprintf("Error making request: %v", err))
 		return
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		client.SendMessage(roomID, fmt.Sprintf("Error reading response: %v", err))
+		matrix.SendMessage(roomID, fmt.Sprintf("Error reading response: %v", err))
 		return
 	}
 
 	var chatResp ChatResponse
 	if err := json.Unmarshal(body, &chatResp); err != nil {
-		client.SendMessage(roomID, fmt.Sprintf("Error parsing response: %v", err))
+		matrix.SendMessage(roomID, fmt.Sprintf("Error parsing response: %v", err))
 		return
 	}
 
 	if chatResp.Error != nil {
-		client.SendMessage(roomID, fmt.Sprintf("API Error: %s (Type: %s)", chatResp.Error.Message, chatResp.Error.Type))
+		matrix.SendMessage(roomID, fmt.Sprintf("API Error: %s (Type: %s)", chatResp.Error.Message, chatResp.Error.Type))
 		return
 	}
 
 	if len(chatResp.Choices) > 0 {
 		response := fmt.Sprintf("<a href=\"https://matrix.to/#/%s\">%s</a>: %s", sender, sender, chatResp.Choices[0].Message.Content)
-		client.SendFormattedMessage(roomID, response)
+		matrix.SendFormattedMessage(roomID, response)
 	}
 }

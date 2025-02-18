@@ -11,11 +11,11 @@ import (
 	"github.com/matrix-org/gomatrix"
 )
 
-type Client struct {
-	UserID         string
+var (
+	userID         string
 	client         *gomatrix.Client
 	outboundEvents chan outboundEvent
-}
+)
 
 type outboundEvent struct {
 	RoomID         string
@@ -55,15 +55,15 @@ type httpError struct {
 	RetryAfterMs int    `json:"retry_after_ms"`
 }
 
-func (c Client) sendMessage(roomID string, message interface{}, retryOnFailure bool) <-chan string {
+func sendMessage(roomID string, message interface{}, retryOnFailure bool) <-chan string {
 	done := make(chan string, 1)
-	c.outboundEvents <- outboundEvent{roomID, "m.room.message", message, retryOnFailure, done}
+	outboundEvents <- outboundEvent{roomID, "m.room.message", message, retryOnFailure, done}
 	return done
 }
 
 // InitialSync gets the initial sync from the server for catching up with important missed event such as invites
-func (c Client) InitialSync() *gomatrix.RespSync {
-	resp, err := c.client.SyncRequest(0, "", "", false, "")
+func InitialSync() *gomatrix.RespSync {
+	resp, err := client.SyncRequest(0, "", "", false, "")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -71,23 +71,23 @@ func (c Client) InitialSync() *gomatrix.RespSync {
 }
 
 // Sync begins synchronizing the events from the server and returns only in case of a severe error
-func (c Client) Sync() error {
-	return c.client.Sync()
+func Sync() error {
+	return client.Sync()
 }
 
-func (c Client) OnEvent(eventType string, callback gomatrix.OnEventListener) {
-	c.client.Syncer.(*gomatrix.DefaultSyncer).OnEventType(eventType, callback)
+func OnEvent(eventType string, callback gomatrix.OnEventListener) {
+	client.Syncer.(*gomatrix.DefaultSyncer).OnEventType(eventType, callback)
 }
 
-func (c Client) JoinRoom(roomID string) {
-	_, err := c.client.JoinRoom(roomID, "", nil)
+func JoinRoom(roomID string) {
+	_, err := client.JoinRoom(roomID, "", nil)
 	if err != nil {
 		log.Println("Failed to join room "+roomID+": ", err)
 	}
 }
 
-func (c Client) GetDisplayName(mxid string) string {
-	foo, err := c.client.GetDisplayName(mxid)
+func GetDisplayName(mxid string) string {
+	foo, err := client.GetDisplayName(mxid)
 	if err != nil {
 		log.Println(err)
 	}
@@ -97,29 +97,29 @@ func (c Client) GetDisplayName(mxid string) string {
 // SendMessage queues a message to be sent and returns immediatedly.
 //
 // The returned channel will provide the event ID of the message after the message has been sent
-func (c Client) SendMessage(roomID string, message string) <-chan string {
-	return c.sendMessage(roomID, simpleMessage{"m.text", message, "", ""}, true)
+func SendMessage(roomID string, message string) <-chan string {
+	return sendMessage(roomID, simpleMessage{"m.text", message, "", ""}, true)
 }
 
 // SendFormattedMessage queues a html-formatted message to be sent and returns immediatedly.
 //
 // The returned channel will provide the event ID of the message after the message has been sent
-func (c Client) SendFormattedMessage(roomID string, message string) <-chan string {
-	return c.sendMessage(roomID, simpleMessage{"m.text", stripFormatting(message), "org.matrix.custom.html", message}, true)
+func SendFormattedMessage(roomID string, message string) <-chan string {
+	return sendMessage(roomID, simpleMessage{"m.text", stripFormatting(message), "org.matrix.custom.html", message}, true)
 }
 
 // SendNotice queues a notice to be sent and returns immediatedly.
 //
 // The returned channel will provide the event ID of the notice after the notice has been sent
-func (c Client) SendNotice(roomID string, notice string) <-chan string {
-	return c.sendMessage(roomID, simpleMessage{"m.notice", notice, "", ""}, true)
+func SendNotice(roomID string, notice string) <-chan string {
+	return sendMessage(roomID, simpleMessage{"m.notice", notice, "", ""}, true)
 }
 
 // SendFormattedNotice queues a html-formatted notice to be sent and returns immediatedly.
 //
 // The returned channel will provide the event ID of the notice after the notice has been sent
-func (c Client) SendFormattedNotice(roomID string, notice string) <-chan string {
-	return c.sendMessage(roomID, simpleMessage{"m.notice", stripFormatting(notice), "org.matrix.custom.html", notice}, true)
+func SendFormattedNotice(roomID string, notice string) <-chan string {
+	return sendMessage(roomID, simpleMessage{"m.notice", stripFormatting(notice), "org.matrix.custom.html", notice}, true)
 }
 
 func stripFormatting(s string) string {
@@ -155,44 +155,44 @@ func stripFormatting(s string) string {
 //
 // The initial message will be sent when messageUpdate receives the first message. The message will be
 // updated until done is closed, at which point messageUpdate will be drained and the last version be updated.
-func (c Client) SendStreamingMessage(roomID string) (messageUpdate chan<- string, done chan<- struct{}) {
-	return c.sendStreaming(roomID, false, "m.text")
+func SendStreamingMessage(roomID string) (messageUpdate chan<- string, done chan<- struct{}) {
+	return sendStreaming(roomID, false, "m.text")
 }
 
 // SendStreamingFormattedMessage creates a pair of channels that can be used to send and update (by editing) a formatted message in place.
 //
 // The initial message will be sent when messageUpdate receives the first message. The message will be
 // updated until done is closed, at which point messageUpdate will be drained and the last version be updated.
-func (c Client) SendStreamingFormattedMessage(roomID string) (messageUpdate chan<- string, done chan<- struct{}) {
-	return c.sendStreaming(roomID, true, "m.text")
+func SendStreamingFormattedMessage(roomID string) (messageUpdate chan<- string, done chan<- struct{}) {
+	return sendStreaming(roomID, true, "m.text")
 }
 
 // SendStreamingNotice creates a pair of channels that can be used to send and update (by editing) a notice in place.
 //
 // The initial notice will be sent when noticeUpdate receives the first notice. The notice will be
 // updated until done is closed, at which point noticeUpdate will be drained and the last version be updated.
-func (c Client) SendStreamingNotice(roomID string) (noticeUpdate chan<- string, done chan<- struct{}) {
-	return c.sendStreaming(roomID, false, "m.notice")
+func SendStreamingNotice(roomID string) (noticeUpdate chan<- string, done chan<- struct{}) {
+	return sendStreaming(roomID, false, "m.notice")
 }
 
 // SendStreamingFormattedNotice creates a pair of channels that can be used to send and update (by editing) a formatted notice in place.
 //
 // The initial notice will be sent when noticeUpdate receives the first notice. The notice will be
 // updated until done is closed, at which point noticeUpdate will be drained and the last version be updated.
-func (c Client) SendStreamingFormattedNotice(roomID string) (noticeUpdate chan<- string, done chan<- struct{}) {
-	return c.sendStreaming(roomID, true, "m.notice")
+func SendStreamingFormattedNotice(roomID string) (noticeUpdate chan<- string, done chan<- struct{}) {
+	return sendStreaming(roomID, true, "m.notice")
 }
 
-func (c Client) sendStreaming(roomID string, formatted bool, msgType string) (messageUpdate chan<- string, done chan<- struct{}) {
+func sendStreaming(roomID string, formatted bool, msgType string) (messageUpdate chan<- string, done chan<- struct{}) {
 	input := make(chan string, 256)
 	doneChan := make(chan struct{})
 	go func() {
 		text := <-input
 		var id string
 		if formatted {
-			id = <-c.sendMessage(roomID, simpleMessage{msgType, stripFormatting(text), "org.matrix.custom.html", text}, true)
+			id = <-sendMessage(roomID, simpleMessage{msgType, stripFormatting(text), "org.matrix.custom.html", text}, true)
 		} else {
-			id = <-c.sendMessage(roomID, simpleMessage{msgType, text, "", ""}, true)
+			id = <-sendMessage(roomID, simpleMessage{msgType, text, "", ""}, true)
 		}
 		msgEdit := messageEdit{}
 		if formatted {
@@ -242,7 +242,7 @@ func (c Client) sendStreaming(roomID string, formatted bool, msgType string) (me
 					messages = false
 				}
 			}
-			res := <-c.sendMessage(roomID, msgEdit, messageDone)
+			res := <-sendMessage(roomID, msgEdit, messageDone)
 			if res == "" { // no event id, send failed, wait for a bit before retrying
 				time.Sleep(100 * time.Millisecond)
 			}
@@ -252,11 +252,11 @@ func (c Client) sendStreaming(roomID string, formatted bool, msgType string) (me
 	return input, doneChan
 }
 
-func processOutboundEvents(client Client) {
-	for event := range client.outboundEvents {
+func processOutboundEvents() {
+	for event := range outboundEvents {
 	retry:
 		for {
-			resp, err := client.client.SendMessageEvent(event.RoomID, event.EventType, event.Content)
+			resp, err := client.SendMessageEvent(event.RoomID, event.EventType, event.Content)
 			if err == nil {
 				if event.done != nil {
 					event.done <- resp.EventID
@@ -294,17 +294,20 @@ func processOutboundEvents(client Client) {
 	}
 }
 
-// NewClient creates a new Matrix client and performs basic initialization on it
-func NewClient(homeserverURL, userID, accessToken string) Client {
-	client, err := gomatrix.NewClient(homeserverURL, userID, accessToken)
+// GetUserID returns the ID of the currently logged in user
+func GetUserID() string {
+	return userID
+}
+
+// Init initializes the Matrix client with the given parameters
+func Init(homeserverURL, uid, accessToken string) error {
+	var err error
+	client, err = gomatrix.NewClient(homeserverURL, uid, accessToken)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	c := Client{
-		userID,
-		client,
-		make(chan outboundEvent, 256),
-	}
-	go processOutboundEvents(c)
-	return c
+	userID = uid
+	outboundEvents = make(chan outboundEvent, 256)
+	go processOutboundEvents()
+	return nil
 }

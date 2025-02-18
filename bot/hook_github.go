@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Scrin/siikabot/matrix"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -58,17 +59,17 @@ func sendGithubMsg(payload GithubPayload, roomID string) {
 	} else if payload.PullRequest.HtmlUrl != "" {
 		sendGithubPullrequest(payload, roomID)
 	} else {
-		client.SendNotice(roomID, "Unknown github hook called")
+		matrix.SendNotice(roomID, "Unknown github hook called")
 	}
 }
 
 func sendGithubHookConfig(payload GithubPayload, roomID string) {
-	client.SendFormattedNotice(roomID, "[<font color=\"#0000FC\">"+payload.Repository.FullName+"</font>] "+
+	matrix.SendFormattedNotice(roomID, "[<font color=\"#0000FC\">"+payload.Repository.FullName+"</font>] "+
 		"<font color=\"#9C009C\">"+payload.Sender.Login+"</font> configured a webhook: "+payload.Repository.HtmlUrl)
 }
 
 func sendGithubPullrequest(payload GithubPayload, roomID string) {
-	client.SendFormattedNotice(roomID, "[<font color=\"#0000FC\">"+payload.Repository.FullName+"</font>] "+
+	matrix.SendFormattedNotice(roomID, "[<font color=\"#0000FC\">"+payload.Repository.FullName+"</font>] "+
 		"<font color=\"#9C009C\">"+payload.Sender.Login+"</font> <a href=\""+payload.PullRequest.HtmlUrl+"\">"+payload.Action+" a pull request:</a> "+
 		"<font color=\"#7F0000\">"+payload.PullRequest.Title+"</font>")
 }
@@ -102,11 +103,10 @@ func sendGithubPush(payload GithubPayload, roomID string) {
 			"<font color=\"#9C009C\">"+commit.Author.Name+"</font>: "+commit.Message)
 	}
 
-	client.SendFormattedNotice(roomID, strings.Join(output, "<br />"))
+	matrix.SendFormattedNotice(roomID, strings.Join(output, "<br />"))
 }
 
 func verifySignature(secret []byte, signature string, body []byte) bool {
-
 	const signaturePrefix = "sha1="
 	const signatureLength = 45 // len(SignaturePrefix) + len(hex(sha1))
 

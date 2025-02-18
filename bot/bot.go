@@ -4,7 +4,7 @@ import (
 	"log"
 	"strings"
 
-	siikadb "github.com/Scrin/siikabot/db"
+	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/matrix"
 
 	"github.com/matrix-org/gomatrix"
@@ -12,8 +12,6 @@ import (
 )
 
 var (
-	db        *siikadb.DB
-	client    matrix.Client
 	adminUser string
 )
 
@@ -23,7 +21,7 @@ func handleTextEvent(event *gomatrix.Event) {
 		msgtype = m
 	}
 	metrics.eventsHandled.With(prometheus.Labels{"event_type": "m.room.message", "msg_type": msgtype}).Inc()
-	if msgtype == "m.text" && event.Sender != client.UserID {
+	if msgtype == "m.text" && event.Sender != matrix.GetUserID() {
 		msg := event.Content["body"].(string)
 		format, _ := event.Content["format"].(string)
 		formattedBody, _ := event.Content["formatted_body"].(string)
@@ -53,27 +51,31 @@ func handleTextEvent(event *gomatrix.Event) {
 
 func handleMemberEvent(event *gomatrix.Event) {
 	metrics.eventsHandled.With(prometheus.Labels{"event_type": "m.room.member", "msg_type": ""}).Inc()
-	if event.Content["membership"] == "invite" && *event.StateKey == client.UserID {
-		client.JoinRoom(event.RoomID)
+	if event.Content["membership"] == "invite" && *event.StateKey == matrix.GetUserID() {
+		matrix.JoinRoom(event.RoomID)
 		log.Print("Joined room " + event.RoomID)
 	}
 }
 
 func Run(homeserverURL, userID, accessToken, hookSecret, dataPath, admin, openrouterApiKey string) error {
 	initMetrics()
-	db = siikadb.NewDB(dataPath + "/siikabot.db")
-	client = matrix.NewClient(homeserverURL, userID, accessToken)
+	if err := db.Init(dataPath + "/siikabot.db"); err != nil {
+		return err
+	}
+	if err := matrix.Init(homeserverURL, userID, accessToken); err != nil {
+		return err
+	}
 	adminUser = admin
 
-	client.OnEvent("m.room.member", handleMemberEvent)
-	client.OnEvent("m.room.message", handleTextEvent)
-	resp := client.InitialSync()
+	matrix.OnEvent("m.room.member", handleMemberEvent)
+	matrix.OnEvent("m.room.message", handleTextEvent)
+	resp := matrix.InitialSync()
 	for roomID := range resp.Rooms.Invite {
-		client.JoinRoom(roomID)
+		matrix.JoinRoom(roomID)
 		log.Print("Joined room " + roomID)
 	}
 	initReminder()
 	initHTTP(hookSecret)
 	openrouterAPIKey = openrouterApiKey
-	return client.Sync()
+	return matrix.Sync()
 }

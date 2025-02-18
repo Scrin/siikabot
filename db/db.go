@@ -8,16 +8,16 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-type DB struct {
+var (
 	db   *sql.DB
 	lock sync.RWMutex
-}
+)
 
-func (db *DB) Set(k, v string) {
-	db.lock.Lock()
-	defer db.lock.Unlock()
+func Set(k, v string) {
+	lock.Lock()
+	defer lock.Unlock()
 
-	stmt, err := db.db.Prepare("replace into kv(k, v) values(?, ?)")
+	stmt, err := db.Prepare("replace into kv(k, v) values(?, ?)")
 	if err != nil {
 		log.Print(err)
 		return
@@ -29,11 +29,11 @@ func (db *DB) Set(k, v string) {
 	}
 }
 
-func (db *DB) Get(k string) string {
-	db.lock.RLock()
-	defer db.lock.RUnlock()
+func Get(k string) string {
+	lock.RLock()
+	defer lock.RUnlock()
 
-	stmt, err := db.db.Prepare("select v from kv where k = ?")
+	stmt, err := db.Prepare("select v from kv where k = ?")
 	if err != nil {
 		log.Print(err)
 		return ""
@@ -47,17 +47,16 @@ func (db *DB) Get(k string) string {
 	return resp
 }
 
-func NewDB(dbFile string) *DB {
-	db := DB{}
-	db.lock.Lock()
-	defer db.lock.Unlock()
+func Init(dbFile string) error {
 	var err error
+	lock.Lock()
+	defer lock.Unlock()
 
-	if db.db, err = sql.Open("sqlite3", dbFile); err != nil {
-		log.Fatal(err)
+	if db, err = sql.Open("sqlite3", dbFile); err != nil {
+		return err
 	}
-	if _, err := db.db.Exec("create table if not exists kv (k text not null primary key, v text);"); err != nil {
-		log.Fatal(err)
+	if _, err := db.Exec("create table if not exists kv (k text not null primary key, v text);"); err != nil {
+		return err
 	}
-	return &db
+	return nil
 }

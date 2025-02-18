@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/Scrin/siikabot/matrix"
 )
 
 func ping(roomID, msg string) {
@@ -48,13 +50,13 @@ func ping(roomID, msg string) {
 
 	cmdReader, err := cmd.StdoutPipe()
 	if err != nil {
-		client.SendMessage(roomID, err.Error())
+		matrix.SendMessage(roomID, err.Error())
 		return
 	}
 
 	scanner := bufio.NewScanner(cmdReader)
 	go func() {
-		outChan, done := client.SendStreamingMessage(roomID)
+		outChan, done := matrix.SendStreamingMessage(roomID)
 		var output []string
 		for scanner.Scan() {
 			output = append(output, scanner.Text())
@@ -62,13 +64,13 @@ func ping(roomID, msg string) {
 		}
 		close(done)
 		if err = cmd.Wait(); err != nil {
-			client.SendMessage(roomID, err.Error())
+			matrix.SendMessage(roomID, err.Error())
 		}
 	}()
 
 	err = cmd.Start()
 	if err != nil {
-		client.SendMessage(roomID, err.Error())
+		matrix.SendMessage(roomID, err.Error())
 		return
 	}
 }

@@ -7,6 +7,9 @@ import (
 	"reflect"
 	"strings"
 	"time"
+
+	"github.com/Scrin/siikabot/db"
+	"github.com/Scrin/siikabot/matrix"
 )
 
 type reminder struct {
@@ -57,7 +60,7 @@ func saveReminders(reminders []reminder) {
 
 func startReminder(rem reminder) {
 	f := func() {
-		client.SendFormattedMessage(rem.RoomID, "<a href=\"https://matrix.to/#/"+rem.User+"\">"+client.GetDisplayName(rem.User)+"</a> "+rem.Message)
+		matrix.SendFormattedMessage(rem.RoomID, "<a href=\"https://matrix.to/#/"+rem.User+"\">"+matrix.GetDisplayName(rem.User)+"</a> "+rem.Message)
 		reminders := getReminders()
 		var newReminders []reminder
 		for _, r := range reminders {
@@ -78,7 +81,7 @@ func startReminder(rem reminder) {
 func remind(roomID, sender, msg, msgType, formattedBody string) {
 	params := strings.SplitN(msg, " ", 3)
 	if len(params) < 3 {
-		client.SendMessage(roomID, "Usage: !remind <time, date, datetime or duration> <message>")
+		matrix.SendMessage(roomID, "Usage: !remind <time, date, datetime or duration> <message>")
 		return
 	}
 
@@ -89,7 +92,7 @@ func remind(roomID, sender, msg, msgType, formattedBody string) {
 		reminderTime, timeErr = remindTime(t, params[1])
 	}
 	if timeErr != nil {
-		client.SendFormattedMessage(roomID, "Invalid date/time or duration: "+params[1]+"<br>duration error: "+durationErr.Error()+"<br> date/time error: "+timeErr.Error())
+		matrix.SendFormattedMessage(roomID, "Invalid date/time or duration: "+params[1]+"<br>duration error: "+durationErr.Error()+"<br> date/time error: "+timeErr.Error())
 		return
 	}
 
@@ -105,11 +108,10 @@ func remind(roomID, sender, msg, msgType, formattedBody string) {
 	saveReminders(append(getReminders(), rem))
 	duration := reminderTime.Sub(t).Truncate(time.Second)
 	loc, _ := time.LoadLocation(timezone)
-	client.SendFormattedMessage(roomID, "Reminding at "+reminderTime.In(loc).Format("15:04:05 on 2.1.2006")+" (in "+duration.String()+"): "+reminderText)
+	matrix.SendFormattedMessage(roomID, "Reminding at "+reminderTime.In(loc).Format("15:04:05 on 2.1.2006")+" (in "+duration.String()+"): "+reminderText)
 }
 
 func remindDuration(now time.Time, param string) (time.Time, error) {
-
 	duration, durationErr := time.ParseDuration(param)
 	if durationErr != nil {
 		return time.Unix(0, 0), durationErr
