@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -141,7 +141,7 @@ func githubHandler(hookSecret string) func(w http.ResponseWriter, req *http.Requ
 			return
 		}
 
-		body, err := ioutil.ReadAll(req.Body)
+		body, err := io.ReadAll(req.Body)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to read GitHub webhook request body")
 			return
