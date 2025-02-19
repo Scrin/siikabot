@@ -13,10 +13,9 @@ import (
 	"github.com/Scrin/siikabot/commands/traceroute"
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/matrix"
+	"github.com/Scrin/siikabot/metrics"
 	"github.com/rs/zerolog/log"
 	"maunium.net/go/mautrix/event"
-
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
@@ -36,7 +35,7 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 	if m, ok := evt.Content.Raw["msgtype"].(string); ok {
 		msgtype = m
 	}
-	metrics.eventsHandled.With(prometheus.Labels{"event_type": "m.room.message", "msg_type": msgtype}).Inc()
+	metrics.RecordEventHandled("m.room.message", msgtype)
 
 	if msgtype == "m.text" && evt.Sender.String() != matrix.GetUserID() {
 		msg := evt.Content.Raw["body"].(string)
@@ -67,13 +66,13 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 				Str("room_id", evt.RoomID.String()).
 				Str("sender", evt.Sender.String()).
 				Msg("Handled command")
-			metrics.commandsHandled.With(prometheus.Labels{"command": msgCommand}).Inc()
+			metrics.RecordCommandHandled(msgCommand)
 		}
 	}
 }
 
 func handleMemberEvent(ctx context.Context, evt *event.Event) {
-	metrics.eventsHandled.With(prometheus.Labels{"event_type": "m.room.member", "msg_type": ""}).Inc()
+	metrics.RecordEventHandled("m.room.member", "")
 
 	if evt.Content.Raw["membership"] == "invite" && evt.GetStateKey() == matrix.GetUserID() {
 		matrix.JoinRoom(evt.RoomID.String())
@@ -85,7 +84,6 @@ func handleMemberEvent(ctx context.Context, evt *event.Event) {
 }
 
 func Run(homeserverURL, userID, accessToken, hookSecret, dataPath, admin, openrouterApiKey string) error {
-	initMetrics()
 	if err := db.Init(dataPath + "/siikabot.db"); err != nil {
 		return err
 	}

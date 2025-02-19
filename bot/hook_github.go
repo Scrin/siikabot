@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/Scrin/siikabot/matrix"
-	"github.com/prometheus/client_golang/prometheus"
+	"github.com/Scrin/siikabot/metrics"
 	"github.com/rs/zerolog/log"
 )
 
@@ -133,9 +133,8 @@ func verifySignature(secret []byte, signature string, body []byte) bool {
 }
 
 func githubHandler(hookSecret string) func(w http.ResponseWriter, req *http.Request) {
-	labels := prometheus.Labels{"hook": "github"}
 	return func(w http.ResponseWriter, req *http.Request) {
-		metrics.webhooksHandled.With(labels).Inc()
+		metrics.RecordWebhookHandled("github")
 		signature := req.Header.Get("x-hub-signature")
 		if signature == "" {
 			log.Warn().Msg("GitHub webhook received without signature")
