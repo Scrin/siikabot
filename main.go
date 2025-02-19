@@ -1,14 +1,17 @@
 package main
 
 import (
-	"log"
 	"os"
 	"strings"
 
 	"github.com/Scrin/siikabot/bot"
+	"github.com/Scrin/siikabot/logging"
+	"github.com/rs/zerolog/log"
 )
 
 func main() {
+	logging.Setup()
+
 	homeserverURL := ""
 	userID := ""
 	accessToken := ""
@@ -48,8 +51,31 @@ func main() {
 	}
 
 	if homeserverURL == "" || userID == "" || accessToken == "" || hookSecret == "" || dataPath == "" || admin == "" || openrouterAPIKey == "" {
-		log.Fatal("invalid config")
+		var missingConfig []string
+		if homeserverURL == "" {
+			missingConfig = append(missingConfig, "SIIKABOT_HOMESERVER_URL")
+		}
+		if userID == "" {
+			missingConfig = append(missingConfig, "SIIKABOT_USER_ID")
+		}
+		if accessToken == "" {
+			missingConfig = append(missingConfig, "SIIKABOT_ACCESS_TOKEN")
+		}
+		if hookSecret == "" {
+			missingConfig = append(missingConfig, "SIIKABOT_HOOK_SECRET")
+		}
+		if dataPath == "" {
+			missingConfig = append(missingConfig, "SIIKABOT_DATA_PATH")
+		}
+		if admin == "" {
+			missingConfig = append(missingConfig, "SIIKABOT_ADMIN")
+		}
+		if openrouterAPIKey == "" {
+			missingConfig = append(missingConfig, "SIIKABOT_OPENROUTER_API_KEY")
+		}
+		log.Fatal().Strs("missing_keys", missingConfig).Msg("Missing required configuration")
 	}
 
-	log.Fatal(bot.Run(homeserverURL, userID, accessToken, hookSecret, dataPath, admin, openrouterAPIKey))
+	err := bot.Run(homeserverURL, userID, accessToken, hookSecret, dataPath, admin, openrouterAPIKey)
+	log.Fatal().Err(err).Msg("Bot exited")
 }

@@ -7,13 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/Scrin/siikabot/matrix"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/rs/zerolog/log"
 )
 
 type GithubPayload struct {
@@ -52,6 +52,12 @@ type GithubPayload struct {
 }
 
 func sendGithubMsg(payload GithubPayload, roomID string) {
+	log.Debug().
+		Str("room_id", roomID).
+		Str("repository", payload.Repository.FullName).
+		Str("hook_type", payload.Hook.Type).
+		Msg("Processing GitHub webhook")
+
 	if payload.Hook.Type == "Repository" {
 		sendGithubHookConfig(payload, roomID)
 	} else if payload.Pusher.Name != "" {
@@ -59,6 +65,10 @@ func sendGithubMsg(payload GithubPayload, roomID string) {
 	} else if payload.PullRequest.HtmlUrl != "" {
 		sendGithubPullrequest(payload, roomID)
 	} else {
+		log.Warn().
+			Str("room_id", roomID).
+			Str("repository", payload.Repository.FullName).
+			Msg("Unknown GitHub webhook type received")
 		matrix.SendNotice(roomID, "Unknown github hook called")
 	}
 }
@@ -128,31 +138,48 @@ func githubHandler(hookSecret string) func(w http.ResponseWriter, req *http.Requ
 		metrics.webhooksHandled.With(labels).Inc()
 		signature := req.Header.Get("x-hub-signature")
 		if signature == "" {
+			log.Warn().Msg("GitHub webhook received without signature")
 			return
 		}
 
 		body, err := ioutil.ReadAll(req.Body)
 		if err != nil {
-			log.Print(err)
+			log.Error().Err(err).Msg("Failed to read GitHub webhook request body")
 			return
 		}
 		req.Body.Close()
 
 		if !verifySignature([]byte(hookSecret), signature, body) {
-			log.Print("Invalid signature")
+			log.Warn().
+				Str("signature", signature).
+				Msg("Invalid GitHub webhook signature")
 			return
 		}
 
 		roomID := req.URL.Query().Get("room_id")
 		if roomID == "" {
+			log.Warn().Msg("GitHub webhook received without room_id")
 			return
 		}
+
 		msg := GithubPayload{}
 		err = json.Unmarshal(body, &msg)
 		if err != nil {
+			log.Error().
+				Err(err).
+				Str("room_id", roomID).
+				Str("body", string(body)).
+				Msg("Failed to parse GitHub webhook payload")
 			fmt.Fprintf(w, "%v", err)
 			return
 		}
+
+		log.Debug().
+			Str("room_id", roomID).
+			Str("repository", msg.Repository.FullName).
+			Str("sender", msg.Sender.Login).
+			Msg("Processing GitHub webhook request")
+
 		sendGithubMsg(msg, roomID)
 	}
 }

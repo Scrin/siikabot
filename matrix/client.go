@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"html"
-	"log"
 	"strings"
 	"time"
 
 	strip "github.com/grokify/html-strip-tags-go"
+	"github.com/rs/zerolog/log"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
@@ -68,7 +68,7 @@ func sendMessage(roomID string, message interface{}, retryOnFailure bool) <-chan
 func InitialSync() *mautrix.RespSync {
 	resp, err := client.SyncRequest(context.TODO(), 0, "", "", false, "online")
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal().Err(err).Msg("Failed to perform initial sync")
 	}
 	return resp
 }
@@ -85,14 +85,14 @@ func OnEvent(eventType string, handler mautrix.EventHandler) {
 func JoinRoom(roomID string) {
 	_, err := client.JoinRoom(context.TODO(), roomID, &mautrix.ReqJoinRoom{})
 	if err != nil {
-		log.Println("Failed to join room "+roomID+": ", err)
+		log.Error().Err(err).Str("room_id", roomID).Msg("Failed to join room")
 	}
 }
 
 func GetDisplayName(mxid string) string {
 	foo, err := client.GetDisplayName(context.TODO(), id.UserID(mxid))
 	if err != nil {
-		log.Println(err)
+		log.Error().Err(err).Str("user_id", mxid).Msg("Failed to get display name")
 	}
 	return foo.DisplayName
 }
@@ -269,23 +269,31 @@ func processOutboundEvents() {
 			var httpErr httpError
 			httpError, isHttpError := err.(mautrix.HTTPError)
 			if !isHttpError {
-				log.Print("Failed to parse error response of unexpected type!", err)
+				log.Error().Err(err).Msg("Failed to parse error response of unexpected type")
 				evt.done <- ""
 				break
 			}
 			if jsonErr := json.Unmarshal([]byte(httpError.ResponseBody), &httpErr); jsonErr != nil {
-				log.Print("Failed to parse error response!", jsonErr)
+				log.Error().Err(jsonErr).Msg("Failed to parse error response")
 			}
 
 			switch e := httpErr.Errcode; e {
 			case "M_LIMIT_EXCEEDED":
 				time.Sleep(time.Duration(httpErr.RetryAfterMs) * time.Millisecond)
 			case "M_FORBIDDEN":
-				log.Print("Failed to send message to room "+evt.RoomID+" err: ", err)
+				log.Error().
+					Err(err).
+					Str("room_id", evt.RoomID).
+					Str("error_code", e).
+					Msg("Failed to send message due to permissions")
 				evt.done <- ""
 				break retry
 			default:
-				log.Print("Failed to send message to room "+evt.RoomID+" err: ", err)
+				log.Error().
+					Err(err).
+					Str("room_id", evt.RoomID).
+					Str("error_code", e).
+					Msg("Failed to send message")
 			}
 			if !evt.RetryOnFailure {
 				evt.done <- ""

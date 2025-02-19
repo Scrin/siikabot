@@ -2,7 +2,7 @@ package bot
 
 import (
 	"context"
-	"log"
+	"encoding/json"
 	"strings"
 
 	"github.com/Scrin/siikabot/commands/chat"
@@ -13,6 +13,7 @@ import (
 	"github.com/Scrin/siikabot/commands/traceroute"
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/matrix"
+	"github.com/rs/zerolog/log"
 	"maunium.net/go/mautrix/event"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -23,22 +24,27 @@ var (
 )
 
 func handleTextEvent(ctx context.Context, evt *event.Event) {
-	log.Print(evt.Content.Raw)
+	content, _ := json.Marshal(evt.Content.Raw)
+	log.Debug().RawJSON("content", content).Msg("Received text event")
+
 	if evt.Sender.String() == matrix.GetUserID() {
-		log.Print("Skipping event from self")
+		log.Debug().Str("sender", evt.Sender.String()).Msg("Skipping event from self")
 		return
 	}
+
 	msgtype := ""
 	if m, ok := evt.Content.Raw["msgtype"].(string); ok {
 		msgtype = m
 	}
 	metrics.eventsHandled.With(prometheus.Labels{"event_type": "m.room.message", "msg_type": msgtype}).Inc()
+
 	if msgtype == "m.text" && evt.Sender.String() != matrix.GetUserID() {
 		msg := evt.Content.Raw["body"].(string)
 		format, _ := evt.Content.Raw["format"].(string)
 		formattedBody, _ := evt.Content.Raw["formatted_body"].(string)
 		msgCommand := strings.Split(msg, " ")[0]
 		isCommand := true
+
 		switch msgCommand {
 		case "!ping":
 			ping.Handle(evt.RoomID.String(), msg)
@@ -56,6 +62,11 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 			isCommand = false
 		}
 		if isCommand {
+			log.Debug().
+				Str("command", msgCommand).
+				Str("room_id", evt.RoomID.String()).
+				Str("sender", evt.Sender.String()).
+				Msg("Handled command")
 			metrics.commandsHandled.With(prometheus.Labels{"command": msgCommand}).Inc()
 		}
 	}
@@ -63,9 +74,13 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 
 func handleMemberEvent(ctx context.Context, evt *event.Event) {
 	metrics.eventsHandled.With(prometheus.Labels{"event_type": "m.room.member", "msg_type": ""}).Inc()
+
 	if evt.Content.Raw["membership"] == "invite" && evt.GetStateKey() == matrix.GetUserID() {
 		matrix.JoinRoom(evt.RoomID.String())
-		log.Print("Joined room " + evt.RoomID.String())
+		log.Info().
+			Str("room_id", evt.RoomID.String()).
+			Str("inviter", evt.Sender.String()).
+			Msg("Joined room from invite")
 	}
 }
 
@@ -82,8 +97,11 @@ func Run(homeserverURL, userID, accessToken, hookSecret, dataPath, admin, openro
 	resp := matrix.InitialSync()
 	for roomID := range resp.Rooms.Invite {
 		matrix.JoinRoom(roomID.String())
-		log.Print("Joined room " + roomID.String())
+		log.Info().
+			Str("room_id", roomID.String()).
+			Msg("Joined room during initial sync")
 	}
+
 	remind.Init()
 	chat.Init(openrouterApiKey)
 	ruuvi.Init(admin)

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Scrin/siikabot/matrix"
+	"github.com/rs/zerolog/log"
 )
 
 // Handle handles the traceroute command
@@ -15,14 +16,24 @@ func Handle(roomID, msg string) {
 	if len(split) < 2 {
 		return
 	}
+
+	target := split[1]
 	command := "traceroute"
 	if runtime.GOOS == "windows" {
 		command = "tracert"
 	}
-	cmd := exec.Command(command, split[1])
+
+	log.Debug().
+		Str("room_id", roomID).
+		Str("target", target).
+		Str("command", command).
+		Msg("Executing traceroute command")
+
+	cmd := exec.Command(command, target)
 
 	cmdReader, err := cmd.StdoutPipe()
 	if err != nil {
+		log.Error().Err(err).Str("room_id", roomID).Str("target", target).Msg("Failed to create stdout pipe")
 		matrix.SendMessage(roomID, err.Error())
 		return
 	}
@@ -37,12 +48,16 @@ func Handle(roomID, msg string) {
 		}
 		close(done)
 		if err = cmd.Wait(); err != nil {
+			log.Error().Err(err).Str("room_id", roomID).Str("target", target).Msg("Traceroute command failed")
 			matrix.SendMessage(roomID, err.Error())
+		} else {
+			log.Debug().Str("room_id", roomID).Str("target", target).Msg("Traceroute command completed")
 		}
 	}()
 
 	err = cmd.Start()
 	if err != nil {
+		log.Error().Err(err).Str("room_id", roomID).Str("target", target).Msg("Failed to start traceroute command")
 		matrix.SendMessage(roomID, err.Error())
 		return
 	}

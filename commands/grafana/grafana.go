@@ -3,7 +3,6 @@ package grafana
 import (
 	"bytes"
 	"encoding/json"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/matrix"
+	"github.com/rs/zerolog/log"
 )
 
 type config struct {
@@ -49,7 +49,7 @@ func getConfigs() map[string]config {
 func saveConfigs(configs map[string]config) {
 	res, err := json.Marshal(configs)
 	if err != nil {
-		log.Print(err)
+		log.Error().Err(err).Msg("Failed to marshal Grafana configs")
 		return
 	}
 	db.Set("grafana_configs", string(res))

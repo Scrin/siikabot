@@ -3,13 +3,13 @@ package remind
 import (
 	"encoding/json"
 	"errors"
-	"log"
 	"reflect"
 	"strings"
 	"time"
 
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/matrix"
+	"github.com/rs/zerolog/log"
 )
 
 type reminder struct {
@@ -53,13 +53,19 @@ func getReminders() []reminder {
 func saveReminders(reminders []reminder) {
 	res, err := json.Marshal(reminders)
 	if err != nil {
-		log.Print(err)
+		log.Error().Err(err).Msg("Failed to marshal reminders")
 		return
 	}
 	db.Set("reminders", string(res))
 }
 
 func startReminder(rem reminder) {
+	log.Debug().
+		Str("user", rem.User).
+		Str("room_id", rem.RoomID).
+		Time("remind_time", time.Unix(rem.RemindTime, 0)).
+		Msg("Starting reminder")
+
 	f := func() {
 		matrix.SendFormattedMessage(rem.RoomID, "<a href=\"https://matrix.to/#/"+rem.User+"\">"+matrix.GetDisplayName(rem.User)+"</a> "+rem.Message)
 		reminders := getReminders()
@@ -70,6 +76,10 @@ func startReminder(rem reminder) {
 			}
 		}
 		saveReminders(newReminders)
+		log.Debug().
+			Str("user", rem.User).
+			Str("room_id", rem.RoomID).
+			Msg("Reminder triggered")
 	}
 	duration := rem.RemindTime - time.Now().Unix()
 	if duration <= 0 {
@@ -110,6 +120,14 @@ func Handle(roomID, sender, msg, msgType, formattedBody string) {
 	saveReminders(append(getReminders(), rem))
 	duration := reminderTime.Sub(t).Truncate(time.Second)
 	loc, _ := time.LoadLocation(timezone)
+
+	log.Info().
+		Str("room_id", roomID).
+		Str("sender", sender).
+		Time("remind_time", reminderTime).
+		Str("duration", duration.String()).
+		Msg("Reminder set")
+
 	matrix.SendFormattedMessage(roomID, "Reminding at "+reminderTime.In(loc).Format("15:04:05 on 2.1.2006")+" (in "+duration.String()+"): "+reminderText)
 }
 

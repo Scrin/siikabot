@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Scrin/siikabot/matrix"
+	"github.com/rs/zerolog/log"
 )
 
 type message struct {
@@ -46,58 +47,80 @@ func Handle(roomID, sender, msg string) {
 		return
 	}
 
+	log.Debug().
+		Str("room_id", roomID).
+		Str("sender", sender).
+		Msg("Processing chat command")
+
 	req := chatRequest{
 		Model: "google/gemini-2.0-flash-lite-preview-02-05:free",
 		Messages: []message{
-			{
-				Role:    "user",
-				Content: msg,
-			},
+			{Role: "user", Content: msg},
 		},
 	}
 
 	jsonData, err := json.Marshal(req)
 	if err != nil {
-		matrix.SendMessage(roomID, fmt.Sprintf("Error marshaling request: %v", err))
+		log.Error().Err(err).Msg("Failed to marshal chat request")
+		matrix.SendMessage(roomID, "Failed to process chat request")
 		return
 	}
 
 	httpReq, err := http.NewRequest("POST", "https://openrouter.ai/api/v1/chat/completions", bytes.NewBuffer(jsonData))
 	if err != nil {
-		matrix.SendMessage(roomID, fmt.Sprintf("Error creating request: %v", err))
+		log.Error().Err(err).Msg("Failed to create HTTP request")
+		matrix.SendMessage(roomID, "Failed to create chat request")
 		return
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	httpReq.Header.Set("HTTP-Referer", "https://github.com/Scrin/siikabot")
+	httpReq.Header.Set("X-Title", "Siikabot")
 
-	httpClient := &http.Client{}
-	resp, err := httpClient.Do(httpReq)
+	client := &http.Client{}
+	resp, err := client.Do(httpReq)
 	if err != nil {
-		matrix.SendMessage(roomID, fmt.Sprintf("Error making request: %v", err))
+		log.Error().Err(err).Msg("Failed to send chat request")
+		matrix.SendMessage(roomID, "Failed to send chat request")
 		return
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		matrix.SendMessage(roomID, fmt.Sprintf("Error reading response: %v", err))
+		log.Error().Err(err).Msg("Failed to read chat response")
+		matrix.SendMessage(roomID, "Failed to read chat response")
 		return
 	}
 
 	var chatResp chatResponse
 	if err := json.Unmarshal(body, &chatResp); err != nil {
-		matrix.SendMessage(roomID, fmt.Sprintf("Error parsing response: %v", err))
+		log.Error().Err(err).RawJSON("response", body).Msg("Failed to parse chat response")
+		matrix.SendMessage(roomID, "Failed to parse chat response")
 		return
 	}
 
 	if chatResp.Error != nil {
-		matrix.SendMessage(roomID, fmt.Sprintf("API Error: %s (Type: %s)", chatResp.Error.Message, chatResp.Error.Type))
+		log.Error().
+			Str("error_type", chatResp.Error.Type).
+			Str("error_message", chatResp.Error.Message).
+			Msg("Chat API returned error")
+		matrix.SendMessage(roomID, fmt.Sprintf("Chat API error: %s", chatResp.Error.Message))
 		return
 	}
 
-	if len(chatResp.Choices) > 0 {
-		response := fmt.Sprintf("<a href=\"https://matrix.to/#/%s\">%s</a>: %s", sender, sender, chatResp.Choices[0].Message.Content)
-		matrix.SendFormattedMessage(roomID, response)
+	if len(chatResp.Choices) == 0 {
+		log.Error().Msg("Chat API returned no choices")
+		matrix.SendMessage(roomID, "No response from chat API")
+		return
 	}
+
+	log.Debug().
+		Str("room_id", roomID).
+		Str("sender", sender).
+		Int("response_length", len(chatResp.Choices[0].Message.Content)).
+		Msg("Chat command completed")
+
+	matrix.SendMessage(roomID, chatResp.Choices[0].Message.Content)
 }
