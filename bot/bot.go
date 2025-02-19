@@ -2,7 +2,6 @@ package bot
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 
 	"github.com/Scrin/siikabot/commands/chat"
@@ -23,11 +22,7 @@ var (
 )
 
 func handleTextEvent(ctx context.Context, evt *event.Event) {
-	content, _ := json.Marshal(evt.Content.Raw)
-	log.Debug().RawJSON("content", content).Msg("Received text event")
-
 	if evt.Sender.String() == matrix.GetUserID() {
-		log.Debug().Str("sender", evt.Sender.String()).Msg("Skipping event from self")
 		return
 	}
 
@@ -83,8 +78,8 @@ func handleMemberEvent(ctx context.Context, evt *event.Event) {
 	}
 }
 
-func Run(homeserverURL, userID, accessToken, hookSecret, dataPath, admin, openrouterApiKey string) error {
-	if err := db.Init(dataPath + "/siikabot.db"); err != nil {
+func Run(homeserverURL, userID, accessToken, hookSecret, dataPath, admin, openrouterApiKey, postgresConnectionString string) error {
+	if err := db.Init(dataPath+"/siikabot.db", postgresConnectionString); err != nil {
 		return err
 	}
 	if err := matrix.Init(homeserverURL, userID, accessToken); err != nil {

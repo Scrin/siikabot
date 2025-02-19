@@ -1,9 +1,8 @@
 package remind
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
-	"reflect"
 	"strings"
 	"time"
 
@@ -11,13 +10,6 @@ import (
 	"github.com/Scrin/siikabot/matrix"
 	"github.com/rs/zerolog/log"
 )
-
-type reminder struct {
-	RemindTime int64  `json:"remind_time"`
-	User       string `json:"user"`
-	RoomID     string `json:"room_id"`
-	Message    string `json:"msg"`
-}
 
 const timezone = "Europe/Helsinki"
 
@@ -36,56 +28,40 @@ var dateFormats = []string{"2.1.2006", "2006-1-2"}
 
 // Init initializes the reminder system
 func Init() {
-	for _, r := range getReminders() {
+	ctx := context.Background()
+	reminders, err := db.GetReminders(ctx)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to get reminders during init")
+		return
+	}
+	for _, r := range reminders {
 		startReminder(r)
 	}
 }
 
-func getReminders() []reminder {
-	remindersJson := db.Get("reminders")
-	var reminders []reminder
-	if remindersJson != "" {
-		json.Unmarshal([]byte(remindersJson), &reminders)
-	}
-	return reminders
-}
-
-func saveReminders(reminders []reminder) {
-	res, err := json.Marshal(reminders)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to marshal reminders")
-		return
-	}
-	db.Set("reminders", string(res))
-}
-
-func startReminder(rem reminder) {
+func startReminder(rem db.Reminder) {
 	log.Debug().
-		Str("user", rem.User).
+		Str("user_id", rem.UserID).
 		Str("room_id", rem.RoomID).
-		Time("remind_time", time.Unix(rem.RemindTime, 0)).
+		Time("remind_time", rem.RemindTime).
 		Msg("Starting reminder")
 
 	f := func() {
-		matrix.SendFormattedMessage(rem.RoomID, "<a href=\"https://matrix.to/#/"+rem.User+"\">"+matrix.GetDisplayName(rem.User)+"</a> "+rem.Message)
-		reminders := getReminders()
-		var newReminders []reminder
-		for _, r := range reminders {
-			if !reflect.DeepEqual(rem, r) {
-				newReminders = append(newReminders, r)
-			}
+		matrix.SendFormattedMessage(rem.RoomID, "<a href=\"https://matrix.to/#/"+rem.UserID+"\">"+matrix.GetDisplayName(rem.UserID)+"</a> "+rem.Message)
+		ctx := context.Background()
+		if err := db.RemoveReminder(ctx, rem.ID); err != nil {
+			log.Error().Err(err).Int64("id", rem.ID).Msg("Failed to remove triggered reminder")
 		}
-		saveReminders(newReminders)
 		log.Debug().
-			Str("user", rem.User).
+			Str("user_id", rem.UserID).
 			Str("room_id", rem.RoomID).
 			Msg("Reminder triggered")
 	}
-	duration := rem.RemindTime - time.Now().Unix()
+	duration := time.Until(rem.RemindTime)
 	if duration <= 0 {
 		f()
 	} else {
-		time.AfterFunc(time.Duration(duration)*time.Second, f)
+		time.AfterFunc(duration, f)
 	}
 }
 
@@ -115,9 +91,23 @@ func Handle(roomID, sender, msg, msgType, formattedBody string) {
 	} else {
 		reminderText = strings.Replace(params[2], "\n", "<br>", -1)
 	}
-	rem := reminder{reminderTime.Unix(), sender, roomID, reminderText}
+
+	rem := db.Reminder{
+		RemindTime: reminderTime,
+		UserID:     sender,
+		RoomID:     roomID,
+		Message:    reminderText,
+	}
+
+	ctx := context.Background()
+	id, err := db.AddReminder(ctx, rem)
+	if err != nil {
+		matrix.SendMessage(roomID, "Failed to save reminder: "+err.Error())
+		return
+	}
+	rem.ID = id
+
 	startReminder(rem)
-	saveReminders(append(getReminders(), rem))
 	duration := reminderTime.Sub(t).Truncate(time.Second)
 	loc, _ := time.LoadLocation(timezone)
 

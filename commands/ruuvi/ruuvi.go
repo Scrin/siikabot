@@ -1,6 +1,7 @@
 package ruuvi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -33,7 +34,7 @@ func Init(admin string) {
 	adminUser = admin
 }
 
-func formatEndpoints(endpoints []endpoint) string {
+func formatEndpoints(endpoints []db.RuuviEndpoint) string {
 	respLines := []string{"Current ruuvi endpoints: "}
 	for _, endpoint := range endpoints {
 		respLines = append(respLines, endpoint.Name+": "+endpoint.BaseURL+" tag name: "+endpoint.TagName)
@@ -41,17 +42,9 @@ func formatEndpoints(endpoints []endpoint) string {
 	return strings.Join(respLines, "\n")
 }
 
-func getEndpoints() []endpoint {
-	endpointsJson := db.Get("ruuvi_endpoints")
-	var endpoints []endpoint
-	if endpointsJson != "" {
-		json.Unmarshal([]byte(endpointsJson), &endpoints)
-	}
-	return endpoints
-}
-
 // Handle handles the ruuvi command
 func Handle(roomID, sender, msg string) {
+	ctx := context.Background()
 	params := strings.Split(msg, " ")
 	if len(params) == 1 {
 		matrix.SendFormattedMessage(roomID, formatRuuviData())
@@ -68,22 +61,35 @@ func Handle(roomID, sender, msg string) {
 			matrix.SendMessage(roomID, "Usage: !ruuvi query [<n> <tag_name>] <field>")
 		}
 	case "config":
-		matrix.SendMessage(roomID, formatEndpoints(getEndpoints()))
+		endpoints, err := db.GetRuuviEndpoints(ctx)
+		if err != nil {
+			matrix.SendMessage(roomID, "Error getting endpoints: "+err.Error())
+			return
+		}
+		matrix.SendMessage(roomID, formatEndpoints(endpoints))
 	case "add":
 		if sender != adminUser {
 			matrix.SendMessage(roomID, "Only admins can use this command")
 			return
 		}
 		if len(params) < 4 {
-			matrix.SendMessage(roomID, "Usage: !ruuvi add <base_url> <tag_name> <n>")
+			matrix.SendMessage(roomID, "Usage: !ruuvi add <base_url> <tag_name> <name>")
 			return
 		}
-		endpoints := append(getEndpoints(), endpoint{strings.Join(params[4:], " "), params[2], params[3]})
-		res, err := json.Marshal(endpoints)
-		if err != nil {
-			matrix.SendMessage(roomID, err.Error())
+		endpoint := db.RuuviEndpoint{
+			Name:    strings.Join(params[4:], " "),
+			BaseURL: params[2],
+			TagName: params[3],
 		}
-		db.Set("ruuvi_endpoints", string(res))
+		if err := db.AddRuuviEndpoint(ctx, endpoint); err != nil {
+			matrix.SendMessage(roomID, "Error adding endpoint: "+err.Error())
+			return
+		}
+		endpoints, err := db.GetRuuviEndpoints(ctx)
+		if err != nil {
+			matrix.SendMessage(roomID, "Error getting endpoints: "+err.Error())
+			return
+		}
 		matrix.SendMessage(roomID, formatEndpoints(endpoints))
 	case "remove":
 		if sender != adminUser {
@@ -94,20 +100,17 @@ func Handle(roomID, sender, msg string) {
 			matrix.SendMessage(roomID, "Usage: !ruuvi remove <n>")
 			return
 		}
-		endpoints := getEndpoints()
-		var newEndpoints []endpoint
 		name := strings.Join(params[2:], " ")
-		for _, e := range endpoints {
-			if e.Name != name {
-				newEndpoints = append(newEndpoints, e)
-			}
+		if err := db.RemoveRuuviEndpoint(ctx, name); err != nil {
+			matrix.SendMessage(roomID, "Error removing endpoint: "+err.Error())
+			return
 		}
-		res, err := json.Marshal(newEndpoints)
+		endpoints, err := db.GetRuuviEndpoints(ctx)
 		if err != nil {
-			matrix.SendMessage(roomID, err.Error())
+			matrix.SendMessage(roomID, "Error getting endpoints: "+err.Error())
+			return
 		}
-		db.Set("ruuvi_endpoints", string(res))
-		matrix.SendMessage(roomID, formatEndpoints(newEndpoints))
+		matrix.SendMessage(roomID, formatEndpoints(endpoints))
 	case "-":
 		go func() {
 			start := time.Now().Unix()
@@ -168,7 +171,13 @@ func queryGrafana(baseURL, tagName string, offset time.Duration, fields ...strin
 }
 
 func queryRuuviData(roomID, name, tagName, field string) {
-	endpoints := getEndpoints()
+	ctx := context.Background()
+	endpoints, err := db.GetRuuviEndpoints(ctx)
+	if err != nil {
+		matrix.SendMessage(roomID, "Error getting endpoints: "+err.Error())
+		return
+	}
+
 	if name == "" && tagName == "" {
 		var respLines []string
 		for _, e := range endpoints {
@@ -208,7 +217,12 @@ func queryRuuviData(roomID, name, tagName, field string) {
 }
 
 func formatRuuviData() string {
-	endpoints := getEndpoints()
+	ctx := context.Background()
+	endpoints, err := db.GetRuuviEndpoints(ctx)
+	if err != nil {
+		return "Error getting endpoints: " + err.Error()
+	}
+
 	var respLines []string
 	for _, e := range endpoints {
 		current, err := queryGrafana(e.BaseURL, e.TagName, 0, "temperature", "humidity", "pressure")
