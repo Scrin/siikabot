@@ -2,10 +2,12 @@ package db
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/Scrin/siikabot/metrics"
 	pgx "github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/rs/zerolog/log"
 )
 
@@ -32,4 +34,8 @@ func setupPostgres(connectionString string) (err error) {
 	metrics.RegisterPgxpoolStatsCollector(pool)
 
 	return migrate()
+}
+
+func GetDB() *sql.DB {
+	return stdlib.OpenDBFromPool(pool)
 }

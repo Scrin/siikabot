@@ -27,7 +27,6 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 	if m, ok := evt.Content.Raw["msgtype"].(string); ok {
 		msgtype = m
 	}
-	metrics.RecordEventHandled("m.room.message", msgtype)
 
 	if msgtype == "m.text" && evt.Sender.String() != config.UserID {
 		msg := evt.Content.Raw["body"].(string)
@@ -38,17 +37,17 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 
 		switch msgCommand {
 		case "!ping":
-			ping.Handle(evt.RoomID.String(), msg)
+			ping.Handle(ctx, evt.RoomID.String(), msg)
 		case "!traceroute":
-			traceroute.Handle(evt.RoomID.String(), msg)
+			traceroute.Handle(ctx, evt.RoomID.String(), msg)
 		case "!ruuvi":
-			ruuvi.Handle(evt.RoomID.String(), evt.Sender.String(), msg)
+			ruuvi.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
 		case "!grafana":
-			grafana.Handle(evt.RoomID.String(), evt.Sender.String(), msg)
+			grafana.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
 		case "!remind":
-			remind.Handle(evt.RoomID.String(), evt.Sender.String(), msg, format, formattedBody)
+			remind.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg, format, formattedBody)
 		case "!chat":
-			chat.Handle(evt.RoomID.String(), evt.Sender.String(), msg)
+			chat.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
 		default:
 			isCommand = false
 		}
@@ -64,10 +63,8 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 }
 
 func handleMemberEvent(ctx context.Context, evt *event.Event) {
-	metrics.RecordEventHandled("m.room.member", "")
-
 	if evt.Content.Raw["membership"] == "invite" && evt.GetStateKey() == config.UserID {
-		matrix.JoinRoom(evt.RoomID.String())
+		matrix.JoinRoom(ctx, evt.RoomID.String())
 		log.Info().
 			Str("room_id", evt.RoomID.String()).
 			Str("inviter", evt.Sender.String()).
@@ -75,27 +72,39 @@ func handleMemberEvent(ctx context.Context, evt *event.Event) {
 	}
 }
 
-func Init() error {
+func handleEvent(ctx context.Context, evt *event.Event, wasEncrypted bool) {
+	switch evt.Type {
+	case event.EventMessage:
+		handleTextEvent(ctx, evt)
+	case event.StateMember:
+		handleMemberEvent(ctx, evt)
+	}
+	subtype := ""
+	if m, ok := evt.Content.Raw["msgtype"].(string); ok {
+		subtype = m
+	}
+	metrics.RecordEventHandled(evt.Type.String(), subtype, wasEncrypted)
+}
+
+func Init(ctx context.Context) error {
 	if err := db.Init(); err != nil {
 		return err
 	}
-	if err := matrix.Init(); err != nil {
+	if err := matrix.Init(ctx, handleEvent); err != nil {
 		return err
 	}
 
-	resp := matrix.InitialSync()
+	resp := matrix.InitialSync(ctx)
 	for roomID := range resp.Rooms.Invite {
-		matrix.JoinRoom(roomID.String())
+		matrix.JoinRoom(ctx, roomID.String())
 		log.Info().
 			Str("room_id", roomID.String()).
 			Msg("Joined room during initial sync")
 	}
 
-	remind.Init()
+	remind.Init(ctx)
 	initHTTP()
 
-	matrix.OnEvent("m.room.member", handleMemberEvent)
-	matrix.OnEvent("m.room.message", handleTextEvent)
 	return nil
 }
 

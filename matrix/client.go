@@ -11,12 +11,18 @@ import (
 	strip "github.com/grokify/html-strip-tags-go"
 	"github.com/rs/zerolog/log"
 	"maunium.net/go/mautrix"
+	"maunium.net/go/mautrix/crypto"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 )
 
 var (
-	client         *mautrix.Client
+	client      *mautrix.Client
+	olmMachine  *crypto.OlmMachine
+	stateStore  *StateStore
+	syncStore   *SyncStore
+	cryptoStore *CryptoStore
+
 	outboundEvents chan outboundEvent
 )
 
@@ -64,33 +70,15 @@ func sendMessage(roomID string, message interface{}, retryOnFailure bool) <-chan
 	return done
 }
 
-// InitialSync gets the initial sync from the server for catching up with important missed event such as invites
-func InitialSync() *mautrix.RespSync {
-	resp, err := client.SyncRequest(context.TODO(), 0, "", "", false, "online")
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to perform initial sync")
-	}
-	return resp
-}
-
-// Sync begins synchronizing the events from the server and returns only in case of a severe error
-func Sync() error {
-	return client.Sync()
-}
-
-func OnEvent(eventType string, handler mautrix.EventHandler) {
-	client.Syncer.(*mautrix.DefaultSyncer).OnEventType(event.NewEventType(eventType), handler)
-}
-
-func JoinRoom(roomID string) {
-	_, err := client.JoinRoom(context.TODO(), roomID, &mautrix.ReqJoinRoom{})
+func JoinRoom(ctx context.Context, roomID string) {
+	_, err := client.JoinRoom(ctx, roomID, &mautrix.ReqJoinRoom{})
 	if err != nil {
 		log.Error().Err(err).Str("room_id", roomID).Msg("Failed to join room")
 	}
 }
 
-func GetDisplayName(mxid string) string {
-	foo, err := client.GetDisplayName(context.TODO(), id.UserID(mxid))
+func GetDisplayName(ctx context.Context, mxid string) string {
+	foo, err := client.GetDisplayName(ctx, id.UserID(mxid))
 	if err != nil {
 		log.Error().Err(err).Str("user_id", mxid).Msg("Failed to get display name")
 	}
@@ -255,11 +243,68 @@ func sendStreaming(roomID string, formatted bool, msgType string) (messageUpdate
 	return input, doneChan
 }
 
-func processOutboundEvents() {
+func processOutboundEvents(ctx context.Context) {
+outboundProcessingLoop:
 	for evt := range outboundEvents {
+		roomId := id.RoomID(evt.RoomID)
+		evtType := event.NewEventType(evt.EventType)
+		evtContent := evt.Content
+
+	encryptionLoop:
+		for {
+			isEncrypted, err := stateStore.IsEncrypted(ctx, roomId)
+
+			if err != nil {
+				log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to check if room is encrypted")
+				if !evt.RetryOnFailure {
+					continue outboundProcessingLoop
+				}
+				time.Sleep(100 * time.Millisecond)
+				continue encryptionLoop
+			}
+
+			if isEncrypted {
+				encrypted, err := olmMachine.EncryptMegolmEvent(ctx, roomId, evtType, evtContent)
+				// These three errors mean we have to make a new Megolm session
+				if err == crypto.SessionExpired || err == crypto.SessionNotShared || err == crypto.NoGroupSession {
+					members, err := stateStore.GetRoomMembers(ctx, roomId)
+					if err != nil {
+						log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to get room members")
+						if !evt.RetryOnFailure {
+							continue outboundProcessingLoop
+						}
+						time.Sleep(100 * time.Millisecond)
+						continue encryptionLoop
+					}
+					err = olmMachine.ShareGroupSession(ctx, roomId, members)
+					if err != nil {
+						log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to share group session")
+						if !evt.RetryOnFailure {
+							continue outboundProcessingLoop
+						}
+						time.Sleep(100 * time.Millisecond)
+						continue encryptionLoop
+					}
+					encrypted, err = olmMachine.EncryptMegolmEvent(ctx, roomId, evtType, evtContent)
+				}
+
+				if err != nil {
+					log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to encrypt message")
+					if !evt.RetryOnFailure {
+						continue outboundProcessingLoop
+					}
+					time.Sleep(100 * time.Millisecond)
+					continue encryptionLoop
+				}
+				evtType = event.EventEncrypted
+				evtContent = encrypted
+				break
+			}
+		}
+
 	retry:
 		for {
-			resp, err := client.SendMessageEvent(context.TODO(), id.RoomID(evt.RoomID), event.NewEventType(evt.EventType), evt.Content)
+			resp, err := client.SendMessageEvent(ctx, roomId, evtType, evtContent)
 			if err == nil {
 				if evt.done != nil {
 					evt.done <- string(resp.EventID)
@@ -269,12 +314,12 @@ func processOutboundEvents() {
 			var httpErr httpError
 			httpError, isHttpError := err.(mautrix.HTTPError)
 			if !isHttpError {
-				log.Error().Err(err).Msg("Failed to parse error response of unexpected type")
+				log.Error().Ctx(ctx).Err(err).Msg("Failed to parse error response of unexpected type")
 				evt.done <- ""
 				break
 			}
 			if jsonErr := json.Unmarshal([]byte(httpError.ResponseBody), &httpErr); jsonErr != nil {
-				log.Error().Err(jsonErr).Msg("Failed to parse error response")
+				log.Error().Ctx(ctx).Err(jsonErr).Msg("Failed to parse error response")
 			}
 
 			switch e := httpErr.Errcode; e {
@@ -282,6 +327,7 @@ func processOutboundEvents() {
 				time.Sleep(time.Duration(httpErr.RetryAfterMs) * time.Millisecond)
 			case "M_FORBIDDEN":
 				log.Error().
+					Ctx(ctx).
 					Err(err).
 					Str("room_id", evt.RoomID).
 					Str("error_code", e).
@@ -290,6 +336,7 @@ func processOutboundEvents() {
 				break retry
 			default:
 				log.Error().
+					Ctx(ctx).
 					Err(err).
 					Str("room_id", evt.RoomID).
 					Str("error_code", e).
@@ -303,13 +350,79 @@ func processOutboundEvents() {
 	}
 }
 
-func Init() error {
+func Init(ctx context.Context, handleEvent func(ctx context.Context, evt *event.Event, wasEncrypted bool)) error {
 	var err error
-	client, err = mautrix.NewClient(config.HomeserverURL, id.UserID(config.UserID), config.AccessToken)
+	stateStore = NewStateStore()
+	syncStore = NewSyncStore()
+	cryptoStore = NewCryptoStore()
+
+	client, err = mautrix.NewClient(config.HomeserverURL, "", "")
 	if err != nil {
 		return err
 	}
+	_, err = client.Login(ctx, &mautrix.ReqLogin{
+		Type: mautrix.AuthTypePassword,
+		Identifier: mautrix.UserIdentifier{
+			Type: mautrix.IdentifierTypeUser,
+			User: config.UserID,
+		},
+		Password:                 config.Password,
+		InitialDeviceDisplayName: "Siikabot",
+		DeviceID:                 "Siikabot",
+		StoreCredentials:         true,
+	})
+	if err != nil {
+		return err
+	}
+	client.Store = syncStore
+
+	olmMachine = crypto.NewOlmMachine(client, &log.Logger, cryptoStore, stateStore)
+	err = olmMachine.Load(ctx)
+	if err != nil {
+		return err
+	}
+
+	client.Syncer.(mautrix.ExtensibleSyncer).OnSync(olmMachine.ProcessSyncResponse)
+
+	syncer := client.Syncer.(*mautrix.DefaultSyncer)
+
+	syncer.OnEventType(event.StateMember, func(ctx context.Context, evt *event.Event) {
+		olmMachine.HandleMemberEvent(ctx, evt)
+		stateStore.SetMembership(ctx, evt)
+	})
+	syncer.OnEventType(event.StateEncryption, func(ctx context.Context, evt *event.Event) {
+		stateStore.SetEncryptionEvent(ctx, evt)
+	})
+	syncer.OnEventType(event.EventEncrypted, func(ctx context.Context, evt *event.Event) {
+		decryptedEvent, err := olmMachine.DecryptMegolmEvent(ctx, evt)
+		if err != nil {
+			log.Error().Err(err).Str("room_id", evt.RoomID.String()).Str("sender", evt.Sender.String()).Msg("Failed to decrypt message")
+		} else {
+			log.Debug().Str("room_id", evt.RoomID.String()).Str("sender", evt.Sender.String()).Msg("Received encrypted event")
+			if decryptedEvent.Type == event.EventMessage {
+				handleEvent(ctx, decryptedEvent, true)
+			}
+		}
+	})
+	syncer.OnEvent(func(ctx context.Context, evt *event.Event) {
+		handleEvent(ctx, evt, false)
+	})
+
 	outboundEvents = make(chan outboundEvent, 256)
-	go processOutboundEvents()
+	go processOutboundEvents(ctx)
 	return nil
+}
+
+// InitialSync gets the initial sync from the server for catching up with important missed event such as invites
+func InitialSync(ctx context.Context) *mautrix.RespSync {
+	resp, err := client.SyncRequest(ctx, 0, "", "", false, "online")
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to perform initial sync")
+	}
+	return resp
+}
+
+// Sync begins synchronizing the events from the server and returns only in case of a severe error
+func Sync() error {
+	return client.Sync()
 }

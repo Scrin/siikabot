@@ -37,20 +37,19 @@ func formatEndpoints(endpoints []db.RuuviEndpoint) string {
 }
 
 // Handle handles the ruuvi command
-func Handle(roomID, sender, msg string) {
-	ctx := context.Background()
+func Handle(ctx context.Context, roomID, sender, msg string) {
 	params := strings.Split(msg, " ")
 	if len(params) == 1 {
-		matrix.SendFormattedMessage(roomID, formatRuuviData())
+		matrix.SendFormattedMessage(roomID, formatRuuviData(ctx))
 		return
 	}
 	switch params[1] {
 	case "query":
 		switch len(params) {
 		case 3:
-			queryRuuviData(roomID, "", "", params[2])
+			queryRuuviData(ctx, roomID, "", "", params[2])
 		case 5:
-			queryRuuviData(roomID, params[2], params[3], params[4])
+			queryRuuviData(ctx, roomID, params[2], params[3], params[4])
 		default:
 			matrix.SendMessage(roomID, "Usage: !ruuvi query [<n> <tag_name>] <field>")
 		}
@@ -110,13 +109,13 @@ func Handle(roomID, sender, msg string) {
 			start := time.Now().Unix()
 			outChan, done := matrix.SendStreamingFormattedNotice(roomID)
 			for {
-				outChan <- formatRuuviData() + "<font color=\"gray\">[last updated at " + time.Now().Format("15:04:05") + "]</font>"
+				outChan <- formatRuuviData(ctx) + "<font color=\"gray\">[last updated at " + time.Now().Format("15:04:05") + "]</font>"
 				time.Sleep(10 * time.Second)
 				if start+600 < time.Now().Unix() {
 					break
 				}
 			}
-			outChan <- formatRuuviData()
+			outChan <- formatRuuviData(ctx)
 			close(done)
 		}()
 	}
@@ -164,8 +163,7 @@ func queryGrafana(baseURL, tagName string, offset time.Duration, fields ...strin
 	return &grafanaResp, nil
 }
 
-func queryRuuviData(roomID, name, tagName, field string) {
-	ctx := context.Background()
+func queryRuuviData(ctx context.Context, roomID, name, tagName, field string) {
 	endpoints, err := db.GetRuuviEndpoints(ctx)
 	if err != nil {
 		matrix.SendMessage(roomID, "Error getting endpoints: "+err.Error())
@@ -210,8 +208,7 @@ func queryRuuviData(roomID, name, tagName, field string) {
 	}
 }
 
-func formatRuuviData() string {
-	ctx := context.Background()
+func formatRuuviData(ctx context.Context) string {
 	endpoints, err := db.GetRuuviEndpoints(ctx)
 	if err != nil {
 		return "Error getting endpoints: " + err.Error()

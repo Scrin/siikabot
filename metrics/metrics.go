@@ -1,6 +1,10 @@
 package metrics
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"strconv"
+
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 const metricPrefix = "siikabot_"
 
@@ -22,11 +26,11 @@ func RecordWebhookHandled(hook string) {
 var eventsHandled = makeCollector(prometheus.NewCounterVec(prometheus.CounterOpts{
 	Name: metricPrefix + "events_handled_count",
 	Help: "Total number of events handled",
-}, []string{"event_type", "msg_type"}))
+}, []string{"event_type", "sub_type", "encrypted"}))
 
 // RecordEventHandled records a Matrix event being handled
-func RecordEventHandled(eventType, msgType string) {
-	eventsHandled.WithLabelValues(eventType, msgType).Inc()
+func RecordEventHandled(eventType, subType string, encrypted bool) {
+	eventsHandled.WithLabelValues(eventType, subType, strconv.FormatBool(encrypted)).Inc()
 }
 
 var commandsHandled = makeCollector(prometheus.NewCounterVec(prometheus.CounterOpts{

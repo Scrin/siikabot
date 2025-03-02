@@ -22,8 +22,7 @@ type grafanaResponse struct {
 	} `json:"results"`
 }
 
-func validUser(user string) bool {
-	ctx := context.Background()
+func validUser(ctx context.Context, user string) bool {
 	return user == config.Admin || db.IsGrafanaAuthorized(ctx, user)
 }
 
@@ -60,8 +59,7 @@ func formatTemplate(config db.GrafanaConfig) string {
 }
 
 // Handle handles the grafana command
-func Handle(roomID, sender, msg string) {
-	ctx := context.Background()
+func Handle(ctx context.Context, roomID, sender, msg string) {
 	params := strings.Split(msg, " ")
 	if len(params) == 1 {
 		return
@@ -92,7 +90,7 @@ func Handle(roomID, sender, msg string) {
 			matrix.SendMessage(roomID, formatConfigs(configs))
 		}
 	case "add":
-		if !validUser(sender) {
+		if !validUser(ctx, sender) {
 			matrix.SendMessage(roomID, "Only authorized users can use this command")
 			return
 		}
@@ -111,7 +109,7 @@ func Handle(roomID, sender, msg string) {
 		}
 		matrix.SendMessage(roomID, formatConfigs(configs))
 	case "remove":
-		if !validUser(sender) {
+		if !validUser(ctx, sender) {
 			matrix.SendMessage(roomID, "Only authorized users can use this command")
 			return
 		}
@@ -130,7 +128,7 @@ func Handle(roomID, sender, msg string) {
 		}
 		matrix.SendMessage(roomID, formatConfigs(configs))
 	case "rename":
-		if !validUser(sender) {
+		if !validUser(ctx, sender) {
 			matrix.SendMessage(roomID, "Only authorized users can use this command")
 			return
 		}
@@ -176,7 +174,7 @@ func Handle(roomID, sender, msg string) {
 		}
 		matrix.SendMessage(roomID, formatConfigs(configs))
 	case "set":
-		if !validUser(sender) {
+		if !validUser(ctx, sender) {
 			matrix.SendMessage(roomID, "Only authorized users can use this command")
 			return
 		}

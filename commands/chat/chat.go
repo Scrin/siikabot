@@ -2,6 +2,7 @@ package chat
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -36,7 +37,7 @@ type chatResponse struct {
 }
 
 // Handle handles the chat command
-func Handle(roomID, sender, msg string) {
+func Handle(ctx context.Context, roomID, sender, msg string) {
 	if strings.TrimSpace(msg) == "" {
 		return
 	}

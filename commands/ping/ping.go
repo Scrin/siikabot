@@ -2,6 +2,7 @@ package ping
 
 import (
 	"bufio"
+	"context"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -12,7 +13,7 @@ import (
 )
 
 // Handle handles the ping command
-func Handle(roomID, msg string) {
+func Handle(ctx context.Context, roomID, msg string) {
 	split := strings.Split(msg, " ")
 	if len(split) < 2 {
 		return

@@ -27,19 +27,18 @@ var timeFormats = []string{"15:04", "15:04:05"}
 var dateFormats = []string{"2.1.2006", "2006-1-2"}
 
 // Init initializes the reminder system
-func Init() {
-	ctx := context.Background()
+func Init(ctx context.Context) {
 	reminders, err := db.GetReminders(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to get reminders during init")
 		return
 	}
 	for _, r := range reminders {
-		startReminder(r)
+		startReminder(ctx, r)
 	}
 }
 
-func startReminder(rem db.Reminder) {
+func startReminder(ctx context.Context, rem db.Reminder) {
 	log.Debug().
 		Str("user_id", rem.UserID).
 		Str("room_id", rem.RoomID).
@@ -47,8 +46,7 @@ func startReminder(rem db.Reminder) {
 		Msg("Starting reminder")
 
 	f := func() {
-		matrix.SendFormattedMessage(rem.RoomID, "<a href=\"https://matrix.to/#/"+rem.UserID+"\">"+matrix.GetDisplayName(rem.UserID)+"</a> "+rem.Message)
-		ctx := context.Background()
+		matrix.SendFormattedMessage(rem.RoomID, "<a href=\"https://matrix.to/#/"+rem.UserID+"\">"+matrix.GetDisplayName(ctx, rem.UserID)+"</a> "+rem.Message)
 		if err := db.RemoveReminder(ctx, rem.ID); err != nil {
 			log.Error().Err(err).Int64("id", rem.ID).Msg("Failed to remove triggered reminder")
 		}
@@ -66,7 +64,7 @@ func startReminder(rem db.Reminder) {
 }
 
 // Handle handles the remind command
-func Handle(roomID, sender, msg, msgType, formattedBody string) {
+func Handle(ctx context.Context, roomID, sender, msg, msgType, formattedBody string) {
 	params := strings.SplitN(msg, " ", 3)
 	if len(params) < 3 {
 		matrix.SendMessage(roomID, "Usage: !remind <time, date, datetime or duration> <message>")
@@ -99,7 +97,6 @@ func Handle(roomID, sender, msg, msgType, formattedBody string) {
 		Message:    reminderText,
 	}
 
-	ctx := context.Background()
 	id, err := db.AddReminder(ctx, rem)
 	if err != nil {
 		matrix.SendMessage(roomID, "Failed to save reminder: "+err.Error())
@@ -107,7 +104,7 @@ func Handle(roomID, sender, msg, msgType, formattedBody string) {
 	}
 	rem.ID = id
 
-	startReminder(rem)
+	startReminder(ctx, rem)
 	duration := reminderTime.Sub(t).Truncate(time.Second)
 	loc, _ := time.LoadLocation(timezone)
 
