@@ -10,6 +10,7 @@ import (
 	"github.com/Scrin/siikabot/commands/remind"
 	"github.com/Scrin/siikabot/commands/ruuvi"
 	"github.com/Scrin/siikabot/commands/traceroute"
+	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/matrix"
 	"github.com/Scrin/siikabot/metrics"
@@ -17,12 +18,8 @@ import (
 	"maunium.net/go/mautrix/event"
 )
 
-var (
-	adminUser string
-)
-
 func handleTextEvent(ctx context.Context, evt *event.Event) {
-	if evt.Sender.String() == matrix.GetUserID() {
+	if evt.Sender.String() == config.UserID {
 		return
 	}
 
@@ -32,7 +29,7 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 	}
 	metrics.RecordEventHandled("m.room.message", msgtype)
 
-	if msgtype == "m.text" && evt.Sender.String() != matrix.GetUserID() {
+	if msgtype == "m.text" && evt.Sender.String() != config.UserID {
 		msg := evt.Content.Raw["body"].(string)
 		format, _ := evt.Content.Raw["format"].(string)
 		formattedBody, _ := evt.Content.Raw["formatted_body"].(string)
@@ -69,7 +66,7 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 func handleMemberEvent(ctx context.Context, evt *event.Event) {
 	metrics.RecordEventHandled("m.room.member", "")
 
-	if evt.Content.Raw["membership"] == "invite" && evt.GetStateKey() == matrix.GetUserID() {
+	if evt.Content.Raw["membership"] == "invite" && evt.GetStateKey() == config.UserID {
 		matrix.JoinRoom(evt.RoomID.String())
 		log.Info().
 			Str("room_id", evt.RoomID.String()).
@@ -78,14 +75,13 @@ func handleMemberEvent(ctx context.Context, evt *event.Event) {
 	}
 }
 
-func Run(homeserverURL, userID, accessToken, hookSecret, dataPath, admin, openrouterApiKey, postgresConnectionString string) error {
-	if err := db.Init(dataPath+"/siikabot.db", postgresConnectionString); err != nil {
+func Init() error {
+	if err := db.Init(); err != nil {
 		return err
 	}
-	if err := matrix.Init(homeserverURL, userID, accessToken); err != nil {
+	if err := matrix.Init(); err != nil {
 		return err
 	}
-	adminUser = admin
 
 	resp := matrix.InitialSync()
 	for roomID := range resp.Rooms.Invite {
@@ -96,13 +92,13 @@ func Run(homeserverURL, userID, accessToken, hookSecret, dataPath, admin, openro
 	}
 
 	remind.Init()
-	chat.Init(openrouterApiKey)
-	ruuvi.Init(admin)
-	grafana.Init(admin)
-	initHTTP(hookSecret)
+	initHTTP()
 
 	matrix.OnEvent("m.room.member", handleMemberEvent)
 	matrix.OnEvent("m.room.message", handleTextEvent)
+	return nil
+}
 
+func Run() error {
 	return matrix.Sync()
 }

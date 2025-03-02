@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/matrix"
 )
@@ -25,13 +26,6 @@ type grafanaResponse struct {
 			Values [][]interface{} `json:"values"`
 		} `json:"series"`
 	} `json:"results"`
-}
-
-var adminUser string
-
-// Init initializes the ruuvi command with the admin user
-func Init(admin string) {
-	adminUser = admin
 }
 
 func formatEndpoints(endpoints []db.RuuviEndpoint) string {
@@ -68,7 +62,7 @@ func Handle(roomID, sender, msg string) {
 		}
 		matrix.SendMessage(roomID, formatEndpoints(endpoints))
 	case "add":
-		if sender != adminUser {
+		if sender != config.Admin {
 			matrix.SendMessage(roomID, "Only admins can use this command")
 			return
 		}
@@ -92,7 +86,7 @@ func Handle(roomID, sender, msg string) {
 		}
 		matrix.SendMessage(roomID, formatEndpoints(endpoints))
 	case "remove":
-		if sender != adminUser {
+		if sender != config.Admin {
 			matrix.SendMessage(roomID, "Only admins can use this command")
 			return
 		}

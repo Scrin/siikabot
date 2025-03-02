@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/matrix"
 	"github.com/rs/zerolog/log"
 )
@@ -32,13 +33,6 @@ type chatResponse struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
 	} `json:"error,omitempty"`
-}
-
-var apiKey string
-
-// Init initializes the chat command with the API key
-func Init(openrouterAPIKey string) {
-	apiKey = openrouterAPIKey
 }
 
 // Handle handles the chat command
@@ -74,7 +68,7 @@ func Handle(roomID, sender, msg string) {
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	httpReq.Header.Set("Authorization", "Bearer "+config.OpenrouterAPIKey)
 	httpReq.Header.Set("HTTP-Referer", "https://github.com/Scrin/siikabot")
 	httpReq.Header.Set("X-Title", "Siikabot")
 

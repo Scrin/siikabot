@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Scrin/siikabot/config"
 	strip "github.com/grokify/html-strip-tags-go"
 	"github.com/rs/zerolog/log"
 	"maunium.net/go/mautrix"
@@ -15,7 +16,6 @@ import (
 )
 
 var (
-	userID         string
 	client         *mautrix.Client
 	outboundEvents chan outboundEvent
 )
@@ -303,19 +303,12 @@ func processOutboundEvents() {
 	}
 }
 
-// GetUserID returns the ID of the currently logged in user
-func GetUserID() string {
-	return userID
-}
-
-// Init initializes the Matrix client with the given parameters
-func Init(homeserverURL, uid, accessToken string) error {
+func Init() error {
 	var err error
-	client, err = mautrix.NewClient(homeserverURL, id.UserID(uid), accessToken)
+	client, err = mautrix.NewClient(config.HomeserverURL, id.UserID(config.UserID), config.AccessToken)
 	if err != nil {
 		return err
 	}
-	userID = uid
 	outboundEvents = make(chan outboundEvent, 256)
 	go processOutboundEvents()
 	return nil

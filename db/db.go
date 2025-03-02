@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 
+	"github.com/Scrin/siikabot/config"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
 )
@@ -11,12 +12,13 @@ var (
 	db *sql.DB
 )
 
-func Init(dbFile string, postgresConnectionString string) error {
-	err := setupPostgres(postgresConnectionString)
+func Init() error {
+	err := setupPostgres(config.PostgresConnectionString)
 	if err != nil {
 		return err
 	}
 
+	dbFile := config.DataPath + "/siikabot.db"
 	if db, err = sql.Open("sqlite3", dbFile); err != nil {
 		log.Error().Err(err).Str("db_file", dbFile).Msg("Failed to open database")
 		return err

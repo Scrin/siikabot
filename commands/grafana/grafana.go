@@ -9,6 +9,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/matrix"
 )
@@ -21,16 +22,9 @@ type grafanaResponse struct {
 	} `json:"results"`
 }
 
-var adminUser string
-
-// Init initializes the grafana command with the admin user
-func Init(admin string) {
-	adminUser = admin
-}
-
 func validUser(user string) bool {
 	ctx := context.Background()
-	return user == adminUser || db.IsGrafanaAuthorized(ctx, user)
+	return user == config.Admin || db.IsGrafanaAuthorized(ctx, user)
 }
 
 func formatConfigs(configs map[string]db.GrafanaConfig) string {
@@ -227,7 +221,7 @@ func Handle(roomID, sender, msg string) {
 			matrix.SendMessage(roomID, "Usage: !grafana set [template/datasource]")
 		}
 	case "authorize":
-		if sender != adminUser {
+		if sender != config.Admin {
 			matrix.SendMessage(roomID, "Only admins can use this command")
 			return
 		}

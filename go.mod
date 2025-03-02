@@ -5,6 +5,7 @@ go 1.24.0
 require (
 	github.com/grokify/html-strip-tags-go v0.0.1
 	github.com/jackc/pgx/v5 v5.7.2
+	github.com/joho/godotenv v1.5.1
 	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/prometheus/client_golang v1.11.0
 	github.com/rs/zerolog v1.33.0
