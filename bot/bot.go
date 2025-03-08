@@ -50,6 +50,15 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 			chat.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
 		default:
 			isCommand = false
+
+			// Check if the message contains a mention of the bot
+			if containsBotMention(msg, formattedBody) {
+				// Extract the actual message content (remove the mention part)
+				chatMsg := extractMessageContent(msg, formattedBody)
+				chat.HandleMention(ctx, evt.RoomID.String(), evt.Sender.String(), chatMsg, evt.ID.String())
+				isCommand = true
+				msgCommand = "mention"
+			}
 		}
 		if isCommand {
 			log.Debug().
@@ -60,6 +69,79 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 			metrics.RecordCommandHandled(msgCommand)
 		}
 	}
+}
+
+// containsBotMention checks if the message contains a mention of the bot
+func containsBotMention(plainMsg, formattedMsg string) bool {
+	// Check for mention in plain text by user ID (e.g., @siikabot)
+	botUserName := strings.Split(config.UserID, ":")[0][1:] // Remove @ and domain part
+	if strings.Contains(strings.ToLower(plainMsg), "@"+strings.ToLower(botUserName)) {
+		return true
+	}
+
+	// Check for mention in plain text by display name
+	botDisplayName := matrix.GetDisplayName(context.Background(), config.UserID)
+	if botDisplayName != "" && strings.Contains(strings.ToLower(plainMsg), strings.ToLower(botDisplayName)) {
+		return true
+	}
+
+	// Check for mention in formatted text (Matrix uses <a href="https://matrix.to/#/@user:domain.com">@user</a> format)
+	if formattedMsg != "" && strings.Contains(formattedMsg, "https://matrix.to/#/"+config.UserID) {
+		return true
+	}
+
+	return false
+}
+
+// extractMessageContent removes the bot mention from the message
+func extractMessageContent(plainMsg, formattedMsg string) string {
+	// Get bot identifiers
+	botUserName := strings.Split(config.UserID, ":")[0][1:] // Remove @ and domain part
+	botDisplayName := matrix.GetDisplayName(context.Background(), config.UserID)
+
+	// Try to extract content after user ID mention
+	if idx := strings.Index(strings.ToLower(plainMsg), "@"+strings.ToLower(botUserName)); idx >= 0 {
+		// Find the end of the mention (space or colon typically follows the mention)
+		endIdx := idx + len(botUserName) + 1 // +1 for the @ symbol
+		for endIdx < len(plainMsg) && plainMsg[endIdx] != ' ' && plainMsg[endIdx] != ':' {
+			endIdx++
+		}
+
+		// If there's content after the mention, extract it
+		if endIdx < len(plainMsg) {
+			// Skip any colon or space after the mention
+			for endIdx < len(plainMsg) && (plainMsg[endIdx] == ' ' || plainMsg[endIdx] == ':') {
+				endIdx++
+			}
+			return strings.TrimSpace(plainMsg[endIdx:])
+		}
+	}
+
+	// Try to extract content after display name mention
+	if botDisplayName != "" {
+		if idx := strings.Index(strings.ToLower(plainMsg), strings.ToLower(botDisplayName)); idx >= 0 {
+			// Find the end of the mention
+			endIdx := idx + len(botDisplayName)
+
+			// If there's content after the mention, extract it
+			if endIdx < len(plainMsg) {
+				// Skip any colon or space after the mention
+				for endIdx < len(plainMsg) && (plainMsg[endIdx] == ' ' || plainMsg[endIdx] == ':') {
+					endIdx++
+				}
+				return strings.TrimSpace(plainMsg[endIdx:])
+			}
+		}
+	}
+
+	// If we can't extract a clean message, try to remove the bot name from the message
+	cleanedMsg := plainMsg
+	if botDisplayName != "" {
+		cleanedMsg = strings.ReplaceAll(strings.ToLower(cleanedMsg), strings.ToLower(botDisplayName), "")
+	}
+	cleanedMsg = strings.ReplaceAll(strings.ToLower(cleanedMsg), "@"+strings.ToLower(botUserName), "")
+
+	return strings.TrimSpace(cleanedMsg)
 }
 
 func handleMemberEvent(ctx context.Context, evt *event.Event) {
@@ -103,6 +185,7 @@ func Init(ctx context.Context) error {
 	}
 
 	remind.Init(ctx)
+	chat.Init(ctx)
 	initHTTP()
 
 	return nil

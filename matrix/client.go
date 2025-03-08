@@ -8,6 +8,9 @@ import (
 	"time"
 
 	"github.com/Scrin/siikabot/config"
+	"github.com/gomarkdown/markdown"
+	mdhtml "github.com/gomarkdown/markdown/html"
+	mdparser "github.com/gomarkdown/markdown/parser"
 	strip "github.com/grokify/html-strip-tags-go"
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
@@ -112,6 +115,41 @@ func SendNotice(roomID string, notice string) <-chan string {
 // The returned channel will provide the event ID of the notice after the notice has been sent
 func SendFormattedNotice(roomID string, notice string) <-chan string {
 	return sendMessage(roomID, simpleMessage{"m.notice", stripFormatting(notice), "org.matrix.custom.html", notice}, true)
+}
+
+// markdownToHTML converts markdown text to HTML
+func markdownToHTML(markdownText string) string {
+	// Create markdown parser with extensions
+	extensions := mdparser.CommonExtensions | mdparser.NoEmptyLineBeforeBlock
+	parser := mdparser.NewWithExtensions(extensions)
+
+	// Parse the markdown text
+	md := []byte(markdownText)
+	parsedMd := parser.Parse(md)
+
+	// Create HTML renderer with extensions
+	htmlFlags := mdhtml.CommonFlags
+	opts := mdhtml.RendererOptions{Flags: htmlFlags}
+	renderer := mdhtml.NewRenderer(opts)
+
+	// Convert to HTML
+	return string(markdown.Render(parsedMd, renderer))
+}
+
+// SendMarkdownFormattedMessage converts markdown text to HTML and queues the formatted message to be sent.
+//
+// The returned channel will provide the event ID of the message after the message has been sent
+func SendMarkdownFormattedMessage(roomID string, markdownText string) <-chan string {
+	htmlOutput := markdownToHTML(markdownText)
+	return SendFormattedMessage(roomID, htmlOutput)
+}
+
+// SendMarkdownFormattedNotice converts markdown text to HTML and queues the formatted notice to be sent.
+//
+// The returned channel will provide the event ID of the notice after the notice has been sent
+func SendMarkdownFormattedNotice(roomID string, markdownText string) <-chan string {
+	htmlOutput := markdownToHTML(markdownText)
+	return SendFormattedNotice(roomID, htmlOutput)
 }
 
 func stripFormatting(s string) string {
@@ -430,4 +468,23 @@ func InitialSync(ctx context.Context) *mautrix.RespSync {
 // Sync begins synchronizing the events from the server and returns only in case of a severe error
 func Sync() error {
 	return client.Sync()
+}
+
+// SendTyping sends a typing indicator to a room.
+// If typing is true, the bot will appear as typing for the specified duration.
+// If typing is false, the bot will stop appearing as typing.
+func SendTyping(ctx context.Context, roomID string, typing bool, timeout time.Duration) {
+	_, err := client.UserTyping(ctx, id.RoomID(roomID), typing, timeout)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Bool("typing", typing).Msg("Failed to send typing indicator")
+	}
+}
+
+// MarkRead marks a message as read by the bot.
+// This updates the read receipt for the bot in the room.
+func MarkRead(ctx context.Context, roomID string, eventID string) {
+	err := client.MarkRead(ctx, id.RoomID(roomID), id.EventID(eventID))
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("event_id", eventID).Msg("Failed to mark message as read")
+	}
 }

@@ -42,3 +42,42 @@ var commandsHandled = makeCollector(prometheus.NewCounterVec(prometheus.CounterO
 func RecordCommandHandled(command string) {
 	commandsHandled.WithLabelValues(command).Inc()
 }
+
+var chatAPICalls = makeCollector(prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: metricPrefix + "chat_api_calls_count",
+	Help: "Total number of chat API calls made",
+}, []string{"model", "status"}))
+
+// RecordChatAPICall records a chat API call being made
+func RecordChatAPICall(model string, success bool) {
+	status := "success"
+	if !success {
+		status = "failure"
+	}
+	chatAPICalls.WithLabelValues(model, status).Inc()
+}
+
+var chatCharacters = makeCollector(prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: metricPrefix + "chat_characters_count",
+	Help: "Total number of characters used in chat API calls",
+}, []string{"model", "type"}))
+
+// RecordChatCharacters records the number of characters used in a chat API call
+func RecordChatCharacters(model string, inputChars, outputChars int) {
+	chatCharacters.WithLabelValues(model, "input").Add(float64(inputChars))
+	chatCharacters.WithLabelValues(model, "output").Add(float64(outputChars))
+}
+
+var toolCalls = makeCollector(prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: metricPrefix + "tool_calls_count",
+	Help: "Total number of tool calls made",
+}, []string{"tool", "status"}))
+
+// RecordToolCall records a tool call being made
+func RecordToolCall(tool string, success bool) {
+	status := "success"
+	if !success {
+		status = "failure"
+	}
+	toolCalls.WithLabelValues(tool, status).Inc()
+}

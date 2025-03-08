@@ -3,6 +3,7 @@ module github.com/Scrin/siikabot
 go 1.24.0
 
 require (
+	github.com/gomarkdown/markdown v0.0.0-20250207164621-7a1f277a159e
 	github.com/grokify/html-strip-tags-go v0.0.1
 	github.com/jackc/pgx/v5 v5.7.2
 	github.com/joho/godotenv v1.5.1
