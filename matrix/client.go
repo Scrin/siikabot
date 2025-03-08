@@ -12,7 +12,6 @@ import (
 	mdhtml "github.com/gomarkdown/markdown/html"
 	mdparser "github.com/gomarkdown/markdown/parser"
 	strip "github.com/grokify/html-strip-tags-go"
-	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/crypto"
@@ -293,11 +292,7 @@ outboundProcessingLoop:
 		for {
 			isEncrypted, err := stateStore.IsEncrypted(ctx, roomId)
 
-			if err == pgx.ErrNoRows {
-				log.Warn().Ctx(ctx).Str("room_id", evt.RoomID).Msg("Don't know if room is encrypted, assuming it is not")
-				isEncrypted = false
-				break encryptionLoop
-			} else if err != nil {
+			if err != nil {
 				log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to check if room is encrypted")
 				if !evt.RetryOnFailure {
 					continue outboundProcessingLoop
@@ -341,6 +336,8 @@ outboundProcessingLoop:
 				}
 				evtType = event.EventEncrypted
 				evtContent = encrypted
+				break
+			} else {
 				break
 			}
 		}

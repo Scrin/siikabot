@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/Scrin/siikabot/db"
+	"github.com/jackc/pgx/v5"
 	"maunium.net/go/mautrix/event"
 	mid "maunium.net/go/mautrix/id"
 )
@@ -17,7 +18,9 @@ func NewStateStore() *StateStore {
 
 func (store *StateStore) IsEncrypted(ctx context.Context, roomID mid.RoomID) (bool, error) {
 	encryptionEvent, err := store.GetEncryptionEvent(ctx, roomID)
-	if err != nil {
+	if err == pgx.ErrNoRows {
+		return false, nil
+	} else if err != nil {
 		return false, err
 	}
 	return encryptionEvent != nil, nil
