@@ -6,9 +6,9 @@ require (
 	github.com/grokify/html-strip-tags-go v0.0.1
 	github.com/jackc/pgx/v5 v5.7.2
 	github.com/joho/godotenv v1.5.1
-	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/prometheus/client_golang v1.11.0
 	github.com/rs/zerolog v1.33.0
+	go.mau.fi/util v0.8.5
 	maunium.net/go/mautrix v0.23.1
 )
 
@@ -31,7 +31,6 @@ require (
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
-	go.mau.fi/util v0.8.5 // indirect
 	golang.org/x/crypto v0.33.0 // indirect
 	golang.org/x/exp v0.0.0-20250215185904-eff6e970281f // indirect
 	golang.org/x/sync v0.11.0 // indirect

@@ -17,7 +17,6 @@ var (
 	UserID                   = ""
 	Password                 = ""
 	HookSecret               = ""
-	DataPath                 = ""
 	Admin                    = ""
 	OpenrouterAPIKey         = ""
 	PostgresConnectionString = ""
@@ -29,7 +28,6 @@ func loadConfig() error {
 	UserID = os.Getenv("SIIKABOT_USER_ID")
 	Password = os.Getenv("SIIKABOT_PASSWORD")
 	HookSecret = os.Getenv("SIIKABOT_HOOK_SECRET")
-	DataPath = os.Getenv("SIIKABOT_DATA_PATH")
 	Admin = os.Getenv("SIIKABOT_ADMIN")
 	OpenrouterAPIKey = os.Getenv("SIIKABOT_OPENROUTER_API_KEY")
 	PostgresConnectionString = os.Getenv("SIIKABOT_POSTGRES_CONNECTION_STRING")
@@ -45,9 +43,6 @@ func loadConfig() error {
 	}
 	if HookSecret == "" {
 		return fmt.Errorf("SIIKABOT_HOOK_SECRET is not set")
-	}
-	if DataPath == "" {
-		return fmt.Errorf("SIIKABOT_DATA_PATH is not set")
 	}
 	if Admin == "" {
 		return fmt.Errorf("SIIKABOT_ADMIN is not set")
