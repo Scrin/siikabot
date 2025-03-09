@@ -13,12 +13,21 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// ContentPart represents a part of a message content in the OpenRouter chat API
+type ContentPart struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL *struct {
+		URL string `json:"url"`
+	} `json:"image_url,omitempty"`
+}
+
 // Message represents a message in the OpenRouter chat API
 type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Role       string      `json:"role"`
+	Content    interface{} `json:"content"`
+	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
+	ToolCallID string      `json:"tool_call_id,omitempty"`
 }
 
 // ChatRequest represents a request to the OpenRouter chat API
@@ -89,6 +98,8 @@ func SendChatRequest(ctx context.Context, req ChatRequest) (*ChatResponse, error
 		log.Error().Ctx(ctx).
 			Str("error_type", chatResp.Error.Type).
 			Str("error_message", chatResp.Error.Message).
+			Str("model", req.Model).
+			Str("response", string(body)).
 			Msg("Chat API returned error")
 		metrics.RecordChatAPICall(req.Model, false)
 		return &chatResp, fmt.Errorf("chat API error: %s", chatResp.Error.Message)
