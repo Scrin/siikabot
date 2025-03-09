@@ -33,6 +33,7 @@ func Init(ctx context.Context) {
 	toolRegistry.RegisterTool(WeatherToolDefinition)
 	toolRegistry.RegisterTool(WeatherForecastToolDefinition)
 	toolRegistry.RegisterTool(NewsToolDefinition)
+	toolRegistry.RegisterTool(WebSearchToolDefinition)
 
 	// Start a goroutine to periodically clean up old chat history
 	go func() {
