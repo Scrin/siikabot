@@ -11,7 +11,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const timezone = "Europe/Helsinki"
+const Timezone = "Europe/Helsinki"
 
 var dateTimeFormats = []string{
 	"2.1.2006-15:04", "15:04-2.1.2006",
@@ -34,11 +34,12 @@ func Init(ctx context.Context) {
 		return
 	}
 	for _, r := range reminders {
-		startReminder(ctx, r)
+		StartReminder(ctx, r)
 	}
 }
 
-func startReminder(ctx context.Context, rem db.Reminder) {
+// StartReminder starts a timer for the reminder
+func StartReminder(ctx context.Context, rem db.Reminder) {
 	log.Debug().
 		Str("user_id", rem.UserID).
 		Str("room_id", rem.RoomID).
@@ -72,10 +73,10 @@ func Handle(ctx context.Context, roomID, sender, msg, msgType, formattedBody str
 	}
 
 	t := time.Now()
-	reminderTime, durationErr := remindDuration(t, params[1])
+	reminderTime, durationErr := RemindDuration(t, params[1])
 	var timeErr error
 	if durationErr != nil {
-		reminderTime, timeErr = remindTime(t, params[1])
+		reminderTime, timeErr = RemindTime(t, params[1])
 	}
 	if timeErr != nil {
 		matrix.SendFormattedMessage(roomID, "Invalid date/time or duration: "+params[1]+"<br>duration error: "+durationErr.Error()+"<br> date/time error: "+timeErr.Error())
@@ -104,9 +105,9 @@ func Handle(ctx context.Context, roomID, sender, msg, msgType, formattedBody str
 	}
 	rem.ID = id
 
-	startReminder(ctx, rem)
+	StartReminder(ctx, rem)
 	duration := reminderTime.Sub(t).Truncate(time.Second)
-	loc, _ := time.LoadLocation(timezone)
+	loc, _ := time.LoadLocation(Timezone)
 
 	log.Info().
 		Str("room_id", roomID).
@@ -118,7 +119,8 @@ func Handle(ctx context.Context, roomID, sender, msg, msgType, formattedBody str
 	matrix.SendFormattedMessage(roomID, "Reminding at "+reminderTime.In(loc).Format("15:04:05 on 2.1.2006")+" (in "+duration.String()+"): "+reminderText)
 }
 
-func remindDuration(now time.Time, param string) (time.Time, error) {
+// RemindDuration parses a duration string and returns a time in the future
+func RemindDuration(now time.Time, param string) (time.Time, error) {
 	duration, durationErr := time.ParseDuration(param)
 	if durationErr != nil {
 		return time.Unix(0, 0), durationErr
@@ -131,10 +133,11 @@ func remindDuration(now time.Time, param string) (time.Time, error) {
 	return now.Add(duration), nil
 }
 
-func remindTime(now time.Time, param string) (time.Time, error) {
+// RemindTime parses a time string and returns a time in the future
+func RemindTime(now time.Time, param string) (time.Time, error) {
 	param = strings.Replace(param, "_", "-", -1)
 	var reminderTime time.Time
-	loc, err := time.LoadLocation(timezone)
+	loc, err := time.LoadLocation(Timezone)
 	for _, f := range dateTimeFormatsTZ {
 		reminderTime, err = time.Parse(f, param)
 		if err == nil {

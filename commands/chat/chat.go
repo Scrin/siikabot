@@ -36,6 +36,7 @@ func Init(ctx context.Context) {
 	toolRegistry.RegisterTool(WeatherForecastToolDefinition)
 	toolRegistry.RegisterTool(NewsToolDefinition)
 	toolRegistry.RegisterTool(WebSearchToolDefinition)
+	toolRegistry.RegisterTool(ReminderToolDefinition)
 
 	// Start a goroutine to periodically clean up old chat history
 	go func() {
@@ -463,8 +464,12 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 			ToolCalls: chatResp.Choices[0].Message.ToolCalls,
 		})
 
+		// Create a new context with room ID and sender for tool calls
+		toolCtx := context.WithValue(ctx, "room_id", roomID)
+		toolCtx = context.WithValue(toolCtx, "sender", sender)
+
 		// Then add individual tool responses for each tool call
-		toolResponses, err := toolRegistry.HandleToolCallsIndividually(ctx, chatResp.Choices[0].Message.ToolCalls)
+		toolResponses, err := toolRegistry.HandleToolCallsIndividually(toolCtx, chatResp.Choices[0].Message.ToolCalls)
 		if err != nil {
 			log.Error().Ctx(ctx).Err(err).
 				Str("room_id", roomID).
