@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -96,20 +95,68 @@ func handleElectricityPricesToolCall(ctx context.Context, arguments string) (str
 	return formatElectricityPrices(prices), nil
 }
 
-// ElectricityPriceEntry represents a single electricity price entry from the API
-type ElectricityPriceEntry struct {
-	TimestampFinnish string `json:"aikaleima_suomi"`
-	TimestampUTC     string `json:"aikaleima_utc"`
-	Price            string `json:"hinta"`
+// NordPoolResponse represents the response from the Nord Pool API
+type NordPoolResponse struct {
+	DeliveryDateCET      string                `json:"deliveryDateCET"`
+	Version              int                   `json:"version"`
+	UpdatedAt            string                `json:"updatedAt"`
+	DeliveryAreas        []string              `json:"deliveryAreas"`
+	Market               string                `json:"market"`
+	MultiAreaEntries     []MultiAreaEntry      `json:"multiAreaEntries"`
+	BlockPriceAggregates []BlockPriceAggregate `json:"blockPriceAggregates"`
+	Currency             string                `json:"currency"`
+	ExchangeRate         float64               `json:"exchangeRate"`
+	AreaStates           []AreaState           `json:"areaStates"`
+	AreaAverages         []AreaAverage         `json:"areaAverages"`
 }
 
-// getElectricityPrices fetches electricity prices from the API
-func getElectricityPrices(ctx context.Context, date time.Time) ([]ElectricityPriceEntry, error) {
+// MultiAreaEntry represents a single price entry for multiple areas
+type MultiAreaEntry struct {
+	DeliveryStart string             `json:"deliveryStart"`
+	DeliveryEnd   string             `json:"deliveryEnd"`
+	EntryPerArea  map[string]float64 `json:"entryPerArea"`
+}
+
+// BlockPriceAggregate represents aggregated prices for a specific time block
+type BlockPriceAggregate struct {
+	BlockName           string                `json:"blockName"`
+	DeliveryStart       string                `json:"deliveryStart"`
+	DeliveryEnd         string                `json:"deliveryEnd"`
+	AveragePricePerArea map[string]BlockStats `json:"averagePricePerArea"`
+}
+
+// BlockStats represents statistics for a price block
+type BlockStats struct {
+	Average float64 `json:"average"`
+	Min     float64 `json:"min"`
+	Max     float64 `json:"max"`
+}
+
+// AreaState represents the state of prices for an area
+type AreaState struct {
+	State string   `json:"state"`
+	Areas []string `json:"areas"`
+}
+
+// AreaAverage represents the average price for an area
+type AreaAverage struct {
+	AreaCode string  `json:"areaCode"`
+	Price    float64 `json:"price"`
+}
+
+// PriceEntry represents a processed price entry for internal use
+type PriceEntry struct {
+	Time  time.Time
+	Price float64
+}
+
+// getElectricityPrices fetches electricity prices from the Nord Pool API
+func getElectricityPrices(ctx context.Context, date time.Time) ([]PriceEntry, error) {
 	// Format the date as YYYY-MM-DD
 	dateStr := date.Format("2006-01-02")
 
-	// The API requires tunnit=24 and accepts a date parameter
-	url := fmt.Sprintf("https://www.sahkohinta-api.fi/api/v1/halpa?tunnit=24&tulos=sarja&aikaraja=%s", dateStr)
+	// Construct the Nord Pool API URL
+	url := fmt.Sprintf("https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?currency=EUR&market=DayAhead&deliveryArea=FI&date=%s", dateStr)
 
 	log.Debug().Ctx(ctx).Str("url", url).Str("date", dateStr).Msg("Fetching electricity prices")
 
@@ -150,11 +197,42 @@ func getElectricityPrices(ctx context.Context, date time.Time) ([]ElectricityPri
 	log.Debug().Ctx(ctx).Str("response", string(body)).Msg("Received electricity price API response")
 
 	// Parse the response
-	var prices []ElectricityPriceEntry
-	if err := json.Unmarshal(body, &prices); err != nil {
+	var nordPoolResponse NordPoolResponse
+	if err := json.Unmarshal(body, &nordPoolResponse); err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("response", string(body)).Msg("Failed to decode electricity price response")
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
+
+	// Process the response into our internal format
+	var prices []PriceEntry
+	for _, entry := range nordPoolResponse.MultiAreaEntries {
+		// Parse the delivery start time
+		startTime, err := time.Parse(time.RFC3339, entry.DeliveryStart)
+		if err != nil {
+			log.Error().Ctx(ctx).Err(err).Str("time_string", entry.DeliveryStart).Msg("Failed to parse delivery start time")
+			continue
+		}
+
+		// Get the price for Finland (FI)
+		price, ok := entry.EntryPerArea["FI"]
+		if !ok {
+			log.Error().Ctx(ctx).Str("delivery_start", entry.DeliveryStart).Msg("No price for Finland in entry")
+			continue
+		}
+
+		// Convert price from EUR/MWh to cents/kWh
+		priceInCentsPerKWh := price / 10
+
+		prices = append(prices, PriceEntry{
+			Time:  startTime,
+			Price: priceInCentsPerKWh,
+		})
+	}
+
+	// Sort prices by time
+	sort.Slice(prices, func(i, j int) bool {
+		return prices[i].Time.Before(prices[j].Time)
+	})
 
 	log.Debug().Ctx(ctx).Int("price_count", len(prices)).Msg("Successfully fetched electricity prices")
 
@@ -162,38 +240,25 @@ func getElectricityPrices(ctx context.Context, date time.Time) ([]ElectricityPri
 }
 
 // formatElectricityPrices formats the electricity prices for display
-func formatElectricityPrices(prices []ElectricityPriceEntry) string {
+func formatElectricityPrices(prices []PriceEntry) string {
 	if len(prices) == 0 {
 		return "No electricity price data available for the requested date."
 	}
 
-	// Convert prices to float for calculations
-	var priceValues []float64
-	for _, entry := range prices {
-		price, err := strconv.ParseFloat(entry.Price, 64)
-		if err == nil {
-			priceValues = append(priceValues, price)
-		}
-	}
-
-	if len(priceValues) == 0 {
-		return "Electricity price data was received but contained no valid price values."
-	}
-
 	// Calculate statistics
 	var sum float64
-	min := priceValues[0]
-	max := priceValues[0]
-	for _, price := range priceValues {
-		sum += price
-		if price < min {
-			min = price
+	min := prices[0].Price
+	max := prices[0].Price
+	for _, entry := range prices {
+		sum += entry.Price
+		if entry.Price < min {
+			min = entry.Price
 		}
-		if price > max {
-			max = price
+		if entry.Price > max {
+			max = entry.Price
 		}
 	}
-	avg := sum / float64(len(priceValues))
+	avg := sum / float64(len(prices))
 
 	// Format the output
 	var sb strings.Builder
@@ -207,46 +272,19 @@ func formatElectricityPrices(prices []ElectricityPriceEntry) string {
 	// Add hourly prices
 	sb.WriteString("Hourly prices:\n")
 
-	validEntries := 0
-
-	// Sort entries by time
-	var timeEntries []struct {
-		Time  time.Time
-		Price float64
+	// Convert to Finnish time zone for display
+	finlandLocation, err := time.LoadLocation("Europe/Helsinki")
+	if err != nil {
+		// Fallback to UTC if timezone loading fails
+		finlandLocation = time.UTC
 	}
-
-	for _, entry := range prices {
-		// Parse the Finnish timestamp
-		t, err := time.Parse("2006-01-02T15:04", entry.TimestampFinnish)
-		if err != nil {
-			continue
-		}
-
-		price, err := strconv.ParseFloat(entry.Price, 64)
-		if err != nil {
-			continue
-		}
-
-		timeEntries = append(timeEntries, struct {
-			Time  time.Time
-			Price float64
-		}{t, price})
-		validEntries++
-	}
-
-	// Sort by time
-	sort.Slice(timeEntries, func(i, j int) bool {
-		return timeEntries[i].Time.Before(timeEntries[j].Time)
-	})
 
 	// Output sorted entries
-	for _, entry := range timeEntries {
-		timeStr := entry.Time.Format("15:04")
+	for _, entry := range prices {
+		// Convert to Finnish time
+		localTime := entry.Time.In(finlandLocation)
+		timeStr := localTime.Format("15:04")
 		sb.WriteString(fmt.Sprintf("%s: %.2f\n", timeStr, entry.Price))
-	}
-
-	if validEntries == 0 {
-		sb.WriteString("\nNo valid hourly price entries were found in the data.\n")
 	}
 
 	return sb.String()
