@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Scrin/siikabot/openrouter"
@@ -33,6 +34,12 @@ var ElectricityPricesToolDefinition = openrouter.ToolDefinition{
 	},
 	Handler: handleElectricityPricesToolCall,
 }
+
+// Cache for electricity prices
+var (
+	electricityPriceCache      = make(map[string][]PriceEntry)
+	electricityPriceCacheMutex sync.RWMutex
+)
 
 // handleElectricityPricesToolCall handles electricity prices tool calls
 func handleElectricityPricesToolCall(ctx context.Context, arguments string) (string, error) {
@@ -155,6 +162,16 @@ func getElectricityPrices(ctx context.Context, date time.Time) ([]PriceEntry, er
 	// Format the date as YYYY-MM-DD
 	dateStr := date.Format("2006-01-02")
 
+	// Check cache first
+	electricityPriceCacheMutex.RLock()
+	cachedPrices, found := electricityPriceCache[dateStr]
+	electricityPriceCacheMutex.RUnlock()
+
+	if found {
+		log.Debug().Ctx(ctx).Str("date", dateStr).Int("price_count", len(cachedPrices)).Msg("Using cached electricity prices")
+		return cachedPrices, nil
+	}
+
 	// Construct the Nord Pool API URL
 	url := fmt.Sprintf("https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?currency=EUR&market=DayAhead&deliveryArea=FI&date=%s", dateStr)
 
@@ -235,6 +252,14 @@ func getElectricityPrices(ctx context.Context, date time.Time) ([]PriceEntry, er
 	})
 
 	log.Debug().Ctx(ctx).Int("price_count", len(prices)).Msg("Successfully fetched electricity prices")
+
+	// Store in cache
+	if len(prices) > 0 {
+		electricityPriceCacheMutex.Lock()
+		electricityPriceCache[dateStr] = prices
+		electricityPriceCacheMutex.Unlock()
+		log.Debug().Ctx(ctx).Str("date", dateStr).Int("price_count", len(prices)).Msg("Cached electricity prices")
+	}
 
 	return prices, nil
 }
