@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"regexp"
 	"strings"
 
 	"github.com/Scrin/siikabot/commands/chat"
@@ -80,15 +81,26 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 
 // containsBotMention checks if the message contains a mention of the bot
 func containsBotMention(plainMsg, formattedMsg string) bool {
+	// Check for URLs in the message - both with and without protocol prefix
+	// This pattern matches common URL formats including those without http/https prefix
+	urlPattern := regexp.MustCompile(`(https?://|www\.)[^\s]+|[a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,}[^\s]*|[a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,}[^\s]*`)
+	urls := urlPattern.FindAllString(plainMsg, -1)
+
+	// Create a copy of plainMsg with all URLs removed
+	plainMsgWithoutUrls := plainMsg
+	for _, url := range urls {
+		plainMsgWithoutUrls = strings.Replace(plainMsgWithoutUrls, url, "", -1)
+	}
+
 	// Check for mention in plain text by user ID (e.g., @siikabot)
 	botUserName := strings.Split(config.UserID, ":")[0][1:] // Remove @ and domain part
-	if strings.Contains(strings.ToLower(plainMsg), "@"+strings.ToLower(botUserName)) {
+	if strings.Contains(strings.ToLower(plainMsgWithoutUrls), "@"+strings.ToLower(botUserName)) {
 		return true
 	}
 
 	// Check for mention in plain text by display name
 	botDisplayName := matrix.GetDisplayName(context.Background(), config.UserID)
-	if botDisplayName != "" && strings.Contains(strings.ToLower(plainMsg), strings.ToLower(botDisplayName)) {
+	if botDisplayName != "" && strings.Contains(strings.ToLower(plainMsgWithoutUrls), strings.ToLower(botDisplayName)) {
 		return true
 	}
 
