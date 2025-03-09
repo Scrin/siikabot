@@ -55,7 +55,14 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 			if containsBotMention(msg, formattedBody) {
 				// Extract the actual message content (remove the mention part)
 				chatMsg := extractMessageContent(msg, formattedBody)
-				chat.HandleMention(ctx, evt.RoomID.String(), evt.Sender.String(), chatMsg, evt.ID.String())
+
+				// Extract the m.relates_to field if it exists
+				var relatesTo map[string]interface{}
+				if relates, ok := evt.Content.Raw["m.relates_to"].(map[string]interface{}); ok {
+					relatesTo = relates
+				}
+
+				chat.HandleMention(ctx, evt.RoomID.String(), evt.Sender.String(), chatMsg, evt.ID.String(), relatesTo)
 				isCommand = true
 				msgCommand = "mention"
 			}

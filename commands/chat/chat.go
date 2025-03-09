@@ -85,7 +85,7 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 }
 
 // HandleMention handles the chat command
-func HandleMention(ctx context.Context, roomID, sender, msg, eventID string) {
+func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, relatesTo map[string]interface{}) {
 	if strings.TrimSpace(msg) == "" {
 		return
 	}
@@ -138,6 +138,52 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string) {
 			Role:    historyMsg.Role,
 			Content: historyMsg.Message,
 		})
+	}
+
+	// Check if this message is a reply to another message
+	if relatesTo != nil {
+		log.Debug().Ctx(ctx).
+			Str("room_id", roomID).
+			Interface("relates_to", relatesTo).
+			Msg("Message has relation information")
+
+		// Check for m.in_reply_to
+		if inReplyTo, ok := relatesTo["m.in_reply_to"].(map[string]interface{}); ok {
+			if replyEventID, ok := inReplyTo["event_id"].(string); ok {
+				log.Debug().Ctx(ctx).
+					Str("room_id", roomID).
+					Str("reply_event_id", replyEventID).
+					Msg("Message is a reply to another message")
+				// Get the content of the replied-to message
+				repliedToContent, err := matrix.GetEventContent(ctx, roomID, replyEventID)
+				if err != nil {
+					log.Error().Ctx(ctx).Err(err).
+						Str("room_id", roomID).
+						Str("event_id", replyEventID).
+						Msg("Failed to get replied-to message content")
+
+					// Add a note about the failed attempt to get the replied-to message
+					messages = append(messages, openrouter.Message{
+						Role:    "system",
+						Content: "Note: This message is a reply to another message, but I couldn't retrieve the content of that message.",
+					})
+				} else if repliedToContent != "" {
+					// Add the replied-to message to the conversation
+					log.Debug().Ctx(ctx).
+						Str("room_id", roomID).
+						Str("event_id", replyEventID).
+						Str("content", repliedToContent).
+						Msg("Including replied-to message in conversation")
+
+					// Add a note about the reply context
+					replyContextMsg := fmt.Sprintf("This message is a reply to: \"%s\"", repliedToContent)
+					messages = append(messages, openrouter.Message{
+						Role:    "system",
+						Content: replyContextMsg,
+					})
+				}
+			}
+		}
 	}
 
 	// Add the current message
