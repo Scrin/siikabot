@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/Scrin/siikabot/metrics"
 	"github.com/rs/zerolog/log"
@@ -75,55 +76,81 @@ func (r *ToolRegistry) GetToolDefinitions() []ToolDefinition {
 	return definitions
 }
 
-// HandleToolCallsIndividually processes multiple tool calls and returns individual responses
+// HandleToolCallsIndividually processes multiple tool calls in parallel and returns individual responses
 func (r *ToolRegistry) HandleToolCallsIndividually(ctx context.Context, toolCalls []ToolCall) ([]ToolResponse, error) {
 	if len(toolCalls) == 0 {
 		return []ToolResponse{}, nil
 	}
 
-	var responses []ToolResponse
+	var (
+		responses []ToolResponse
+		wg        sync.WaitGroup
+		mu        sync.Mutex
+	)
+
+	// Pre-allocate the responses slice to avoid reallocations
+	responses = make([]ToolResponse, 0, len(toolCalls))
+
 	for _, call := range toolCalls {
 		if call.Type != "function" {
 			continue
 		}
 
-		handler, exists := r.handlers[call.Function.Name]
-		if !exists {
-			log.Warn().Ctx(ctx).
-				Str("tool", call.Function.Name).
-				Msg("Unknown tool called")
-			metrics.RecordToolCall(call.Function.Name, false)
-			responses = append(responses, ToolResponse{
-				ToolCallID: call.ID,
-				Response:   fmt.Sprintf("Unknown tool: %s", call.Function.Name),
-			})
-			continue
-		}
+		// Create local copies of variables for the goroutine
+		currentCall := call
 
-		response, err := handler(ctx, call.Function.Arguments)
-		if err != nil {
-			log.Error().Ctx(ctx).Err(err).
-				Str("tool", call.Function.Name).
-				Str("arguments", call.Function.Arguments).
-				Msg("Tool call failed")
-			metrics.RecordToolCall(call.Function.Name, false)
-			responses = append(responses, ToolResponse{
-				ToolCallID: call.ID,
-				Response:   fmt.Sprintf("Error executing %s: %s", call.Function.Name, err.Error()),
-			})
-		} else {
-			log.Debug().Ctx(ctx).
-				Str("tool", call.Function.Name).
-				Str("arguments", call.Function.Arguments).
-				Int("response_length", len(response)).
-				Msg("Tool call succeeded")
-			metrics.RecordToolCall(call.Function.Name, true)
-			responses = append(responses, ToolResponse{
-				ToolCallID: call.ID,
-				Response:   response,
-			})
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			handler, exists := r.handlers[currentCall.Function.Name]
+			if !exists {
+				log.Warn().Ctx(ctx).
+					Str("tool", currentCall.Function.Name).
+					Msg("Unknown tool called")
+				metrics.RecordToolCall(currentCall.Function.Name, false)
+
+				mu.Lock()
+				responses = append(responses, ToolResponse{
+					ToolCallID: currentCall.ID,
+					Response:   fmt.Sprintf("Unknown tool: %s", currentCall.Function.Name),
+				})
+				mu.Unlock()
+				return
+			}
+
+			response, err := handler(ctx, currentCall.Function.Arguments)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			if err != nil {
+				log.Error().Ctx(ctx).Err(err).
+					Str("tool", currentCall.Function.Name).
+					Str("arguments", currentCall.Function.Arguments).
+					Msg("Tool call failed")
+				metrics.RecordToolCall(currentCall.Function.Name, false)
+				responses = append(responses, ToolResponse{
+					ToolCallID: currentCall.ID,
+					Response:   fmt.Sprintf("Error executing %s: %s", currentCall.Function.Name, err.Error()),
+				})
+			} else {
+				log.Debug().Ctx(ctx).
+					Str("tool", currentCall.Function.Name).
+					Str("arguments", currentCall.Function.Arguments).
+					Int("response_length", len(response)).
+					Msg("Tool call succeeded")
+				metrics.RecordToolCall(currentCall.Function.Name, true)
+				responses = append(responses, ToolResponse{
+					ToolCallID: currentCall.ID,
+					Response:   response,
+				})
+			}
+		}()
 	}
+
+	// Wait for all goroutines to complete
+	wg.Wait()
 
 	return responses, nil
 }
