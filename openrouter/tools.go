@@ -1,4 +1,4 @@
-package chat
+package openrouter
 
 import (
 	"context"
@@ -58,18 +58,6 @@ func NewToolRegistry() *ToolRegistry {
 		definitions: make(map[string]ToolDefinition),
 		handlers:    make(map[string]ToolHandler),
 	}
-}
-
-// DefaultToolRegistry returns a registry with all default tools registered
-func DefaultToolRegistry() *ToolRegistry {
-	registry := NewToolRegistry()
-
-	registry.RegisterTool(ElectricityPricesToolDefinition)
-	registry.RegisterTool(WeatherToolDefinition)
-	registry.RegisterTool(WeatherForecastToolDefinition)
-	registry.RegisterTool(NewsToolDefinition)
-
-	return registry
 }
 
 // RegisterTool registers a tool with the registry

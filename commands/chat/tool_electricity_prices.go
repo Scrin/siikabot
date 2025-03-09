@@ -11,13 +11,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Scrin/siikabot/openrouter"
 	"github.com/rs/zerolog/log"
 )
 
 // ElectricityPricesToolDefinition returns the tool definition for the electricity prices tool
-var ElectricityPricesToolDefinition = ToolDefinition{
+var ElectricityPricesToolDefinition = openrouter.ToolDefinition{
 	Type: "function",
-	Function: FunctionSchema{
+	Function: openrouter.FunctionSchema{
 		Name:        "get_electricity_prices",
 		Description: "Get detailed electricity prices in Finland for a specific date at 1 hour resolution",
 		Parameters: json.RawMessage(`{

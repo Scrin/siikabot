@@ -11,15 +11,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Scrin/siikabot/openrouter"
 	"github.com/rs/zerolog/log"
 )
 
 // WeatherForecastToolDefinition returns the tool definition for the weather forecast tool
-var WeatherForecastToolDefinition = ToolDefinition{
+var WeatherForecastToolDefinition = openrouter.ToolDefinition{
 	Type: "function",
-	Function: FunctionSchema{
+	Function: openrouter.FunctionSchema{
 		Name:        "get_weather_forecast",
-		Description: "Get weather forecast information for a location in Finland for the next 24-48 hours",
+		Description: "Get weather forecast for a location in Finland",
 		Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {

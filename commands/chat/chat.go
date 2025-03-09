@@ -1,12 +1,8 @@
 package chat
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 	"time"
 
@@ -14,34 +10,9 @@ import (
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/matrix"
 	"github.com/Scrin/siikabot/metrics"
+	"github.com/Scrin/siikabot/openrouter"
 	"github.com/rs/zerolog/log"
 )
-
-type message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-}
-
-type chatRequest struct {
-	Model    string           `json:"model"`
-	Messages []message        `json:"messages"`
-	Tools    []ToolDefinition `json:"tools,omitempty"`
-}
-
-type choice struct {
-	Message      message `json:"message"`
-	FinishReason string  `json:"finish_reason,omitempty"`
-}
-
-type chatResponse struct {
-	Choices []choice `json:"choices"`
-	Error   *struct {
-		Message string `json:"message"`
-		Type    string `json:"type"`
-	} `json:"error,omitempty"`
-}
 
 // Maximum number of previous messages to include in the conversation history
 const maxHistoryMessages = 20
@@ -50,12 +21,18 @@ const maxHistoryMessages = 20
 const chatHistoryRetention = 7 * 24 * time.Hour // 7 days
 
 // toolRegistry holds all available tools
-var toolRegistry *ToolRegistry
+var toolRegistry *openrouter.ToolRegistry
 
 // Init initializes the chat module
 func Init(ctx context.Context) {
 	// Initialize the tool registry
-	toolRegistry = DefaultToolRegistry()
+	toolRegistry = openrouter.NewToolRegistry()
+
+	// Register the tool implementations from the chat package
+	toolRegistry.RegisterTool(ElectricityPricesToolDefinition)
+	toolRegistry.RegisterTool(WeatherToolDefinition)
+	toolRegistry.RegisterTool(WeatherForecastToolDefinition)
+	toolRegistry.RegisterTool(NewsToolDefinition)
 
 	// Start a goroutine to periodically clean up old chat history
 	go func() {
@@ -152,98 +129,36 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string) {
 	}
 
 	// Build messages array with system prompt, history, and current message
-	messages := []message{{Role: "system", Content: systemPrompt}}
+	messages := []openrouter.Message{{Role: "system", Content: systemPrompt}}
 
 	// Add conversation history
 	for _, historyMsg := range history {
-		messages = append(messages, message{
+		messages = append(messages, openrouter.Message{
 			Role:    historyMsg.Role,
 			Content: historyMsg.Message,
 		})
 	}
 
 	// Add the current message
-	messages = append(messages, message{Role: "user", Content: msg})
+	messages = append(messages, openrouter.Message{Role: "user", Content: msg})
 
 	// Get tool definitions from the registry
 	tools := toolRegistry.GetToolDefinitions()
 
-	req := chatRequest{
+	req := openrouter.ChatRequest{
 		Model:    "openai/gpt-4o-mini",
 		Messages: messages,
 		Tools:    tools,
 	}
 
-	jsonData, err := json.Marshal(req)
+	// Send the request to OpenRouter
+	chatResp, err := openrouter.SendChatRequest(ctx, req)
 	if err != nil {
-		log.Error().Ctx(ctx).Err(err).Msg("Failed to marshal chat request")
+		log.Error().Ctx(ctx).Err(err).Msg("Failed to send chat request")
 		matrix.SendTyping(ctx, roomID, false, 0) // Stop typing indicator on error
 		matrix.SendMessage(roomID, "Failed to process chat request")
 		return
 	}
-
-	httpReq, err := http.NewRequest("POST", "https://openrouter.ai/api/v1/chat/completions", bytes.NewBuffer(jsonData))
-	if err != nil {
-		log.Error().Ctx(ctx).Err(err).Msg("Failed to create HTTP request")
-		matrix.SendTyping(ctx, roomID, false, 0) // Stop typing indicator on error
-		matrix.SendMessage(roomID, "Failed to create chat request")
-		return
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+config.OpenrouterAPIKey)
-	httpReq.Header.Set("HTTP-Referer", "https://github.com/Scrin/siikabot")
-	httpReq.Header.Set("X-Title", "Siikabot")
-
-	client := &http.Client{}
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		log.Error().Ctx(ctx).Err(err).Msg("Failed to send chat request")
-		matrix.SendTyping(ctx, roomID, false, 0) // Stop typing indicator on error
-		matrix.SendMessage(roomID, "Failed to send chat request")
-		metrics.RecordChatAPICall(req.Model, false)
-		return
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Error().Ctx(ctx).Err(err).Msg("Failed to read chat response")
-		matrix.SendTyping(ctx, roomID, false, 0) // Stop typing indicator on error
-		matrix.SendMessage(roomID, "Failed to read chat response")
-		metrics.RecordChatAPICall(req.Model, false)
-		return
-	}
-
-	var chatResp chatResponse
-	if err := json.Unmarshal(body, &chatResp); err != nil {
-		log.Error().Ctx(ctx).Err(err).RawJSON("response", body).Msg("Failed to parse chat response")
-		matrix.SendTyping(ctx, roomID, false, 0) // Stop typing indicator on error
-		matrix.SendMessage(roomID, "Failed to parse chat response")
-		metrics.RecordChatAPICall(req.Model, false)
-		return
-	}
-
-	if chatResp.Error != nil {
-		log.Error().Ctx(ctx).
-			Str("error_type", chatResp.Error.Type).
-			Str("error_message", chatResp.Error.Message).
-			Msg("Chat API returned error")
-		matrix.SendTyping(ctx, roomID, false, 0) // Stop typing indicator on error
-		matrix.SendMessage(roomID, fmt.Sprintf("Chat API error: %s", chatResp.Error.Message))
-		metrics.RecordChatAPICall(req.Model, false)
-		return
-	}
-
-	// Record successful API call
-	metrics.RecordChatAPICall(req.Model, true)
-
-	inputChars := len(msg)
-	outputChars := 0
-	if len(chatResp.Choices) > 0 {
-		outputChars = len(chatResp.Choices[0].Message.Content)
-	}
-	metrics.RecordChatCharacters(req.Model, inputChars, outputChars)
 
 	if len(chatResp.Choices) == 0 {
 		log.Error().Ctx(ctx).Msg("Chat API returned no choices")
@@ -261,6 +176,11 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string) {
 	// Get the assistant's response
 	assistantResponse := chatResp.Choices[0].Message.Content
 
+	// Record character counts
+	inputChars := len(msg)
+	outputChars := len(assistantResponse)
+	metrics.RecordChatCharacters(req.Model, inputChars, outputChars)
+
 	// Check if the model wants to use a tool
 	if chatResp.Choices[0].FinishReason == "tool_calls" && len(chatResp.Choices[0].Message.ToolCalls) > 0 {
 		log.Debug().Ctx(ctx).
@@ -271,7 +191,7 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string) {
 
 		// Add the tool response to the conversation
 		// First, add the assistant's message with tool calls
-		messages = append(messages, message{
+		messages = append(messages, openrouter.Message{
 			Role:      "assistant",
 			Content:   "", // Content should be empty when there are tool calls
 			ToolCalls: chatResp.Choices[0].Message.ToolCalls,
@@ -287,7 +207,7 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string) {
 
 		// Add each tool response as a separate message
 		for _, toolResp := range toolResponses {
-			messages = append(messages, message{
+			messages = append(messages, openrouter.Message{
 				Role:       "tool",
 				Content:    toolResp.Response,
 				ToolCallID: toolResp.ToolCallID,
@@ -301,98 +221,34 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string) {
 		// Send typing indicator again for the second request
 		matrix.SendTyping(ctx, roomID, true, 30*time.Second)
 
-		jsonData, err = json.Marshal(req)
-		if err != nil {
-			log.Error().Ctx(ctx).Err(err).Msg("Failed to marshal second chat request")
-			matrix.SendTyping(ctx, roomID, false, 0) // Stop typing indicator on error
-			matrix.SendMessage(roomID, "Failed to process chat request")
-			return
-		}
-
 		// Log the request for debugging
 		log.Debug().Ctx(ctx).
 			Str("room_id", roomID).
 			Str("sender", sender).
-			RawJSON("request", jsonData).
 			Msg("Sending second chat request")
 
-		httpReq, err = http.NewRequest("POST", "https://openrouter.ai/api/v1/chat/completions", bytes.NewBuffer(jsonData))
-		if err != nil {
-			log.Error().Ctx(ctx).Err(err).Msg("Failed to create second HTTP request")
-			matrix.SendTyping(ctx, roomID, false, 0) // Stop typing indicator on error
-			matrix.SendMessage(roomID, "Failed to create chat request")
-			return
-		}
-
-		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("Authorization", "Bearer "+config.OpenrouterAPIKey)
-		httpReq.Header.Set("HTTP-Referer", "https://github.com/Scrin/siikabot")
-		httpReq.Header.Set("X-Title", "Siikabot")
-
-		resp, err = client.Do(httpReq)
+		// Send the second request to OpenRouter
+		secondChatResp, err := openrouter.SendChatRequest(ctx, req)
 		if err != nil {
 			log.Error().Ctx(ctx).Err(err).Msg("Failed to send second chat request")
 			matrix.SendTyping(ctx, roomID, false, 0) // Stop typing indicator on error
-			matrix.SendMessage(roomID, "Failed to send chat request")
-			metrics.RecordChatAPICall(req.Model, false)
+			matrix.SendMessage(roomID, "Failed to get response from chat API")
 			return
-		}
-		defer resp.Body.Close()
-
-		body, err = io.ReadAll(resp.Body)
-		if err != nil {
-			log.Error().Ctx(ctx).Err(err).Msg("Failed to read second chat response")
-			matrix.SendTyping(ctx, roomID, false, 0) // Stop typing indicator on error
-			matrix.SendMessage(roomID, "Failed to read chat response")
-			metrics.RecordChatAPICall(req.Model, false)
-			return
-		}
-
-		// Log the raw response for debugging
-		log.Debug().Ctx(ctx).
-			Str("room_id", roomID).
-			Str("sender", sender).
-			RawJSON("response", body).
-			Msg("Received second chat response")
-
-		if err := json.Unmarshal(body, &chatResp); err != nil {
-			log.Error().Ctx(ctx).Err(err).RawJSON("response", body).Msg("Failed to parse second chat response")
-			matrix.SendTyping(ctx, roomID, false, 0) // Stop typing indicator on error
-			matrix.SendMessage(roomID, "Failed to parse chat response")
-			metrics.RecordChatAPICall(req.Model, false)
-			return
-		}
-
-		if chatResp.Error != nil {
-			log.Error().Ctx(ctx).
-				Str("error_type", chatResp.Error.Type).
-				Str("error_message", chatResp.Error.Message).
-				RawJSON("response", body).
-				Msg("Second chat API returned error")
-
-			// Stop typing indicator on error
-			matrix.SendTyping(ctx, roomID, false, 0)
-
-			// Record failed API call
-			metrics.RecordChatAPICall(req.Model, false)
-
-			// Fallback to a simple response if the second call fails
-			assistantResponse = formatToolResponses(toolResponses)
-		} else if len(chatResp.Choices) == 0 {
+		} else if len(secondChatResp.Choices) == 0 {
 			log.Error().Ctx(ctx).Msg("Second chat API returned no choices")
 			matrix.SendTyping(ctx, roomID, false, 0) // Stop typing indicator on error
-			// Fallback to a simple response
-			assistantResponse = formatToolResponses(toolResponses)
+			matrix.SendMessage(roomID, "No response from chat API")
+			return
 		} else {
-			// Record successful API call
-			metrics.RecordChatAPICall(req.Model, true)
-
 			// Record character counts for the second call
-			secondInputChars := calculateToolResponsesLength(toolResponses)
-			secondOutputChars := len(chatResp.Choices[0].Message.Content)
+			secondInputChars := 0
+			for _, resp := range toolResponses {
+				secondInputChars += len(resp.Response)
+			}
+			secondOutputChars := len(secondChatResp.Choices[0].Message.Content)
 			metrics.RecordChatCharacters(req.Model, secondInputChars, secondOutputChars)
 
-			assistantResponse = chatResp.Choices[0].Message.Content
+			assistantResponse = secondChatResp.Choices[0].Message.Content
 		}
 	}
 
@@ -409,36 +265,4 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string) {
 		Msg("Chat command completed")
 
 	matrix.SendMarkdownFormattedNotice(roomID, assistantResponse)
-}
-
-// formatToolResponses formats multiple tool responses into a single string
-func formatToolResponses(responses []ToolResponse) string {
-	if len(responses) == 0 {
-		return "No results available."
-	}
-
-	if len(responses) == 1 {
-		return fmt.Sprintf("Here are the results:\n\n%s", responses[0].Response)
-	}
-
-	var sb strings.Builder
-	sb.WriteString("Here are the results:\n\n")
-
-	for i, resp := range responses {
-		sb.WriteString(fmt.Sprintf("Result %d:\n%s", i+1, resp.Response))
-		if i < len(responses)-1 {
-			sb.WriteString("\n\n")
-		}
-	}
-
-	return sb.String()
-}
-
-// calculateToolResponsesLength calculates the total length of all tool responses
-func calculateToolResponsesLength(responses []ToolResponse) int {
-	total := 0
-	for _, resp := range responses {
-		total += len(resp.Response)
-	}
-	return total
 }

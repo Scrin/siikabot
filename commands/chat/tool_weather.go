@@ -12,13 +12,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Scrin/siikabot/openrouter"
 	"github.com/rs/zerolog/log"
 )
 
 // WeatherToolDefinition returns the tool definition for the weather tool
-var WeatherToolDefinition = ToolDefinition{
+var WeatherToolDefinition = openrouter.ToolDefinition{
 	Type: "function",
-	Function: FunctionSchema{
+	Function: openrouter.FunctionSchema{
 		Name:        "get_weather",
 		Description: "Get current weather information for a location in Finland",
 		Parameters: json.RawMessage(`{
