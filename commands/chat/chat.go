@@ -109,7 +109,8 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 	defer matrix.SendTyping(ctx, roomID, false, 0)
 
 	// Create a system prompt with bot identity and current time
-	currentTime := time.Now().Format("Monday, January 2, 2006 15:04:05 MST")
+	loc, _ := time.LoadLocation(config.Timezone)
+	currentTime := time.Now().In(loc).Format("Monday, January 2, 2006 15:04:05 MST")
 
 	// Get the bot's actual display name from the Matrix server
 	botDisplayName := matrix.GetDisplayName(ctx, config.UserID)

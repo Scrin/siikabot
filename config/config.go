@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -23,6 +22,7 @@ var (
 	PostgresConnectionString = ""
 	PickleKey                = ""
 	Debug                    = false
+	Timezone                 = ""
 )
 
 func loadConfig() error {
@@ -34,10 +34,7 @@ func loadConfig() error {
 	OpenrouterAPIKey = os.Getenv("SIIKABOT_OPENROUTER_API_KEY")
 	PostgresConnectionString = os.Getenv("SIIKABOT_POSTGRES_CONNECTION_STRING")
 	PickleKey = os.Getenv("SIIKABOT_PICKLE_KEY")
-
-	// Check if debug mode is enabled
-	debugEnv := strings.ToLower(os.Getenv("SIIKABOT_DEBUG"))
-	Debug = debugEnv == "true" || debugEnv == "1" || debugEnv == "yes"
+	Timezone = os.Getenv("SIIKABOT_TIMEZONE")
 
 	if HomeserverURL == "" {
 		return fmt.Errorf("SIIKABOT_HOMESERVER_URL is not set")
@@ -62,6 +59,9 @@ func loadConfig() error {
 	}
 	if PickleKey == "" {
 		return fmt.Errorf("SIIKABOT_PICKLE_KEY is not set")
+	}
+	if Timezone == "" {
+		return fmt.Errorf("SIIKABOT_TIMEZONE is not set")
 	}
 	return nil
 }

@@ -6,12 +6,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/matrix"
 	"github.com/rs/zerolog/log"
 )
-
-const Timezone = "Europe/Helsinki"
 
 var dateTimeFormats = []string{
 	"2.1.2006-15:04", "15:04-2.1.2006",
@@ -107,7 +106,7 @@ func Handle(ctx context.Context, roomID, sender, msg, msgType, formattedBody str
 
 	StartReminder(ctx, rem)
 	duration := reminderTime.Sub(t).Truncate(time.Second)
-	loc, _ := time.LoadLocation(Timezone)
+	loc, _ := time.LoadLocation(config.Timezone)
 
 	log.Info().
 		Str("room_id", roomID).
@@ -137,7 +136,7 @@ func RemindDuration(now time.Time, param string) (time.Time, error) {
 func RemindTime(now time.Time, param string) (time.Time, error) {
 	param = strings.Replace(param, "_", "-", -1)
 	var reminderTime time.Time
-	loc, err := time.LoadLocation(Timezone)
+	loc, err := time.LoadLocation(config.Timezone)
 	for _, f := range dateTimeFormatsTZ {
 		reminderTime, err = time.Parse(f, param)
 		if err == nil {

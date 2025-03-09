@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Scrin/siikabot/commands/remind"
+	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/matrix"
 	"github.com/Scrin/siikabot/openrouter"
@@ -116,7 +117,7 @@ func handleReminderToolCall(ctx context.Context, arguments string) (string, erro
 	duration := reminderTime.Sub(now).Truncate(time.Second)
 
 	// Get the timezone
-	loc, _ := time.LoadLocation(remind.Timezone)
+	loc, _ := time.LoadLocation(config.Timezone)
 
 	matrix.SendFormattedNotice(roomID, "Reminding at "+reminderTime.In(loc).Format("15:04:05 on 2.1.2006")+" (in "+duration.String()+"): "+reminderText)
 
