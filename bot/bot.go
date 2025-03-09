@@ -52,20 +52,40 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 		default:
 			isCommand = false
 
-			// Check if the message contains a mention of the bot
-			if containsBotMention(msg, formattedBody) {
-				// Extract the actual message content (remove the mention part)
-				chatMsg := extractMessageContent(msg, formattedBody)
+			// Extract the m.relates_to field if it exists
+			var relatesTo map[string]interface{}
+			if relates, ok := evt.Content.Raw["m.relates_to"].(map[string]interface{}); ok {
+				relatesTo = relates
+			}
 
-				// Extract the m.relates_to field if it exists
-				var relatesTo map[string]interface{}
-				if relates, ok := evt.Content.Raw["m.relates_to"].(map[string]interface{}); ok {
-					relatesTo = relates
+			// Check if the message is a reply to a message sent by the bot
+			isReplyToBot := false
+			if relatesTo != nil {
+				if inReplyTo, ok := relatesTo["m.in_reply_to"].(map[string]interface{}); ok {
+					if replyEventID, ok := inReplyTo["event_id"].(string); ok {
+						// Get the sender of the replied-to message
+						repliedToSender, err := matrix.GetEventSender(ctx, evt.RoomID.String(), replyEventID)
+						if err == nil && repliedToSender == config.UserID {
+							isReplyToBot = true
+						}
+					}
+				}
+			}
+
+			// Check if the message contains a mention of the bot
+			if containsBotMention(msg, formattedBody) || isReplyToBot {
+				// Extract the actual message content (remove the mention part if it's a mention)
+				chatMsg := msg
+				if containsBotMention(msg, formattedBody) {
+					chatMsg = extractMessageContent(msg, formattedBody)
 				}
 
 				chat.HandleMention(ctx, evt.RoomID.String(), evt.Sender.String(), chatMsg, evt.ID.String(), relatesTo)
 				isCommand = true
 				msgCommand = "mention"
+				if isReplyToBot {
+					msgCommand = "reply"
+				}
 			}
 		}
 		if isCommand {

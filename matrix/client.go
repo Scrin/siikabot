@@ -493,6 +493,7 @@ func GetEventContent(ctx context.Context, roomID string, eventID string) (string
 	// Get the event from the server
 	evt, err := client.GetEvent(ctx, id.RoomID(roomID), id.EventID(eventID))
 	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("event_id", eventID).Msg("Failed to get event content")
 		return "", err
 	}
 
@@ -544,4 +545,16 @@ func GetEventContent(ctx context.Context, roomID string, eventID string) (string
 		Msg("Message content does not contain body")
 
 	return "", fmt.Errorf("message body not found")
+}
+
+// GetEventSender retrieves the sender of a message by its event ID.
+func GetEventSender(ctx context.Context, roomID string, eventID string) (string, error) {
+	// Get the event from the server
+	evt, err := client.GetEvent(ctx, id.RoomID(roomID), id.EventID(eventID))
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("event_id", eventID).Msg("Failed to get event sender")
+		return "", err
+	}
+
+	return evt.Sender.String(), nil
 }
