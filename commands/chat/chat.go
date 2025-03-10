@@ -13,7 +13,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const model = "openai/gpt-4o-mini"
+const defaultTextModel = "openai/gpt-4o"
+const defaultImageModel = "openai/gpt-4o-mini"
 
 // Maximum number of previous messages to include in the conversation history
 const maxHistoryMessages = 20
@@ -65,6 +66,26 @@ func cleanupChatHistory(ctx context.Context) {
 	}
 }
 
+// getTextModelForRoom returns the model to use for text messages in a specific room
+// If no room-specific model is set, returns the default text model
+func getTextModelForRoom(ctx context.Context, roomID string) string {
+	model, err := db.GetRoomChatLLMModelText(ctx, roomID)
+	if err != nil || model == "" {
+		return defaultTextModel
+	}
+	return model
+}
+
+// getImageModelForRoom returns the model to use for image messages in a specific room
+// If no room-specific model is set, returns the default image model
+func getImageModelForRoom(ctx context.Context, roomID string) string {
+	model, err := db.GetRoomChatLLMModelImage(ctx, roomID)
+	if err != nil || model == "" {
+		return defaultImageModel
+	}
+	return model
+}
+
 func Handle(ctx context.Context, roomID, sender, msg string) {
 	split := strings.Split(msg, " ")
 	if len(split) < 2 {
@@ -81,6 +102,60 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 		}
 		log.Info().Ctx(ctx).Str("room_id", roomID).Int64("deleted_count", count).Msg("Chat history reset")
 		matrix.SendMessage(roomID, fmt.Sprintf("Chat history reset (%d messages deleted)", count))
+	case "config":
+		// Show current configuration for the room
+		textModel := getTextModelForRoom(ctx, roomID)
+		imageModel := getImageModelForRoom(ctx, roomID)
+		matrix.SendMessage(roomID, fmt.Sprintf("Current chat configuration for this room:\nText model: %s\nImage model: %s", textModel, imageModel))
+	case "model":
+		if len(split) < 4 {
+			matrix.SendMessage(roomID, "Usage: !chat model [text|image] <model_name>")
+			return
+		}
+
+		if sender != config.Admin {
+			matrix.SendMessage(roomID, "Only admins can change the chat models")
+			return
+		}
+
+		modelType := strings.TrimSpace(split[2])
+		newModel := strings.TrimSpace(split[3])
+
+		switch modelType {
+		case "text":
+			err := db.SetRoomChatLLMModelText(ctx, roomID, newModel)
+			if err != nil {
+				log.Error().Ctx(ctx).Err(err).
+					Str("room_id", roomID).
+					Str("model", newModel).
+					Msg("Failed to set room text chat model")
+				matrix.SendMessage(roomID, "Failed to set text chat model")
+				return
+			}
+			log.Info().Ctx(ctx).
+				Str("room_id", roomID).
+				Str("model", newModel).
+				Msg("Text chat model changed")
+			matrix.SendMessage(roomID, fmt.Sprintf("Text chat model changed to: %s", newModel))
+		case "image":
+			err := db.SetRoomChatLLMModelImage(ctx, roomID, newModel)
+			if err != nil {
+				log.Error().Ctx(ctx).Err(err).
+					Str("room_id", roomID).
+					Str("model", newModel).
+					Msg("Failed to set room image chat model")
+				matrix.SendMessage(roomID, "Failed to set image chat model")
+				return
+			}
+			log.Info().Ctx(ctx).
+				Str("room_id", roomID).
+				Str("model", newModel).
+				Msg("Image chat model changed")
+			matrix.SendMessage(roomID, fmt.Sprintf("Image chat model changed to: %s", newModel))
+		default:
+			matrix.SendMessage(roomID, "Usage: !chat model [text|image] <model_name>")
+		}
+
 	default:
 		matrix.SendMessage(roomID, "Unknown command")
 	}
@@ -241,6 +316,22 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 				}
 			}
 		}
+	}
+
+	// Select the appropriate model based on whether we have an image
+	var model string
+	if hasImage {
+		model = getImageModelForRoom(ctx, roomID)
+		log.Debug().Ctx(ctx).
+			Str("room_id", roomID).
+			Str("model", model).
+			Msg("Using image model for message with image")
+	} else {
+		model = getTextModelForRoom(ctx, roomID)
+		log.Debug().Ctx(ctx).
+			Str("room_id", roomID).
+			Str("model", model).
+			Msg("Using text model for message without image")
 	}
 
 	// Add the current message, handling image if present
