@@ -522,5 +522,20 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 		Int("response_length", len(assistantResponse)).
 		Msg("Chat command completed")
 
-	matrix.SendMarkdownFormattedNotice(roomID, assistantResponse)
+	// Create debug data with model info and tool calls
+	debugData := map[string]any{
+		"model":                model,
+		"prompt_message_count": len(messages),
+	}
+
+	// Add tool calls information if any were made
+	if len(chatResp.Choices) > 0 && len(chatResp.Choices[0].Message.ToolCalls) > 0 {
+		toolNames := make([]string, len(chatResp.Choices[0].Message.ToolCalls))
+		for i, toolCall := range chatResp.Choices[0].Message.ToolCalls {
+			toolNames[i] = toolCall.Function.Name
+		}
+		debugData["tool_calls"] = toolNames
+	}
+
+	matrix.SendMarkdownFormattedNoticeWithDebugData(roomID, assistantResponse, debugData)
 }
