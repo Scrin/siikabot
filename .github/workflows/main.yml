@@ -10,8 +10,8 @@ jobs:
     name: Build on ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
     outputs:
-      amd64-digest: ${{ steps.set-output.outputs.amd64-digest }}
-      arm64-digest: ${{ steps.set-output.outputs.arm64-digest }}
+      amd64-digest: ${{ steps.digest-output.outputs.digest }}
+      arm64-digest: ${{ steps.digest-output.outputs.digest }}
     strategy:
       matrix:
         include:
@@ -47,25 +47,25 @@ jobs:
           context: .
           push: true
           platforms: ${{ matrix.platform }}
-          tags: ghcr.io/scrin/siikabot:${{ matrix.arch }}-${{ github.sha }}
+          # Only push by digest, not by tag
+          outputs: type=image,name=ghcr.io/scrin/siikabot,push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          outputs: type=image,name=ghcr.io/scrin/siikabot:${{ matrix.arch }}-${{ github.sha }},push-by-digest=true,name-canonical=true,push=true
-      - name: Export digest
+      - name: Get digest
         id: digest
         run: |
-          echo "DIGEST=$(docker buildx imagetools inspect ghcr.io/scrin/siikabot:${{ matrix.arch }}-${{ github.sha }} --format '{{json .}}' | jq -r '.manifest.digest')" >> $GITHUB_OUTPUT
+          # Get the digest from the build output
+          DIGEST="${{ steps.docker_build.outputs.digest }}"
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+          echo "Digest: $DIGEST"
       - name: Store digest in step summary
         run: |
-          echo "${{ matrix.arch }}=${{ steps.digest.outputs.DIGEST }}" >> $GITHUB_STEP_SUMMARY
-      - name: Set job output
-        id: set-output
-        if: matrix.arch == 'amd64'
-        run: echo "amd64-digest=${{ steps.digest.outputs.DIGEST }}" >> $GITHUB_OUTPUT
-      - name: Set job output
-        if: matrix.arch == 'arm64'
-        run: echo "arm64-digest=${{ steps.digest.outputs.DIGEST }}" >> $GITHUB_OUTPUT
+          echo "${{ matrix.arch }}=${{ steps.digest.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
+      - name: Set digest output
+        id: digest-output
+        run: |
+          echo "digest=${{ steps.digest.outputs.digest }}" >> $GITHUB_OUTPUT
 
   create-manifest:
     name: Create and push manifest
