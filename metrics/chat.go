@@ -61,3 +61,11 @@ func RecordToolLatency(tool string, latencySec float64) {
 		toolLatencyHistogram.WithLabelValues(tool).Observe(latencySec)
 	}
 }
+
+// InitializeTool initializes the tool metrics to zero
+func InitializeTool(tool string) {
+	toolCalls.WithLabelValues(tool, "success")
+	toolCalls.WithLabelValues(tool, "failure")
+	toolLatency.WithLabelValues(tool)
+	toolLatencyHistogram.WithLabelValues(tool)
+}

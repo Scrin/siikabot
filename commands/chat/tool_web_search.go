@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/openrouter"
 	"github.com/rs/zerolog/log"
 )
@@ -19,13 +20,13 @@ var WebSearchToolDefinition = openrouter.ToolDefinition{
 	Type: "function",
 	Function: openrouter.FunctionSchema{
 		Name:        "web_search",
-		Description: "Search the web for information using DuckDuckGo. Use this tool to find up-to-date information about topics, definitions, or facts that you might not know about.",
+		Description: "Search the web for information using Google. Use this tool to find up-to-date information about topics, definitions, or facts that you might not know about.",
 		Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"query": {
 						"type": "string",
-						"description": "The search query to look up on the web. Be specific and concise for better results. Use english for best results."
+						"description": "The search query to look up on the web. Be specific and concise for better results."
 					}
 				},
 				"required": ["query"]
@@ -56,8 +57,8 @@ func handleWebSearchToolCall(ctx context.Context, arguments string) (string, err
 	// Sanitize and prepare the query
 	query := strings.TrimSpace(args.Query)
 
-	// Get search results from DuckDuckGo
-	searchResults, err := performDuckDuckGoSearch(ctx, query)
+	// Get search results from Google
+	searchResults, err := performGoogleSearch(ctx, query)
 	if err != nil {
 		return "", err
 	}
@@ -65,102 +66,78 @@ func handleWebSearchToolCall(ctx context.Context, arguments string) (string, err
 	return formatSearchResults(searchResults, query), nil
 }
 
-// DDGResponse represents the JSON response from the DuckDuckGo API
-type DDGResponse struct {
-	Abstract       string `json:"Abstract"`
-	AbstractText   string `json:"AbstractText"`
-	AbstractSource string `json:"AbstractSource"`
-	AbstractURL    string `json:"AbstractURL"`
-	Image          string `json:"Image"`
-	Heading        string `json:"Heading"`
-	Answer         string `json:"Answer"`
-	Redirect       string `json:"Redirect"`
-	AnswerType     string `json:"AnswerType"`
-	Definition     string `json:"Definition"`
-	DefinitionURL  string `json:"DefinitionURL"`
-	RelatedTopics  []struct {
-		Result     string `json:"Result"`
-		FirstURL   string `json:"FirstURL"`
-		Icon       string `json:"Icon"`
-		Text       string `json:"Text"`
-		Topics     []any  `json:"Topics,omitempty"`
-		Name       string `json:"Name,omitempty"`
-		Repository string `json:"Repository,omitempty"`
-	} `json:"RelatedTopics"`
-	Results []struct {
-		Result   string `json:"Result"`
-		FirstURL string `json:"FirstURL"`
-		Icon     string `json:"Icon"`
-		Text     string `json:"Text"`
-	} `json:"Results"`
-	Type   string `json:"Type"`
-	Entity string `json:"Entity"`
-	// Use a custom type for Infobox to handle both string and object cases
-	Infobox json.RawMessage `json:"Infobox"`
-	// Add meta field to capture additional information
-	Meta struct {
-		Attribution  interface{} `json:"attribution"`
-		Blockgroup   interface{} `json:"blockgroup"`
-		CreatedDate  string      `json:"created_date"`
-		Description  string      `json:"description"`
-		Designer     interface{} `json:"designer"`
-		DevDate      string      `json:"dev_date"`
-		DevMilestone string      `json:"dev_milestone"`
-		Developer    []struct {
-			Name string `json:"name"`
-			Type string `json:"type"`
-			URL  string `json:"url"`
-		} `json:"developer"`
-		ExampleQuery    string      `json:"example_query"`
-		ID              string      `json:"id"`
-		IsStackexchange int         `json:"is_stackexchange"`
-		JsCallbackName  string      `json:"js_callback_name"`
-		LiveDate        interface{} `json:"live_date"`
-		Maintainer      struct {
-			Github string `json:"github"`
-		} `json:"maintainer"`
-		Name            string      `json:"name"`
-		PerlModule      string      `json:"perl_module"`
-		Producer        interface{} `json:"producer"`
-		ProductionState string      `json:"production_state"`
-		Repo            string      `json:"repo"`
-		SignalFrom      string      `json:"signal_from"`
-		SrcDomain       string      `json:"src_domain"`
-		SrcID           interface{} `json:"src_id"`
-		SrcName         string      `json:"src_name"`
-		SrcOptions      interface{} `json:"src_options"`
-		SrcURL          string      `json:"src_url"`
-		Status          interface{} `json:"status"`
-		Tab             string      `json:"tab"`
-		Topic           []string    `json:"topic"`
-		Unsafe          interface{} `json:"unsafe"`
-	} `json:"meta"`
+// GoogleSearchResponse represents the JSON response from the Google Custom Search API
+type GoogleSearchResponse struct {
+	Kind string `json:"kind"`
+	URL  struct {
+		Type     string `json:"type"`
+		Template string `json:"template"`
+	} `json:"url"`
+	Queries struct {
+		Request  []GoogleSearchRequest `json:"request"`
+		NextPage []GoogleSearchRequest `json:"nextPage,omitempty"`
+	} `json:"queries"`
+	Context struct {
+		Title string `json:"title"`
+	} `json:"context"`
+	SearchInformation struct {
+		SearchTime            float64 `json:"searchTime"`
+		FormattedSearchTime   string  `json:"formattedSearchTime"`
+		TotalResults          string  `json:"totalResults"`
+		FormattedTotalResults string  `json:"formattedTotalResults"`
+	} `json:"searchInformation"`
+	Items []GoogleSearchItem `json:"items"`
 }
 
-// InfoboxContent represents the content of an infobox
-type InfoboxContent struct {
-	DataType  string `json:"data_type"`
-	Label     string `json:"label"`
-	Value     string `json:"value"`
-	WikiOrder int    `json:"wiki_order"`
+// GoogleSearchRequest represents a request in the Google Custom Search API response
+type GoogleSearchRequest struct {
+	Title          string `json:"title"`
+	TotalResults   string `json:"totalResults"`
+	SearchTerms    string `json:"searchTerms"`
+	Count          int    `json:"count"`
+	StartIndex     int    `json:"startIndex"`
+	InputEncoding  string `json:"inputEncoding"`
+	OutputEncoding string `json:"outputEncoding"`
+	Safe           string `json:"safe"`
+	Cx             string `json:"cx"`
 }
 
-// InfoboxStruct represents the structure of an infobox
-type InfoboxStruct struct {
-	Content []InfoboxContent `json:"content"`
+// GoogleSearchItem represents an item in the Google Custom Search API response
+type GoogleSearchItem struct {
+	Kind             string `json:"kind"`
+	Title            string `json:"title"`
+	HTMLTitle        string `json:"htmlTitle"`
+	Link             string `json:"link"`
+	DisplayLink      string `json:"displayLink"`
+	Snippet          string `json:"snippet"`
+	HTMLSnippet      string `json:"htmlSnippet"`
+	CacheID          string `json:"cacheId,omitempty"`
+	FormattedURL     string `json:"formattedUrl"`
+	HTMLFormattedURL string `json:"htmlFormattedUrl"`
+	Pagemap          struct {
+		CseThumbnail []struct {
+			Src    string `json:"src"`
+			Width  string `json:"width"`
+			Height string `json:"height"`
+		} `json:"cse_thumbnail,omitempty"`
+		Metatags []map[string]string `json:"metatags"`
+		CseImage []struct {
+			Src string `json:"src"`
+		} `json:"cse_image,omitempty"`
+	} `json:"pagemap,omitempty"`
 }
 
-// performDuckDuckGoSearch fetches search results from the DuckDuckGo API
-func performDuckDuckGoSearch(ctx context.Context, query string) (*DDGResponse, error) {
-	// Construct the URL for the DuckDuckGo API
-	baseURL := "https://api.duckduckgo.com/"
+// performGoogleSearch fetches search results from the Google Custom Search API
+func performGoogleSearch(ctx context.Context, query string) (*GoogleSearchResponse, error) {
+	// Construct the URL for the Google Custom Search API
+	baseURL := "https://www.googleapis.com/customsearch/v1"
 
 	// Create URL with query parameters
 	params := url.Values{}
 	params.Add("q", query)
-	params.Add("format", "json")
-	params.Add("no_html", "1")
-	params.Add("skip_disambig", "1")
+	params.Add("key", config.GoogleAPIKey)
+	params.Add("cx", config.GoogleSearchEngineID)
+	params.Add("num", "10") // Number of results to return (max 10)
 
 	requestURL := fmt.Sprintf("%s?%s", baseURL, params.Encode())
 
@@ -173,7 +150,7 @@ func performDuckDuckGoSearch(ctx context.Context, query string) (*DDGResponse, e
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Set a user agent to avoid being blocked
+	// Set a user agent
 	req.Header.Set("User-Agent", "SiikabotWebSearch/1.0")
 
 	// Execute the request
@@ -212,144 +189,75 @@ func performDuckDuckGoSearch(ctx context.Context, query string) (*DDGResponse, e
 	}
 
 	// Parse the JSON response
-	var searchResults DDGResponse
+	var searchResults GoogleSearchResponse
 	if err := json.Unmarshal(body, &searchResults); err != nil {
 		// Log the error and response for debugging
 		log.Error().Ctx(ctx).Err(err).Str("response", string(body)).Msg("Failed to parse web search API response")
 
 		// Try to create a minimal response with the raw data
-		// This allows us to return something even if the full parsing fails
-		return &DDGResponse{
-			AbstractText: fmt.Sprintf("Error parsing search results for query: %s", query),
-			RelatedTopics: []struct {
-				Result     string `json:"Result"`
-				FirstURL   string `json:"FirstURL"`
-				Icon       string `json:"Icon"`
-				Text       string `json:"Text"`
-				Topics     []any  `json:"Topics,omitempty"`
-				Name       string `json:"Name,omitempty"`
-				Repository string `json:"Repository,omitempty"`
-			}{},
-			Results: []struct {
-				Result   string `json:"Result"`
-				FirstURL string `json:"FirstURL"`
-				Icon     string `json:"Icon"`
-				Text     string `json:"Text"`
-			}{},
+		return &GoogleSearchResponse{
+			SearchInformation: struct {
+				SearchTime            float64 `json:"searchTime"`
+				FormattedSearchTime   string  `json:"formattedSearchTime"`
+				TotalResults          string  `json:"totalResults"`
+				FormattedTotalResults string  `json:"formattedTotalResults"`
+			}{
+				TotalResults: "0",
+			},
+			Items: []GoogleSearchItem{},
 		}, fmt.Errorf("failed to parse search results: %w", err)
 	}
 
 	// Check if we got any meaningful results
-	if searchResults.AbstractText == "" &&
-		searchResults.Answer == "" &&
-		searchResults.Definition == "" &&
-		len(searchResults.RelatedTopics) == 0 &&
-		len(searchResults.Results) == 0 {
-		log.Info().Ctx(ctx).Str("query", query).Msg("No meaningful results found for web search query")
+	if len(searchResults.Items) == 0 {
+		log.Info().Ctx(ctx).Str("query", query).Msg("No results found for web search query")
 	}
 
 	return &searchResults, nil
 }
 
 // formatSearchResults formats the search results into a readable string
-func formatSearchResults(data *DDGResponse, query string) string {
+func formatSearchResults(data *GoogleSearchResponse, query string) string {
 	var result strings.Builder
 
 	result.WriteString(fmt.Sprintf("## Web Search Results for: %s\n\n", query))
 
-	// Add the abstract if available
-	if data.AbstractText != "" {
-		result.WriteString(fmt.Sprintf("### %s\n", data.Heading))
-		result.WriteString(data.AbstractText)
-		if data.AbstractURL != "" {
-			result.WriteString(fmt.Sprintf("\n\nSource: [%s](%s)\n\n", data.AbstractSource, data.AbstractURL))
-		} else {
-			result.WriteString("\n\n")
-		}
-	}
-
-	// Add the answer if available
-	if data.Answer != "" {
-		result.WriteString(fmt.Sprintf("### Answer\n%s\n\n", data.Answer))
-	}
-
-	// Add the definition if available
-	if data.Definition != "" {
-		result.WriteString(fmt.Sprintf("### Definition\n%s\n", data.Definition))
-		if data.DefinitionURL != "" {
-			result.WriteString(fmt.Sprintf("Source: [%s](%s)\n\n", data.DefinitionURL, data.DefinitionURL))
-		} else {
-			result.WriteString("\n")
-		}
-	}
-
-	// Add related topics if available
-	if len(data.RelatedTopics) > 0 {
-		result.WriteString("### Related Information\n")
-
-		// Limit to 5 topics to avoid overwhelming responses
-		topicLimit := 5
-		if len(data.RelatedTopics) < topicLimit {
-			topicLimit = len(data.RelatedTopics)
-		}
-
-		for i := 0; i < topicLimit; i++ {
-			topic := data.RelatedTopics[i]
-			if topic.Text != "" {
-				if topic.FirstURL != "" {
-					result.WriteString(fmt.Sprintf("- [%s](%s)\n", topic.Text, topic.FirstURL))
-				} else {
-					result.WriteString(fmt.Sprintf("- %s\n", topic.Text))
-				}
-			}
-		}
-
-		if len(data.RelatedTopics) > topicLimit {
-			result.WriteString(fmt.Sprintf("\n*...and %d more related topics*\n", len(data.RelatedTopics)-topicLimit))
-		}
-
-		result.WriteString("\n")
-	}
-
-	// Add direct results if available
-	if len(data.Results) > 0 {
-		result.WriteString("### Direct Results\n")
-		for _, res := range data.Results {
-			if res.Text != "" && res.FirstURL != "" {
-				result.WriteString(fmt.Sprintf("- [%s](%s)\n", res.Text, res.FirstURL))
-			}
-		}
-		result.WriteString("\n")
-	}
-
-	// Add infobox content if available
-	// Try to parse the infobox if it's not an empty string
-	if len(data.Infobox) > 0 && string(data.Infobox) != "\"\"" {
-		var infobox InfoboxStruct
-		if err := json.Unmarshal(data.Infobox, &infobox); err == nil && len(infobox.Content) > 0 {
-			result.WriteString("### Additional Information\n")
-			for _, item := range infobox.Content {
-				if item.Label != "" && item.Value != "" {
-					// Clean up the value (remove HTML tags)
-					value := strings.ReplaceAll(item.Value, "<", "&lt;")
-					value = strings.ReplaceAll(value, ">", "&gt;")
-					result.WriteString(fmt.Sprintf("- **%s**: %s\n", item.Label, value))
-				}
-			}
-			result.WriteString("\n")
-		}
+	// Add search information
+	if data.SearchInformation.TotalResults != "0" {
+		result.WriteString(fmt.Sprintf("Found about %s results (%s seconds)\n\n",
+			data.SearchInformation.FormattedTotalResults,
+			data.SearchInformation.FormattedSearchTime))
 	}
 
 	// If no results were found
-	if data.AbstractText == "" && data.Answer == "" && data.Definition == "" &&
-		len(data.RelatedTopics) == 0 && len(data.Results) == 0 {
-		result.WriteString("No specific results found for this query. Try refining your search terms.\n")
+	if len(data.Items) == 0 {
+		result.WriteString("No results found for this query. Try refining your search terms.\n")
+		return result.String()
 	}
 
-	// Add source information if available
-	if data.Meta.SrcName != "" {
-		result.WriteString(fmt.Sprintf("\n*Data provided by %s*\n", data.Meta.SrcName))
+	// Add search results
+	for i, item := range data.Items {
+		// Limit to 10 results
+		if i >= 10 {
+			break
+		}
+
+		// Clean up the snippet (remove HTML tags)
+		snippet := strings.ReplaceAll(item.Snippet, "<b>", "**")
+		snippet = strings.ReplaceAll(snippet, "</b>", "**")
+		snippet = strings.ReplaceAll(snippet, "<br>", "\n")
+		snippet = strings.ReplaceAll(snippet, "&nbsp;", " ")
+		snippet = strings.ReplaceAll(snippet, "&quot;", "\"")
+		snippet = strings.ReplaceAll(snippet, "&amp;", "&")
+		snippet = strings.ReplaceAll(snippet, "&lt;", "<")
+		snippet = strings.ReplaceAll(snippet, "&gt;", ">")
+
+		result.WriteString(fmt.Sprintf("### [%s](%s)\n", item.Title, item.Link))
+		result.WriteString(fmt.Sprintf("*%s*\n\n", item.DisplayLink))
+		result.WriteString(fmt.Sprintf("%s\n\n", snippet))
 	}
+
+	result.WriteString("\n*Data provided by Google Custom Search*\n")
 
 	return result.String()
 }

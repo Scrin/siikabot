@@ -63,6 +63,7 @@ func NewToolRegistry() *ToolRegistry {
 
 // RegisterTool registers a tool with the registry
 func (r *ToolRegistry) RegisterTool(definition ToolDefinition) {
+	metrics.InitializeTool(definition.Function.Name)
 	r.definitions[definition.Function.Name] = definition
 	r.handlers[definition.Function.Name] = definition.Handler
 }

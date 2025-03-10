@@ -23,6 +23,8 @@ var (
 	PickleKey                = ""
 	Debug                    = false
 	Timezone                 = ""
+	GoogleAPIKey             = ""
+	GoogleSearchEngineID     = ""
 )
 
 func loadConfig() error {
@@ -35,6 +37,8 @@ func loadConfig() error {
 	PostgresConnectionString = os.Getenv("SIIKABOT_POSTGRES_CONNECTION_STRING")
 	PickleKey = os.Getenv("SIIKABOT_PICKLE_KEY")
 	Timezone = os.Getenv("SIIKABOT_TIMEZONE")
+	GoogleAPIKey = os.Getenv("SIIKABOT_GOOGLE_API_KEY")
+	GoogleSearchEngineID = os.Getenv("SIIKABOT_GOOGLE_SEARCH_ENGINE_ID")
 
 	if HomeserverURL == "" {
 		return fmt.Errorf("SIIKABOT_HOMESERVER_URL is not set")
@@ -62,6 +66,12 @@ func loadConfig() error {
 	}
 	if Timezone == "" {
 		return fmt.Errorf("SIIKABOT_TIMEZONE is not set")
+	}
+	if GoogleAPIKey == "" {
+		return fmt.Errorf("SIIKABOT_GOOGLE_API_KEY is not set")
+	}
+	if GoogleSearchEngineID == "" {
+		return fmt.Errorf("SIIKABOT_GOOGLE_SEARCH_ENGINE_ID is not set")
 	}
 	return nil
 }
