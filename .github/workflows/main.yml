@@ -6,21 +6,11 @@ on:
       - master
 
 jobs:
-  docker-build:
-    name: Build on ${{ matrix.platform }}
-    runs-on: ${{ matrix.runner }}
+  docker-build-amd64:
+    name: Build AMD64 image
+    runs-on: ubuntu-latest
     outputs:
-      amd64-digest: ${{ steps.digest-output.outputs.digest }}
-      arm64-digest: ${{ steps.digest-output.outputs.digest }}
-    strategy:
-      matrix:
-        include:
-          - platform: linux/amd64
-            runner: ubuntu-latest
-            arch: amd64
-          - platform: linux/arm64
-            runner: ubuntu-24.04-arm
-            arch: arm64
+      digest: ${{ steps.digest.outputs.digest }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,44 +22,67 @@ jobs:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/scrin/siikabot
-          tags: |
-            type=raw,value=latest
-            type=sha,format=short
       - name: Build and push
         id: docker_build
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          platforms: ${{ matrix.platform }}
-          # Only push by digest, not by tag
+          platforms: linux/amd64
           outputs: type=image,name=ghcr.io/scrin/siikabot,push-by-digest=true,name-canonical=true,push=true
-          labels: ${{ steps.meta.outputs.labels }}
+          labels: ${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Get digest
         id: digest
         run: |
-          # Get the digest from the build output
           DIGEST="${{ steps.docker_build.outputs.digest }}"
           echo "digest=$DIGEST" >> $GITHUB_OUTPUT
-          echo "Digest: $DIGEST"
+          echo "AMD64 Digest: $DIGEST"
       - name: Store digest in step summary
         run: |
-          echo "${{ matrix.arch }}=${{ steps.digest.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
-      - name: Set digest output
-        id: digest-output
+          echo "amd64=${{ steps.digest.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
+
+  docker-build-arm64:
+    name: Build ARM64 image
+    runs-on: ubuntu-24.04-arm
+    outputs:
+      digest: ${{ steps.digest.outputs.digest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        id: docker_build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          platforms: linux/arm64
+          outputs: type=image,name=ghcr.io/scrin/siikabot,push-by-digest=true,name-canonical=true,push=true
+          labels: ${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Get digest
+        id: digest
         run: |
-          echo "digest=${{ steps.digest.outputs.digest }}" >> $GITHUB_OUTPUT
+          DIGEST="${{ steps.docker_build.outputs.digest }}"
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+          echo "ARM64 Digest: $DIGEST"
+      - name: Store digest in step summary
+        run: |
+          echo "arm64=${{ steps.digest.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
 
   create-manifest:
     name: Create and push manifest
-    needs: docker-build
+    needs: [docker-build-amd64, docker-build-arm64]
     runs-on: ubuntu-latest
     steps:
       - name: Set up Docker Buildx
@@ -83,8 +96,8 @@ jobs:
       - name: Create and push manifest
         run: |
           # Get digests from job outputs
-          AMD64_DIGEST="${{ needs.docker-build.outputs.amd64-digest }}"
-          ARM64_DIGEST="${{ needs.docker-build.outputs.arm64-digest }}"
+          AMD64_DIGEST="${{ needs.docker-build-amd64.outputs.digest }}"
+          ARM64_DIGEST="${{ needs.docker-build-arm64.outputs.digest }}"
           
           echo "Using AMD64 digest: $AMD64_DIGEST"
           echo "Using ARM64 digest: $ARM64_DIGEST"
