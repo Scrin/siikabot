@@ -1,9 +1,21 @@
-FROM golang:1.24
+FROM golang:1.24 AS builder
 
-RUN apt-get update && apt-get install -y libolm-dev inetutils-ping traceroute && apt-get clean
+RUN apt-get update && apt-get install -y libolm-dev && apt-get clean
 
 WORKDIR /go/src/github.com/Scrin/siikabot/
-COPY . ./
-RUN go install .
+COPY go.mod go.sum ./
+RUN go mod download
 
-CMD siikabot
+COPY . ./
+RUN CGO_ENABLED=1 go build -o /go/bin/siikabot
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && \
+  apt-get install -y --no-install-recommends libolm3 ca-certificates inetutils-ping traceroute && \
+  apt-get clean && \
+  rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /go/bin/siikabot /usr/local/bin/siikabot
+
+CMD ["siikabot"]
