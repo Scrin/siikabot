@@ -9,7 +9,6 @@ import (
 	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/matrix"
-	"github.com/Scrin/siikabot/metrics"
 	"github.com/Scrin/siikabot/openrouter"
 	"github.com/rs/zerolog/log"
 )
@@ -442,11 +441,6 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 			Msg("Unexpected response content type")
 	}
 
-	// Record character counts
-	inputChars := len(msg)
-	outputChars := len(assistantResponse)
-	metrics.RecordChatCharacters(req.Model, inputChars, outputChars)
-
 	// Check if the model wants to use a tool
 	if chatResp.Choices[0].FinishReason == "tool_calls" && len(chatResp.Choices[0].Message.ToolCalls) > 0 {
 		log.Debug().Ctx(ctx).
@@ -527,18 +521,9 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 			matrix.SendMessage(roomID, "No response from chat API")
 			return
 		} else {
-			// Record character counts for the second call
-			secondInputChars := 0
-			for _, resp := range toolResponses {
-				secondInputChars += len(resp.Response)
-			}
-
 			// Get the assistant's response from the second request
 			if content, ok := secondChatResp.Choices[0].Message.Content.(string); ok {
 				assistantResponse = content
-				secondOutputChars := len(assistantResponse)
-				metrics.RecordChatCharacters(req.Model, secondInputChars, secondOutputChars)
-
 				log.Debug().Ctx(ctx).
 					Str("room_id", roomID).
 					Str("sender", sender).
@@ -557,8 +542,6 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 
 				if text, ok := contentMap["text"].(string); ok {
 					assistantResponse = text
-					secondOutputChars := len(assistantResponse)
-					metrics.RecordChatCharacters(req.Model, secondInputChars, secondOutputChars)
 				} else {
 					assistantResponse = "I processed your request, but couldn't generate a proper response."
 					log.Warn().Ctx(ctx).

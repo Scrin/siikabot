@@ -119,7 +119,7 @@ func handleReminderToolCall(ctx context.Context, arguments string) (string, erro
 	// Get the timezone
 	loc, _ := time.LoadLocation(config.Timezone)
 
-	matrix.SendFormattedNotice(roomID, "Reminding at "+reminderTime.In(loc).Format("15:04:05 on 2.1.2006")+" (in "+duration.String()+"): "+reminderText)
+	matrix.SendFormattedNotice(roomID, "[AI tool call] Reminding at "+reminderTime.In(loc).Format("15:04:05 on 2.1.2006")+" (in "+duration.String()+"): "+reminderText)
 
 	log.Info().
 		Str("room_id", roomID).

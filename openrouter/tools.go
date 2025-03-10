@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync"
+	"time"
 
 	"github.com/Scrin/siikabot/metrics"
 	"github.com/rs/zerolog/log"
@@ -119,7 +119,9 @@ func (r *ToolRegistry) HandleToolCallsIndividually(ctx context.Context, toolCall
 				return
 			}
 
+			startTime := time.Now()
 			response, err := handler(ctx, currentCall.Function.Arguments)
+			executionTime := time.Since(startTime).Seconds()
 
 			mu.Lock()
 			defer mu.Unlock()
@@ -128,6 +130,7 @@ func (r *ToolRegistry) HandleToolCallsIndividually(ctx context.Context, toolCall
 				log.Error().Ctx(ctx).Err(err).
 					Str("tool", currentCall.Function.Name).
 					Str("arguments", currentCall.Function.Arguments).
+					Float64("execution_time_sec", executionTime).
 					Msg("Tool call failed")
 				metrics.RecordToolCall(currentCall.Function.Name, false)
 				responses = append(responses, ToolResponse{
@@ -139,8 +142,10 @@ func (r *ToolRegistry) HandleToolCallsIndividually(ctx context.Context, toolCall
 					Str("tool", currentCall.Function.Name).
 					Str("arguments", currentCall.Function.Arguments).
 					Int("response_length", len(response)).
+					Float64("execution_time_sec", executionTime).
 					Msg("Tool call succeeded")
 				metrics.RecordToolCall(currentCall.Function.Name, true)
+				metrics.RecordToolLatency(currentCall.Function.Name, executionTime)
 				responses = append(responses, ToolResponse{
 					ToolCallID: currentCall.ID,
 					Response:   response,
@@ -153,48 +158,4 @@ func (r *ToolRegistry) HandleToolCallsIndividually(ctx context.Context, toolCall
 	wg.Wait()
 
 	return responses, nil
-}
-
-// HandleToolCalls processes multiple tool calls and returns a combined response
-func (r *ToolRegistry) HandleToolCalls(ctx context.Context, toolCalls []ToolCall) (string, error) {
-	if len(toolCalls) == 0 {
-		return "", nil
-	}
-
-	var responses []string
-	for _, call := range toolCalls {
-		if call.Type != "function" {
-			continue
-		}
-
-		handler, exists := r.handlers[call.Function.Name]
-		if !exists {
-			log.Warn().Ctx(ctx).
-				Str("tool", call.Function.Name).
-				Msg("Unknown tool called")
-			metrics.RecordToolCall(call.Function.Name, false)
-			responses = append(responses, fmt.Sprintf("Unknown tool: %s", call.Function.Name))
-			continue
-		}
-
-		response, err := handler(ctx, call.Function.Arguments)
-		if err != nil {
-			log.Error().Ctx(ctx).Err(err).
-				Str("tool", call.Function.Name).
-				Str("arguments", call.Function.Arguments).
-				Msg("Tool call failed")
-			metrics.RecordToolCall(call.Function.Name, false)
-			responses = append(responses, fmt.Sprintf("Error executing %s: %s", call.Function.Name, err.Error()))
-		} else {
-			log.Debug().Ctx(ctx).
-				Str("tool", call.Function.Name).
-				Str("arguments", call.Function.Arguments).
-				Int("response_length", len(response)).
-				Msg("Tool call succeeded")
-			metrics.RecordToolCall(call.Function.Name, true)
-			responses = append(responses, response)
-		}
-	}
-
-	return strings.Join(responses, "\n\n"), nil
 }
