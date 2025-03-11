@@ -160,13 +160,8 @@ func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relat
 	// Build messages array with system prompt, history, and current message
 	messages := []openrouter.Message{{Role: "system", Content: systemPrompt}}
 
-	// Add conversation history
-	for _, historyMsg := range history {
-		messages = append(messages, openrouter.Message{
-			Role:    historyMsg.Role,
-			Content: historyMsg.Message,
-		})
-	}
+	// Process history to include tool calls and tool responses
+	processHistoryMessages(ctx, history, &messages)
 
 	// Flag to track if we're handling an image
 	hasImage := false
@@ -205,6 +200,95 @@ func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relat
 	}
 
 	return messages, hasImage, model
+}
+
+// processHistoryMessages processes the chat history and adds it to the messages array
+func processHistoryMessages(ctx context.Context, history []db.ChatMessage, messages *[]openrouter.Message) {
+	// Group tool calls and their responses
+	toolCallMap := make(map[string]openrouter.ToolCall)
+	toolResponseMap := make(map[string]string)
+
+	// First pass: collect tool calls and tool responses
+	for _, historyMsg := range history {
+
+		messageType := historyMsg.MessageType
+
+		if messageType == "tool_call" && historyMsg.ToolCallID != nil && historyMsg.ToolName != nil {
+			// Create a tool call object
+			toolCallMap[*historyMsg.ToolCallID] = openrouter.ToolCall{
+				ID:   *historyMsg.ToolCallID,
+				Type: "function",
+				Function: openrouter.ToolFunction{
+					Name:      *historyMsg.ToolName,
+					Arguments: historyMsg.Message,
+				},
+			}
+		} else if messageType == "tool_response" && historyMsg.ToolCallID != nil {
+			// Store the tool response
+			toolResponseMap[*historyMsg.ToolCallID] = historyMsg.Message
+		} else if messageType == "text" || messageType == "" {
+			// Regular text message
+			*messages = append(*messages, openrouter.Message{
+				Role:    historyMsg.Role,
+				Content: historyMsg.Message,
+			})
+		}
+	}
+
+	// If no tool calls were found, we're done
+	if len(toolCallMap) == 0 {
+		return
+	}
+
+	// Second pass: add messages in order, grouping tool calls and responses
+	var currentToolCalls []openrouter.ToolCall
+	var pendingToolCallIDs []string
+
+	for i, historyMsg := range history {
+
+		messageType := historyMsg.MessageType
+
+		if messageType == "tool_call" && historyMsg.ToolCallID != nil {
+			// Add to current batch of tool calls
+			toolCallID := *historyMsg.ToolCallID
+			if toolCall, ok := toolCallMap[toolCallID]; ok {
+				currentToolCalls = append(currentToolCalls, toolCall)
+				pendingToolCallIDs = append(pendingToolCallIDs, toolCallID)
+			}
+
+			// Check if this is the last message or if the next message is not a tool call
+			isLastMessage := i == len(history)-1
+			isNextMessageNotToolCall := !isLastMessage && (history[i+1].MessageType != "tool_call")
+
+			if isLastMessage || isNextMessageNotToolCall {
+				// Add the assistant message with all collected tool calls
+				if len(currentToolCalls) > 0 {
+					*messages = append(*messages, openrouter.Message{
+						Role:      "assistant",
+						Content:   "",
+						ToolCalls: currentToolCalls,
+					})
+
+					// Add tool responses for these tool calls
+					for _, toolCallID := range pendingToolCallIDs {
+						if response, ok := toolResponseMap[toolCallID]; ok {
+							*messages = append(*messages, openrouter.Message{
+								Role:       "tool",
+								Content:    response,
+								ToolCallID: toolCallID,
+							})
+						}
+					}
+
+					// Reset for next batch
+					currentToolCalls = nil
+					pendingToolCallIDs = nil
+				}
+			}
+		}
+		// Skip tool_response messages as they're handled with their corresponding tool calls
+		// Skip text messages as they're handled in the first pass
+	}
 }
 
 // processRelatedMessage handles messages that are replies to other messages
@@ -509,6 +593,20 @@ func processToolCalls(
 			ToolCalls: currentResp.Choices[0].Message.ToolCalls,
 		})
 
+		// Save each tool call to the database
+		for _, toolCall := range currentResp.Choices[0].Message.ToolCalls {
+			// Save the tool call to the database
+			err := db.SaveToolCall(ctx, roomID, config.UserID, toolCall.ID, toolCall.Function.Name, toolCall.Function.Arguments)
+			if err != nil {
+				log.Error().Ctx(ctx).Err(err).
+					Str("room_id", roomID).
+					Str("tool_call_id", toolCall.ID).
+					Str("tool_name", toolCall.Function.Name).
+					Msg("Failed to save tool call to history")
+				// Continue even if saving fails
+			}
+		}
+
 		// Process tool calls
 		toolResponses, err := toolRegistry.HandleToolCallsIndividually(toolCtx, currentResp.Choices[0].Message.ToolCalls)
 		if err != nil {
@@ -528,6 +626,26 @@ func processToolCalls(
 				Content:    toolResp.Response,
 				ToolCallID: toolResp.ToolCallID,
 			})
+
+			// Save the tool response to the database
+			// Find the tool name from the tool calls
+			var toolName string
+			for _, toolCall := range currentResp.Choices[0].Message.ToolCalls {
+				if toolCall.ID == toolResp.ToolCallID {
+					toolName = toolCall.Function.Name
+					break
+				}
+			}
+
+			err := db.SaveToolResponse(ctx, roomID, config.UserID, toolResp.ToolCallID, toolName, toolResp.Response)
+			if err != nil {
+				log.Error().Ctx(ctx).Err(err).
+					Str("room_id", roomID).
+					Str("tool_call_id", toolResp.ToolCallID).
+					Str("tool_name", toolName).
+					Msg("Failed to save tool response to history")
+				// Continue even if saving fails
+			}
 		}
 
 		// Update the request with the new messages
@@ -609,6 +727,20 @@ func processToolCalls(
 			ToolCalls: currentResp.Choices[0].Message.ToolCalls,
 		})
 
+		// Save each tool call to the database
+		for _, toolCall := range currentResp.Choices[0].Message.ToolCalls {
+			// Save the tool call to the database
+			err := db.SaveToolCall(ctx, roomID, config.UserID, toolCall.ID, toolCall.Function.Name, toolCall.Function.Arguments)
+			if err != nil {
+				log.Error().Ctx(ctx).Err(err).
+					Str("room_id", roomID).
+					Str("tool_call_id", toolCall.ID).
+					Str("tool_name", toolCall.Function.Name).
+					Msg("Failed to save tool call to history")
+				// Continue even if saving fails
+			}
+		}
+
 		// Process the final tool calls
 		toolResponses, err := toolRegistry.HandleToolCallsIndividually(toolCtx, currentResp.Choices[0].Message.ToolCalls)
 		if err == nil {
@@ -619,6 +751,26 @@ func processToolCalls(
 					Content:    toolResp.Response,
 					ToolCallID: toolResp.ToolCallID,
 				})
+
+				// Save the tool response to the database
+				// Find the tool name from the tool calls
+				var toolName string
+				for _, toolCall := range currentResp.Choices[0].Message.ToolCalls {
+					if toolCall.ID == toolResp.ToolCallID {
+						toolName = toolCall.Function.Name
+						break
+					}
+				}
+
+				err := db.SaveToolResponse(ctx, roomID, config.UserID, toolResp.ToolCallID, toolName, toolResp.Response)
+				if err != nil {
+					log.Error().Ctx(ctx).Err(err).
+						Str("room_id", roomID).
+						Str("tool_call_id", toolResp.ToolCallID).
+						Str("tool_name", toolName).
+						Msg("Failed to save tool response to history")
+					// Continue even if saving fails
+				}
 			}
 		}
 
