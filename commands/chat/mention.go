@@ -152,7 +152,8 @@ func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relat
 	)
 
 	// Get conversation history
-	history, err := db.GetChatHistory(ctx, roomID, maxHistoryMessages)
+	maxHistory := getMaxHistoryMessagesForRoom(ctx, roomID)
+	history, err := db.GetChatHistory(ctx, roomID, maxHistory)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Msg("Failed to get chat history")
 		// Continue without history if there's an error
@@ -577,13 +578,13 @@ func processToolCalls(
 ) (int, []openrouter.Message, string) {
 	// Implement iterative tool calling with a maximum of 5 iterations
 	currentResp := chatResp
-	iterationCount := 0
-	maxIterations := 5
+	iterationCount := 1 // by the time we're here, we've already made one request
 
 	// Create a new context with room ID and sender for tool calls
 	toolCtx := context.WithValue(ctx, "room_id", roomID)
 	toolCtx = context.WithValue(toolCtx, "sender", sender)
 
+	maxIterations := getMaxToolIterationsForRoom(ctx, roomID)
 	for iterationCount < maxIterations {
 		iterationCount++
 

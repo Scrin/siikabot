@@ -15,8 +15,9 @@ import (
 
 const defaultModel = "openai/gpt-4o-mini"
 
-// Maximum number of previous messages to include in the conversation history
-const maxHistoryMessages = 20
+// Default values for configurable parameters
+const defaultMaxHistoryMessages = 20
+const defaultMaxToolIterations = 5
 
 // How long to keep chat history before cleaning it up
 const chatHistoryRetention = 7 * 24 * time.Hour // 7 days
@@ -70,20 +71,40 @@ func cleanupChatHistory(ctx context.Context) {
 // If no room-specific model is set, returns the default model
 func getTextModelForRoom(ctx context.Context, roomID string) string {
 	model, err := db.GetRoomChatLLMModelText(ctx, roomID)
-	if err != nil || model == "" {
+	if err != nil || model == nil {
 		return defaultModel
 	}
-	return model
+	return *model
 }
 
 // getImageModelForRoom returns the model to use for image messages in a specific room
 // If no room-specific model is set, returns the default model
 func getImageModelForRoom(ctx context.Context, roomID string) string {
 	model, err := db.GetRoomChatLLMModelImage(ctx, roomID)
-	if err != nil || model == "" {
+	if err != nil || model == nil {
 		return defaultModel
 	}
-	return model
+	return *model
+}
+
+// getMaxHistoryMessagesForRoom returns the max history messages to use for a specific room
+// If no room-specific value is set, returns the default value
+func getMaxHistoryMessagesForRoom(ctx context.Context, roomID string) int {
+	maxMessages, err := db.GetRoomChatMaxHistoryMessages(ctx, roomID)
+	if err != nil || maxMessages == nil {
+		return defaultMaxHistoryMessages
+	}
+	return *maxMessages
+}
+
+// getMaxToolIterationsForRoom returns the max tool iterations to use for a specific room
+// If no room-specific value is set, returns the default value
+func getMaxToolIterationsForRoom(ctx context.Context, roomID string) int {
+	maxIterations, err := db.GetRoomChatMaxToolIterations(ctx, roomID)
+	if err != nil || maxIterations == nil {
+		return defaultMaxToolIterations
+	}
+	return *maxIterations
 }
 
 func Handle(ctx context.Context, roomID, sender, msg string) {
@@ -106,7 +127,15 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 		// Show current configuration for the room
 		textModel := getTextModelForRoom(ctx, roomID)
 		imageModel := getImageModelForRoom(ctx, roomID)
-		matrix.SendMessage(roomID, fmt.Sprintf("Current chat configuration for this room:\nText model: %s\nImage model: %s", textModel, imageModel))
+		maxHistoryMessages := getMaxHistoryMessagesForRoom(ctx, roomID)
+		maxToolIterations := getMaxToolIterationsForRoom(ctx, roomID)
+
+		matrix.SendMessage(roomID, fmt.Sprintf("Current chat configuration for this room:\n"+
+			"Text model: %s\n"+
+			"Image model: %s\n"+
+			"Max history messages: %d\n"+
+			"Max tool iterations: %d",
+			textModel, imageModel, maxHistoryMessages, maxToolIterations))
 	case "model":
 		if len(split) < 4 {
 			matrix.SendMessage(roomID, "Usage: !chat model [text|image] <model_name>")
@@ -155,7 +184,70 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 		default:
 			matrix.SendMessage(roomID, "Usage: !chat model [text|image] <model_name>")
 		}
+	case "history":
+		if len(split) < 3 {
+			matrix.SendMessage(roomID, "Usage: !chat history <max_messages>")
+			return
+		}
 
+		if sender != config.Admin {
+			matrix.SendMessage(roomID, "Only admins can change the max history messages")
+			return
+		}
+
+		var maxMessages int
+		_, err := fmt.Sscanf(split[2], "%d", &maxMessages)
+		if err != nil || maxMessages <= 0 {
+			matrix.SendMessage(roomID, "Max messages must be a positive integer")
+			return
+		}
+
+		err = db.SetRoomChatMaxHistoryMessages(ctx, roomID, maxMessages)
+		if err != nil {
+			log.Error().Ctx(ctx).Err(err).
+				Str("room_id", roomID).
+				Int("max_messages", maxMessages).
+				Msg("Failed to set room max history messages")
+			matrix.SendMessage(roomID, "Failed to set max history messages")
+			return
+		}
+		log.Info().Ctx(ctx).
+			Str("room_id", roomID).
+			Int("max_messages", maxMessages).
+			Msg("Max history messages changed")
+		matrix.SendMessage(roomID, fmt.Sprintf("Max history messages changed to: %d", maxMessages))
+	case "tools":
+		if len(split) < 3 {
+			matrix.SendMessage(roomID, "Usage: !chat tools <max_iterations>")
+			return
+		}
+
+		if sender != config.Admin {
+			matrix.SendMessage(roomID, "Only admins can change the max tool iterations")
+			return
+		}
+
+		var maxIterations int
+		_, err := fmt.Sscanf(split[2], "%d", &maxIterations)
+		if err != nil || maxIterations <= 0 {
+			matrix.SendMessage(roomID, "Max iterations must be a positive integer")
+			return
+		}
+
+		err = db.SetRoomChatMaxToolIterations(ctx, roomID, maxIterations)
+		if err != nil {
+			log.Error().Ctx(ctx).Err(err).
+				Str("room_id", roomID).
+				Int("max_iterations", maxIterations).
+				Msg("Failed to set room max tool iterations")
+			matrix.SendMessage(roomID, "Failed to set max tool iterations")
+			return
+		}
+		log.Info().Ctx(ctx).
+			Str("room_id", roomID).
+			Int("max_iterations", maxIterations).
+			Msg("Max tool iterations changed")
+		matrix.SendMessage(roomID, fmt.Sprintf("Max tool iterations changed to: %d", maxIterations))
 	default:
 		matrix.SendMessage(roomID, "Unknown command")
 	}
