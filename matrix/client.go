@@ -37,7 +37,7 @@ type simpleMessage struct {
 	Body          string         `json:"body"`
 	Format        string         `json:"format,omitempty"`
 	FormattedBody string         `json:"formatted_body,omitempty"`
-	DebugData     map[string]any `json:"fi.2kgwf.debug_data,omitempty"`
+	DebugData     map[string]any `json:"fi.2kgwf.debug,omitempty"`
 }
 
 type messageEdit struct {

@@ -36,6 +36,7 @@ func Init(ctx context.Context) {
 	toolRegistry.RegisterTool(NewsToolDefinition)
 	toolRegistry.RegisterTool(WebSearchToolDefinition)
 	toolRegistry.RegisterTool(ReminderToolDefinition)
+	toolRegistry.RegisterTool(GitHubIssueToolDefinition)
 
 	// Start a goroutine to periodically clean up old chat history
 	go func() {
