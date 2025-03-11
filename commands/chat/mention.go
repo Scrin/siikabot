@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -826,19 +827,58 @@ func buildDebugData(model string, messages []openrouter.Message, iterationCount 
 		"prompt_message_count": len(messages),
 	}
 
-	// Add tool calls information if any were made
+	// Add tool calls information if any were made during the current processing
 	if iterationCount > 0 {
-		// Collect all tool calls from the conversation history
-		var allToolCalls []string
-		for _, msg := range messages {
-			if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
-				for _, toolCall := range msg.ToolCalls {
-					allToolCalls = append(allToolCalls, toolCall.Function.Name)
-				}
+		// Find the index of the last user message
+		lastUserMsgIndex := -1
+		for i := len(messages) - 1; i >= 0; i-- {
+			if messages[i].Role == "user" {
+				lastUserMsgIndex = i
+				break
 			}
 		}
 
-		debugData["tool_calls"] = allToolCalls
+		// Only include tool calls that happened after the last user message
+		toolCalls := make(map[string][]map[string]any)
+		currentIteration := 1
+
+		for i, msg := range messages {
+			// Only process messages that come after the last user message
+			if i > lastUserMsgIndex && msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+				currentIterationStr := fmt.Sprintf("iteration_%d", currentIteration)
+				// Create a slice for this iteration if it doesn't exist
+				if _, exists := toolCalls[currentIterationStr]; !exists {
+					toolCalls[currentIterationStr] = []map[string]any{}
+				}
+
+				// Add all tool calls for this iteration
+				for _, toolCall := range msg.ToolCalls {
+					// Parse arguments as JSON if possible
+					var args map[string]any
+					if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
+						// If parsing fails, use the raw string
+						args = map[string]any{"raw": toolCall.Function.Arguments}
+					}
+
+					toolCalls[currentIterationStr] = append(
+						toolCalls[currentIterationStr],
+						map[string]any{
+							"name": toolCall.Function.Name,
+							"args": args,
+						},
+					)
+				}
+
+				// Move to the next iteration
+				currentIteration++
+			}
+		}
+
+		// Only add tool_calls if there are any
+		if len(toolCalls) > 0 {
+			debugData["tool_calls"] = toolCalls
+		}
+
 		debugData["tool_iterations"] = iterationCount
 	}
 
