@@ -112,12 +112,6 @@ func containsBotMention(plainMsg, formattedMsg string) bool {
 		plainMsgWithoutUrls = strings.Replace(plainMsgWithoutUrls, url, "", -1)
 	}
 
-	// Check for mention in plain text by user ID (e.g., @siikabot)
-	botUserName := strings.Split(config.UserID, ":")[0][1:] // Remove @ and domain part
-	if strings.Contains(strings.ToLower(plainMsgWithoutUrls), "@"+strings.ToLower(botUserName)) {
-		return true
-	}
-
 	// Check for mention in plain text by display name
 	botDisplayName := matrix.GetDisplayName(context.Background(), config.UserID)
 	if botDisplayName != "" && strings.Contains(strings.ToLower(plainMsgWithoutUrls), strings.ToLower(botDisplayName)) {
