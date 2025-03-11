@@ -171,7 +171,7 @@ func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relat
 
 	// Check if this message is a reply to another message
 	if relatesTo != nil {
-		base64ImageURL = processRelatedMessage(ctx, roomID, relatesTo, messages)
+		base64ImageURL = processRelatedMessage(ctx, roomID, relatesTo, &messages)
 		if base64ImageURL != "" {
 			hasImage = true
 		}
@@ -195,7 +195,7 @@ func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relat
 
 	// Add the current message, handling image if present
 	if hasImage {
-		hasImage, messages = processImageMessage(ctx, roomID, msg, base64ImageURL, messages)
+		hasImage, messages = processImageMessage(ctx, roomID, msg, base64ImageURL, &messages)
 	} else {
 		// Regular text message
 		messages = append(messages, openrouter.Message{Role: "user", Content: msg})
@@ -295,7 +295,7 @@ func processHistoryMessages(ctx context.Context, history []db.ChatMessage, messa
 
 // processRelatedMessage handles messages that are replies to other messages
 // Returns base64ImageURL if the message is a reply to an image
-func processRelatedMessage(ctx context.Context, roomID string, relatesTo map[string]interface{}, messages []openrouter.Message) string {
+func processRelatedMessage(ctx context.Context, roomID string, relatesTo map[string]interface{}, messages *[]openrouter.Message) string {
 	log.Debug().Ctx(ctx).
 		Str("room_id", roomID).
 		Interface("relates_to", relatesTo).
@@ -331,7 +331,7 @@ func processRelatedMessage(ctx context.Context, roomID string, relatesTo map[str
 
 // processRepliedImage handles replies to image messages
 // Returns the base64 encoded image URL if successful
-func processRepliedImage(ctx context.Context, roomID, replyEventID string, messages []openrouter.Message) string {
+func processRepliedImage(ctx context.Context, roomID, replyEventID string, messages *[]openrouter.Message) string {
 	// Get the image URL, encryption info, and full content
 	imageURL, encryptionInfo, fullContent, err := matrix.GetEventImageURL(ctx, roomID, replyEventID)
 	if err != nil {
@@ -359,7 +359,7 @@ func processRepliedImage(ctx context.Context, roomID, replyEventID string, messa
 			errorMsg += fmt.Sprintf(" Technical details: %v", err)
 		}
 
-		messages = append(messages, openrouter.Message{
+		*messages = append(*messages, openrouter.Message{
 			Role:    "system",
 			Content: errorMsg,
 		})
@@ -377,7 +377,7 @@ func processRepliedImage(ctx context.Context, roomID, replyEventID string, messa
 }
 
 // processRepliedText handles replies to text messages
-func processRepliedText(ctx context.Context, roomID, replyEventID string, messages []openrouter.Message) {
+func processRepliedText(ctx context.Context, roomID, replyEventID string, messages *[]openrouter.Message) {
 	// Get the content of the replied-to message (text)
 	repliedToContent, err := matrix.GetEventContent(ctx, roomID, replyEventID)
 	if err != nil {
@@ -387,7 +387,7 @@ func processRepliedText(ctx context.Context, roomID, replyEventID string, messag
 			Msg("Failed to get replied-to message content")
 
 		// Add a note about the failed attempt to get the replied-to message
-		messages = append(messages, openrouter.Message{
+		*messages = append(*messages, openrouter.Message{
 			Role:    "system",
 			Content: "Note: This message is a reply to another message, but I couldn't retrieve the content of that message.",
 		})
@@ -404,7 +404,7 @@ func processRepliedText(ctx context.Context, roomID, replyEventID string, messag
 
 		// Add a note about the reply context
 		replyContextMsg := fmt.Sprintf("This message is a reply to: \"%s\"", repliedToContent)
-		messages = append(messages, openrouter.Message{
+		*messages = append(*messages, openrouter.Message{
 			Role:    "system",
 			Content: replyContextMsg,
 		})
@@ -413,7 +413,7 @@ func processRepliedText(ctx context.Context, roomID, replyEventID string, messag
 
 // processImageMessage handles messages that include an image
 // Returns updated hasImage flag and messages
-func processImageMessage(ctx context.Context, roomID, msg, base64ImageURL string, messages []openrouter.Message) (bool, []openrouter.Message) {
+func processImageMessage(ctx context.Context, roomID, msg, base64ImageURL string, messages *[]openrouter.Message) (bool, []openrouter.Message) {
 	hasImage := true
 
 	// Ensure the base64ImageURL is properly formatted
@@ -476,13 +476,13 @@ func processImageMessage(ctx context.Context, roomID, msg, base64ImageURL string
 				Msg("Image is too large, skipping image attachment")
 
 			// Add a note about the image being too large
-			messages = append(messages, openrouter.Message{
+			*messages = append(*messages, openrouter.Message{
 				Role:    "system",
 				Content: "Note: An image was attached to this message, but it was too large to process (>5MB).",
 			})
 
 			// Fall back to text-only message
-			messages = append(messages, openrouter.Message{Role: "user", Content: msg})
+			*messages = append(*messages, openrouter.Message{Role: "user", Content: msg})
 			hasImage = false
 		} else {
 			contentParts := []openrouter.ContentPart{
@@ -500,7 +500,7 @@ func processImageMessage(ctx context.Context, roomID, msg, base64ImageURL string
 				},
 			}
 
-			messages = append(messages, openrouter.Message{
+			*messages = append(*messages, openrouter.Message{
 				Role:    "user",
 				Content: contentParts,
 			})
@@ -511,11 +511,11 @@ func processImageMessage(ctx context.Context, roomID, msg, base64ImageURL string
 			Msg("Image URL does not contain valid base64 data, skipping image")
 
 		// Fall back to text-only message
-		messages = append(messages, openrouter.Message{Role: "user", Content: msg})
+		*messages = append(*messages, openrouter.Message{Role: "user", Content: msg})
 		hasImage = false
 	}
 
-	return hasImage, messages
+	return hasImage, *messages
 }
 
 // extractAssistantResponse extracts the assistant's response from the API response
