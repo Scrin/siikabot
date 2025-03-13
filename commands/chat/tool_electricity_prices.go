@@ -26,10 +26,10 @@ var ElectricityPricesToolDefinition = openrouter.ToolDefinition{
 				"properties": {
 					"date": {
 						"type": "string",
-						"description": "Date to fetch prices for in YYYY-MM-DD format. If not provided, defaults to today."
+						"description": "Date to fetch prices for in YYYY-MM-DD format."
 					}
 				},
-				"required": []
+				"required": ["date"]
 			}`),
 	},
 	Handler: handleElectricityPricesToolCall,

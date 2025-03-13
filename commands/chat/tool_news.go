@@ -25,7 +25,8 @@ var NewsToolDefinition = openrouter.ToolDefinition{
 				"properties": {}
 			}`),
 	},
-	Handler: handleNewsToolCall,
+	Handler:          handleNewsToolCall,
+	ValidityDuration: 15 * time.Minute,
 }
 
 // handleNewsToolCall handles news headlines tool calls

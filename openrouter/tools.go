@@ -13,9 +13,10 @@ import (
 
 // ToolDefinition represents a tool that can be used by the chat model
 type ToolDefinition struct {
-	Type     string         `json:"type"`
-	Function FunctionSchema `json:"function"`
-	Handler  ToolHandler    `json:"-"`
+	Type             string         `json:"type"`
+	Function         FunctionSchema `json:"function"`
+	Handler          ToolHandler    `json:"-"`
+	ValidityDuration time.Duration  `json:"-"`
 }
 
 // FunctionSchema defines the schema for a function tool

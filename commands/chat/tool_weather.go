@@ -33,7 +33,8 @@ var WeatherToolDefinition = openrouter.ToolDefinition{
 				"required": ["location"]
 			}`),
 	},
-	Handler: handleWeatherToolCall,
+	Handler:          handleWeatherToolCall,
+	ValidityDuration: 15 * time.Minute,
 }
 
 // handleWeatherToolCall handles weather tool calls

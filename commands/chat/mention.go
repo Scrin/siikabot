@@ -597,8 +597,17 @@ func processToolCalls(
 
 		// Save each tool call to the database
 		for _, toolCall := range currentResp.Choices[0].Message.ToolCalls {
-			// Save the tool call to the database
-			err := db.SaveToolCall(ctx, roomID, config.UserID, toolCall.ID, toolCall.Function.Name, toolCall.Function.Arguments)
+			// Find the tool definition to get the validity duration
+			var validityDuration time.Duration
+			for _, tool := range tools {
+				if tool.Function.Name == toolCall.Function.Name {
+					validityDuration = tool.ValidityDuration
+					break
+				}
+			}
+
+			// Save the tool call to the database with validity duration
+			err := db.SaveToolCall(ctx, roomID, config.UserID, toolCall.ID, toolCall.Function.Name, toolCall.Function.Arguments, validityDuration)
 			if err != nil {
 				log.Error().Ctx(ctx).Err(err).
 					Str("room_id", roomID).
@@ -630,16 +639,24 @@ func processToolCalls(
 			})
 
 			// Save the tool response to the database
-			// Find the tool name from the tool calls
+			// Find the tool name and validity duration from the tool calls
 			var toolName string
+			var validityDuration time.Duration
 			for _, toolCall := range currentResp.Choices[0].Message.ToolCalls {
 				if toolCall.ID == toolResp.ToolCallID {
 					toolName = toolCall.Function.Name
+					// Find the tool definition to get the validity duration
+					for _, tool := range tools {
+						if tool.Function.Name == toolName {
+							validityDuration = tool.ValidityDuration
+							break
+						}
+					}
 					break
 				}
 			}
 
-			err := db.SaveToolResponse(ctx, roomID, config.UserID, toolResp.ToolCallID, toolName, toolResp.Response)
+			err := db.SaveToolResponse(ctx, roomID, config.UserID, toolResp.ToolCallID, toolName, toolResp.Response, validityDuration)
 			if err != nil {
 				log.Error().Ctx(ctx).Err(err).
 					Str("room_id", roomID).
@@ -731,8 +748,17 @@ func processToolCalls(
 
 		// Save each tool call to the database
 		for _, toolCall := range currentResp.Choices[0].Message.ToolCalls {
-			// Save the tool call to the database
-			err := db.SaveToolCall(ctx, roomID, config.UserID, toolCall.ID, toolCall.Function.Name, toolCall.Function.Arguments)
+			// Find the tool definition to get the validity duration
+			var validityDuration time.Duration
+			for _, tool := range tools {
+				if tool.Function.Name == toolCall.Function.Name {
+					validityDuration = tool.ValidityDuration
+					break
+				}
+			}
+
+			// Save the tool call to the database with validity duration
+			err := db.SaveToolCall(ctx, roomID, config.UserID, toolCall.ID, toolCall.Function.Name, toolCall.Function.Arguments, validityDuration)
 			if err != nil {
 				log.Error().Ctx(ctx).Err(err).
 					Str("room_id", roomID).
@@ -755,16 +781,24 @@ func processToolCalls(
 				})
 
 				// Save the tool response to the database
-				// Find the tool name from the tool calls
+				// Find the tool name and validity duration from the tool calls
 				var toolName string
+				var validityDuration time.Duration
 				for _, toolCall := range currentResp.Choices[0].Message.ToolCalls {
 					if toolCall.ID == toolResp.ToolCallID {
 						toolName = toolCall.Function.Name
+						// Find the tool definition to get the validity duration
+						for _, tool := range tools {
+							if tool.Function.Name == toolName {
+								validityDuration = tool.ValidityDuration
+								break
+							}
+						}
 						break
 					}
 				}
 
-				err := db.SaveToolResponse(ctx, roomID, config.UserID, toolResp.ToolCallID, toolName, toolResp.Response)
+				err := db.SaveToolResponse(ctx, roomID, config.UserID, toolResp.ToolCallID, toolName, toolResp.Response, validityDuration)
 				if err != nil {
 					log.Error().Ctx(ctx).Err(err).
 						Str("room_id", roomID).

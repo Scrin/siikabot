@@ -134,10 +134,10 @@ type FingridResponse struct {
 
 // FingridDataPoint represents a single data point in the Fingrid API response
 type FingridDataPoint struct {
-	Value     float64 `json:"value"`
-	StartTime string  `json:"startTime"`
-	EndTime   string  `json:"endTime"`
-	DatasetID int     `json:"datasetId"`
+	Value     *float64 `json:"value"`
+	StartTime string   `json:"startTime"`
+	EndTime   string   `json:"endTime"`
+	DatasetID int      `json:"datasetId"`
 }
 
 // PowerStats represents the power production statistics for a specific time
@@ -222,16 +222,35 @@ func getFingridPowerStats(ctx context.Context, targetTime time.Time) (*PowerStat
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
+	// Count valid (non-null) data points for each category
+	countValidPoints := func(dataPoints []FingridDataPoint) int {
+		valid := 0
+		for _, point := range dataPoints {
+			if point.Value != nil {
+				valid++
+			}
+		}
+		return valid
+	}
+
 	// Log the number of data points for each category
 	log.Debug().Ctx(ctx).
 		Int("cogeneration_district_heating_count", len(fingridResponse.CogenerationDistrictHeating)).
+		Int("cogeneration_district_heating_valid", countValidPoints(fingridResponse.CogenerationDistrictHeating)).
 		Int("cogeneration_industry_count", len(fingridResponse.CogenerationIndustry)).
+		Int("cogeneration_industry_valid", countValidPoints(fingridResponse.CogenerationIndustry)).
 		Int("consumption_count", len(fingridResponse.Consumption)).
+		Int("consumption_valid", countValidPoints(fingridResponse.Consumption)).
 		Int("hydro_power_count", len(fingridResponse.HydroPower)).
+		Int("hydro_power_valid", countValidPoints(fingridResponse.HydroPower)).
 		Int("nuclear_power_count", len(fingridResponse.NuclearPower)).
+		Int("nuclear_power_valid", countValidPoints(fingridResponse.NuclearPower)).
 		Int("production_count", len(fingridResponse.Production)).
+		Int("production_valid", countValidPoints(fingridResponse.Production)).
 		Int("solar_power_count", len(fingridResponse.SolarPower)).
+		Int("solar_power_valid", countValidPoints(fingridResponse.SolarPower)).
 		Int("wind_power_count", len(fingridResponse.WindPower)).
+		Int("wind_power_valid", countValidPoints(fingridResponse.WindPower)).
 		Msg("Fingrid API data point counts")
 
 	// Create a new PowerStats object
@@ -249,6 +268,11 @@ func getFingridPowerStats(ctx context.Context, targetTime time.Time) (*PowerStat
 		const maxAllowedDiff = 10 * time.Minute    // Maximum allowed time difference (10 minutes)
 
 		for _, point := range dataPoints {
+			// Skip points with null values
+			if point.Value == nil {
+				continue
+			}
+
 			// Parse the timestamp (API returns timestamps in UTC)
 			timestamp, err := time.Parse(time.RFC3339, point.StartTime)
 			if err != nil {
@@ -280,16 +304,16 @@ func getFingridPowerStats(ctx context.Context, targetTime time.Time) (*PowerStat
 			if diff <= maxAllowedDiff {
 				log.Debug().Ctx(ctx).
 					Time("timestamp_utc", nearestTime).
-					Float64("value", nearestPoint.Value).
+					Float64("value", *nearestPoint.Value).
 					Dur("diff", diff).
 					Msg("Found nearest data point within allowed time difference")
-				return nearestTime, nearestPoint.Value, nil
+				return nearestTime, *nearestPoint.Value, nil
 			}
 
 			// If the nearest point is too far away, return an error
 			log.Debug().Ctx(ctx).
 				Time("timestamp_utc", nearestTime).
-				Float64("value", nearestPoint.Value).
+				Float64("value", *nearestPoint.Value).
 				Dur("diff", diff).
 				Msg("Nearest data point is too far from target time")
 			return time.Time{}, 0, fmt.Errorf("nearest data point is %s away from requested time (maximum allowed is 10 minutes)", diff.Round(time.Second))
