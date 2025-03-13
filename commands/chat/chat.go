@@ -8,6 +8,7 @@ import (
 
 	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/db"
+	"github.com/Scrin/siikabot/llmtools"
 	"github.com/Scrin/siikabot/matrix"
 	"github.com/Scrin/siikabot/openrouter"
 	"github.com/rs/zerolog/log"
@@ -31,14 +32,14 @@ func Init(ctx context.Context) {
 	toolRegistry = openrouter.NewToolRegistry()
 
 	// Register the tool implementations from the chat package
-	toolRegistry.RegisterTool(ElectricityPricesToolDefinition)
-	toolRegistry.RegisterTool(WeatherToolDefinition)
-	toolRegistry.RegisterTool(WeatherForecastToolDefinition)
-	toolRegistry.RegisterTool(NewsToolDefinition)
-	toolRegistry.RegisterTool(WebSearchToolDefinition)
-	toolRegistry.RegisterTool(ReminderToolDefinition)
-	toolRegistry.RegisterTool(GitHubIssueToolDefinition)
-	toolRegistry.RegisterTool(FingridToolDefinition)
+	toolRegistry.RegisterTool(llmtools.ElectricityPricesToolDefinition)
+	toolRegistry.RegisterTool(llmtools.WeatherToolDefinition)
+	toolRegistry.RegisterTool(llmtools.WeatherForecastToolDefinition)
+	toolRegistry.RegisterTool(llmtools.NewsToolDefinition)
+	toolRegistry.RegisterTool(llmtools.WebSearchToolDefinition)
+	toolRegistry.RegisterTool(llmtools.ReminderToolDefinition)
+	toolRegistry.RegisterTool(llmtools.GitHubIssueToolDefinition)
+	toolRegistry.RegisterTool(llmtools.FingridToolDefinition)
 
 	// Start a goroutine to periodically clean up old chat history
 	go func() {

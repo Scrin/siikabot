@@ -1,6 +1,6 @@
 ---
 description: Openrouter specs
-globs: commands/chat/**
+globs: openrouter/**
 alwaysApply: false
 ---
 # Quickstart
