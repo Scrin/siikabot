@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Scrin/siikabot/matrix"
 	"github.com/rs/zerolog/log"
@@ -71,27 +72,6 @@ func Handle(ctx context.Context, roomID, msg string) {
 	}
 
 	scanner := bufio.NewScanner(cmdReader)
-	go func() {
-		outChan, done := matrix.SendStreamingMessage(roomID)
-		var output []string
-		for scanner.Scan() {
-			output = append(output, scanner.Text())
-			outChan <- strings.Join(output, "\n")
-		}
-		close(done)
-		if err = cmd.Wait(); err != nil {
-			log.Error().Err(err).
-				Str("room_id", roomID).
-				Str("target", target).
-				Msg("Ping command failed")
-			matrix.SendMessage(roomID, err.Error())
-		} else {
-			log.Debug().
-				Str("room_id", roomID).
-				Str("target", target).
-				Msg("Ping command completed")
-		}
-	}()
 
 	err = cmd.Start()
 	if err != nil {
@@ -101,5 +81,26 @@ func Handle(ctx context.Context, roomID, msg string) {
 			Msg("Failed to start ping command")
 		matrix.SendMessage(roomID, err.Error())
 		return
+	}
+
+	matrix.SendTyping(ctx, roomID, true, 30*time.Second)
+	var output []string
+	for scanner.Scan() {
+		output = append(output, scanner.Text())
+	}
+	matrix.SendTyping(ctx, roomID, false, 0)
+
+	if err = cmd.Wait(); err != nil {
+		log.Error().Err(err).
+			Str("room_id", roomID).
+			Str("target", target).
+			Msg("Ping command failed")
+		matrix.SendMessage(roomID, err.Error())
+	} else {
+		log.Debug().
+			Str("room_id", roomID).
+			Str("target", target).
+			Msg("Ping command completed")
+		matrix.SendMessage(roomID, strings.Join(output, "\n"))
 	}
 }

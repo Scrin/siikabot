@@ -104,20 +104,6 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 			return
 		}
 		matrix.SendMessage(roomID, formatEndpoints(endpoints))
-	case "-":
-		go func() {
-			start := time.Now().Unix()
-			outChan, done := matrix.SendStreamingFormattedNotice(roomID)
-			for {
-				outChan <- formatRuuviData(ctx) + "<font color=\"gray\">[last updated at " + time.Now().Format("15:04:05") + "]</font>"
-				time.Sleep(10 * time.Second)
-				if start+600 < time.Now().Unix() {
-					break
-				}
-			}
-			outChan <- formatRuuviData(ctx)
-			close(done)
-		}()
 	}
 }
 
