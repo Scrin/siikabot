@@ -38,17 +38,17 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 
 		switch msgCommand {
 		case "!ping":
-			ping.Handle(ctx, evt.RoomID.String(), msg)
+			go ping.Handle(ctx, evt.RoomID.String(), msg)
 		case "!traceroute":
-			traceroute.Handle(ctx, evt.RoomID.String(), msg)
+			go traceroute.Handle(ctx, evt.RoomID.String(), msg)
 		case "!ruuvi":
-			ruuvi.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
+			go ruuvi.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
 		case "!grafana":
-			grafana.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
+			go grafana.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
 		case "!remind":
-			remind.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg, format, formattedBody)
+			go remind.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg, format, formattedBody)
 		case "!chat":
-			chat.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
+			go chat.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
 		default:
 			isCommand = false
 
@@ -80,7 +80,7 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 					chatMsg = extractMessageContent(msg, formattedBody)
 				}
 
-				chat.HandleMention(ctx, evt.RoomID.String(), evt.Sender.String(), chatMsg, evt.ID.String(), relatesTo)
+				go chat.HandleMention(ctx, evt.RoomID.String(), evt.Sender.String(), chatMsg, evt.ID.String(), relatesTo)
 				isCommand = true
 				msgCommand = "mention"
 				if isReplyToBot {
@@ -89,6 +89,7 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 			}
 		}
 		if isCommand {
+			matrix.MarkRead(ctx, evt.RoomID.String(), evt.ID.String())
 			log.Debug().
 				Str("command", msgCommand).
 				Str("room_id", evt.RoomID.String()).

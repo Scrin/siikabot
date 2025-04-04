@@ -20,9 +20,6 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 		return
 	}
 
-	// Mark the message as read
-	matrix.MarkRead(ctx, roomID, eventID)
-
 	log.Debug().Ctx(ctx).
 		Str("room_id", roomID).
 		Str("sender", sender).
