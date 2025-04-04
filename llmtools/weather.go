@@ -296,45 +296,67 @@ func extractMeasurement(xmlData []byte, measurementID string) MeasurementData {
 		return MeasurementData{}
 	}
 
-	// Find the first measurement point after the ID
-	pointStartMarker := "<wml2:point>"
-	pointStartIndex := strings.Index(xmlStr[idIndex:], pointStartMarker)
-	if pointStartIndex == -1 {
-		return MeasurementData{}
+	// Get the section after the ID
+	section := xmlStr[idIndex:]
+
+	// Find the end of this measurement series
+	nextSeriesIndex := strings.Index(section[1:], "gml:id=")
+	if nextSeriesIndex != -1 {
+		// Limit the section to just this measurement series
+		section = section[:nextSeriesIndex]
 	}
 
-	// Get the section containing the measurement
-	measurementSection := xmlStr[idIndex+pointStartIndex:]
+	// Find all measurement points
+	var lastTime string
+	var lastValue string
 
-	// Extract time
+	pointStartMarker := "<wml2:point>"
 	timeStartMarker := "<wml2:time>"
 	timeEndMarker := "</wml2:time>"
-	timeStartIndex := strings.Index(measurementSection, timeStartMarker)
-	timeEndIndex := strings.Index(measurementSection, timeEndMarker)
-	if timeStartIndex == -1 || timeEndIndex == -1 {
-		return MeasurementData{}
-	}
-
-	timeStr := measurementSection[timeStartIndex+len(timeStartMarker) : timeEndIndex]
-
-	// Extract value
 	valueStartMarker := "<wml2:value>"
 	valueEndMarker := "</wml2:value>"
-	valueStartIndex := strings.Index(measurementSection, valueStartMarker)
-	valueEndIndex := strings.Index(measurementSection, valueEndMarker)
-	if valueStartIndex == -1 || valueEndIndex == -1 {
+
+	currentIndex := 0
+	for {
+		pointIndex := strings.Index(section[currentIndex:], pointStartMarker)
+		if pointIndex == -1 {
+			break
+		}
+
+		pointSection := section[currentIndex+pointIndex:]
+
+		// Extract time
+		timeStartIndex := strings.Index(pointSection, timeStartMarker)
+		timeEndIndex := strings.Index(pointSection, timeEndMarker)
+		if timeStartIndex != -1 && timeEndIndex != -1 {
+			timeStr := pointSection[timeStartIndex+len(timeStartMarker) : timeEndIndex]
+			// Only update if this time is more recent
+			if timeStr > lastTime {
+				lastTime = timeStr
+
+				// Extract the corresponding value
+				valueStartIndex := strings.Index(pointSection, valueStartMarker)
+				valueEndIndex := strings.Index(pointSection, valueEndMarker)
+				if valueStartIndex != -1 && valueEndIndex != -1 {
+					lastValue = pointSection[valueStartIndex+len(valueStartMarker) : valueEndIndex]
+				}
+			}
+		}
+
+		currentIndex += pointIndex + len(pointStartMarker)
+	}
+
+	if lastTime == "" || lastValue == "" {
 		return MeasurementData{}
 	}
 
-	valueStr := measurementSection[valueStartIndex+len(valueStartMarker) : valueEndIndex]
-
 	// Convert value to float
-	value, _ := strconv.ParseFloat(valueStr, 64)
+	value, _ := strconv.ParseFloat(lastValue, 64)
 
 	return MeasurementData{
-		Time:     timeStr,
+		Time:     lastTime,
 		Value:    value,
-		RawValue: valueStr,
+		RawValue: lastValue,
 	}
 }
 
