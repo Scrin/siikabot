@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Scrin/siikabot/commands/chat"
+	"github.com/Scrin/siikabot/commands/federation"
 	"github.com/Scrin/siikabot/commands/grafana"
 	"github.com/Scrin/siikabot/commands/ping"
 	"github.com/Scrin/siikabot/commands/remind"
@@ -49,6 +50,8 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 			go remind.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg, format, formattedBody)
 		case "!chat":
 			go chat.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
+		case "!versions":
+			go federation.Handle(ctx, evt.RoomID.String(), msg)
 		default:
 			isCommand = false
 

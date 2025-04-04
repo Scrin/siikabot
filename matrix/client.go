@@ -71,11 +71,14 @@ func JoinRoom(ctx context.Context, roomID string) {
 }
 
 func GetDisplayName(ctx context.Context, mxid string) string {
-	foo, err := client.GetDisplayName(ctx, id.UserID(mxid))
+	dn, err := client.GetDisplayName(ctx, id.UserID(mxid))
 	if err != nil {
 		log.Error().Err(err).Str("user_id", mxid).Msg("Failed to get display name")
 	}
-	return foo.DisplayName
+	if dn == nil {
+		return mxid
+	}
+	return dn.DisplayName
 }
 
 func processOutboundEvents(ctx context.Context) {
@@ -353,4 +356,18 @@ func GetEventSender(ctx context.Context, roomID string, eventID string) (string,
 	}
 
 	return evt.Sender.String(), nil
+}
+
+// GetRoomMembers returns a list of user IDs for all members in a room
+func GetRoomMembers(ctx context.Context, roomID string) ([]string, error) {
+	members, err := client.JoinedMembers(ctx, id.RoomID(roomID))
+	if err != nil {
+		return nil, err
+	}
+
+	var userIDs []string
+	for userID := range members.Joined {
+		userIDs = append(userIDs, string(userID))
+	}
+	return userIDs, nil
 }
