@@ -50,7 +50,7 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 			go remind.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg, format, formattedBody)
 		case "!chat":
 			go chat.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
-		case "!versions":
+		case "!servers":
 			go federation.Handle(ctx, evt.RoomID.String(), msg)
 		default:
 			isCommand = false
