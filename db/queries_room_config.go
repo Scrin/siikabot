@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
 )
 
@@ -157,4 +158,49 @@ func SetRoomChatMaxToolIterations(ctx context.Context, roomID string, maxIterati
 		return err
 	}
 	return nil
+}
+
+// IsCommandEnabled checks if a given command is explicitly enabled in the enabled_commands array for a room
+func IsCommandEnabled(ctx context.Context, roomID string, command string) (bool, error) {
+	var enabledCommands []string
+	err := pool.QueryRow(ctx, "SELECT enabled_commands FROM room_config WHERE room_id = $1", roomID).Scan(&enabledCommands)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+
+	for _, enabled := range enabledCommands {
+		if enabled == command {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// SetCommandEnabled enables or disables a command for a room by updating the enabled_commands array
+func SetCommandEnabled(ctx context.Context, roomID string, command string, enabled bool) error {
+	if enabled {
+		// Add command to enabled_commands array if not already present
+		_, err := pool.Exec(ctx, `
+			INSERT INTO room_config (room_id, enabled_commands)
+			VALUES ($1, ARRAY[$2])
+			ON CONFLICT (room_id) DO UPDATE
+			SET enabled_commands = 
+				CASE 
+					WHEN $2 = ANY(room_config.enabled_commands) THEN room_config.enabled_commands
+					ELSE array_append(room_config.enabled_commands, $2)
+				END
+		`, roomID, command)
+		return err
+	} else {
+		// Remove command from enabled_commands array
+		_, err := pool.Exec(ctx, `
+			UPDATE room_config
+			SET enabled_commands = array_remove(enabled_commands, $2)
+			WHERE room_id = $1
+		`, roomID, command)
+		return err
+	}
 }

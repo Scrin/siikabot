@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Scrin/siikabot/commands/chat"
+	configcmd "github.com/Scrin/siikabot/commands/config"
 	"github.com/Scrin/siikabot/commands/federation"
 	"github.com/Scrin/siikabot/commands/grafana"
 	"github.com/Scrin/siikabot/commands/ping"
@@ -19,6 +20,29 @@ import (
 	"github.com/rs/zerolog/log"
 	"maunium.net/go/mautrix/event"
 )
+
+// isCommandEnabled checks if a command is enabled for a room
+// Most commands are enabled by default, except for specific commands that need to be explicitly enabled in the database
+func isCommandEnabled(ctx context.Context, roomID string, command string) bool {
+	// These commands are disabled by default and need to be explicitly enabled
+	restrictedCommands := map[string]bool{
+		"!ruuvi":   true,
+		"!grafana": true,
+	}
+
+	// If the command is not restricted, it's always enabled
+	if !restrictedCommands[command] {
+		return true
+	}
+
+	// For restricted commands, check if they're explicitly enabled in the database
+	enabled, err := db.IsCommandEnabled(ctx, roomID, command)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("command", command).Msg("Failed to query enabled commands")
+		return false
+	}
+	return enabled
+}
 
 func handleTextEvent(ctx context.Context, evt *event.Event) {
 	if evt.Sender.String() == config.UserID {
@@ -37,6 +61,10 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 		msgCommand := strings.Split(msg, " ")[0]
 		isCommand := true
 
+		if !isCommandEnabled(ctx, evt.RoomID.String(), msgCommand) {
+			return
+		}
+
 		switch msgCommand {
 		case "!ping":
 			go ping.Handle(ctx, evt.RoomID.String(), msg)
@@ -52,6 +80,8 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 			go chat.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
 		case "!servers":
 			go federation.Handle(ctx, evt.RoomID.String(), msg)
+		case "!config":
+			go configcmd.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
 		default:
 			isCommand = false
 
