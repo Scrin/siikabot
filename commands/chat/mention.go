@@ -581,6 +581,9 @@ func processToolCalls(
 	toolCtx := context.WithValue(ctx, "room_id", roomID)
 	toolCtx = context.WithValue(toolCtx, "sender", sender)
 
+	// Map to store expiry timestamps for tool calls
+	toolCallExpiries := make(map[string]*time.Time)
+
 	maxIterations := getMaxToolIterationsForRoom(ctx, roomID)
 	for iterationCount < maxIterations {
 		iterationCount++
@@ -604,7 +607,7 @@ func processToolCalls(
 			}
 
 			// Save the tool call to the database with validity duration
-			err := db.SaveToolCall(ctx, roomID, config.UserID, toolCall.ID, toolCall.Function.Name, toolCall.Function.Arguments, validityDuration)
+			expiry, err := db.SaveToolCall(ctx, roomID, config.UserID, toolCall.ID, toolCall.Function.Name, toolCall.Function.Arguments, validityDuration)
 			if err != nil {
 				log.Error().Ctx(ctx).Err(err).
 					Str("room_id", roomID).
@@ -612,6 +615,11 @@ func processToolCalls(
 					Str("tool_name", toolCall.Function.Name).
 					Msg("Failed to save tool call to history")
 				// Continue even if saving fails
+			}
+
+			// Store the expiry timestamp for later use with the response
+			if expiry != nil {
+				toolCallExpiries[toolCall.ID] = expiry
 			}
 		}
 
@@ -636,24 +644,18 @@ func processToolCalls(
 			})
 
 			// Save the tool response to the database
-			// Find the tool name and validity duration from the tool calls
+			// Find the tool name from the tool calls
 			var toolName string
-			var validityDuration time.Duration
 			for _, toolCall := range currentResp.Choices[0].Message.ToolCalls {
 				if toolCall.ID == toolResp.ToolCallID {
 					toolName = toolCall.Function.Name
-					// Find the tool definition to get the validity duration
-					for _, tool := range tools {
-						if tool.Function.Name == toolName {
-							validityDuration = tool.ValidityDuration
-							break
-						}
-					}
 					break
 				}
 			}
 
-			err := db.SaveToolResponse(ctx, roomID, config.UserID, toolResp.ToolCallID, toolName, toolResp.Response, validityDuration)
+			// Use the same expiry timestamp as the tool call
+			expiry := toolCallExpiries[toolResp.ToolCallID]
+			err := db.SaveToolResponse(ctx, roomID, config.UserID, toolResp.ToolCallID, toolName, toolResp.Response, expiry)
 			if err != nil {
 				log.Error().Ctx(ctx).Err(err).
 					Str("room_id", roomID).
@@ -755,7 +757,7 @@ func processToolCalls(
 			}
 
 			// Save the tool call to the database with validity duration
-			err := db.SaveToolCall(ctx, roomID, config.UserID, toolCall.ID, toolCall.Function.Name, toolCall.Function.Arguments, validityDuration)
+			expiry, err := db.SaveToolCall(ctx, roomID, config.UserID, toolCall.ID, toolCall.Function.Name, toolCall.Function.Arguments, validityDuration)
 			if err != nil {
 				log.Error().Ctx(ctx).Err(err).
 					Str("room_id", roomID).
@@ -763,6 +765,11 @@ func processToolCalls(
 					Str("tool_name", toolCall.Function.Name).
 					Msg("Failed to save tool call to history")
 				// Continue even if saving fails
+			}
+
+			// Store the expiry timestamp for later use with the response
+			if expiry != nil {
+				toolCallExpiries[toolCall.ID] = expiry
 			}
 		}
 
@@ -778,24 +785,18 @@ func processToolCalls(
 				})
 
 				// Save the tool response to the database
-				// Find the tool name and validity duration from the tool calls
+				// Find the tool name from the tool calls
 				var toolName string
-				var validityDuration time.Duration
 				for _, toolCall := range currentResp.Choices[0].Message.ToolCalls {
 					if toolCall.ID == toolResp.ToolCallID {
 						toolName = toolCall.Function.Name
-						// Find the tool definition to get the validity duration
-						for _, tool := range tools {
-							if tool.Function.Name == toolName {
-								validityDuration = tool.ValidityDuration
-								break
-							}
-						}
 						break
 					}
 				}
 
-				err := db.SaveToolResponse(ctx, roomID, config.UserID, toolResp.ToolCallID, toolName, toolResp.Response, validityDuration)
+				// Use the same expiry timestamp as the tool call
+				expiry := toolCallExpiries[toolResp.ToolCallID]
+				err := db.SaveToolResponse(ctx, roomID, config.UserID, toolResp.ToolCallID, toolName, toolResp.Response, expiry)
 				if err != nil {
 					log.Error().Ctx(ctx).Err(err).
 						Str("room_id", roomID).

@@ -2,7 +2,9 @@ package db
 
 import (
 	"context"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	pgx "github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
@@ -28,27 +30,34 @@ func SaveChatMessage(ctx context.Context, roomID, userID, message, role string) 
 }
 
 // SaveToolCall saves a tool call to the database with an optional expiry time
-func SaveToolCall(ctx context.Context, roomID, userID, toolCallID, toolName, arguments string, validityDuration time.Duration) error {
+func SaveToolCall(ctx context.Context, roomID, userID, toolCallID, toolName, arguments string, validityDuration time.Duration) (*time.Time, error) {
 	var expiry *time.Time
 	if validityDuration > 0 {
 		expiryTime := time.Now().Add(validityDuration)
 		expiry = &expiryTime
 	}
-	return saveChatMessageWithDetails(ctx, roomID, userID, arguments, "assistant", "tool_call", &toolCallID, &toolName, expiry)
+	err := saveChatMessageWithDetails(ctx, roomID, userID, arguments, "assistant", "tool_call", &toolCallID, &toolName, expiry)
+	return expiry, err
 }
 
 // SaveToolResponse saves a tool response to the database with an optional expiry time
-func SaveToolResponse(ctx context.Context, roomID, userID, toolCallID, toolName, response string, validityDuration time.Duration) error {
-	var expiry *time.Time
-	if validityDuration > 0 {
-		expiryTime := time.Now().Add(validityDuration)
-		expiry = &expiryTime
-	}
+func SaveToolResponse(ctx context.Context, roomID, userID, toolCallID, toolName, response string, expiry *time.Time) error {
 	return saveChatMessageWithDetails(ctx, roomID, userID, response, "tool", "tool_response", &toolCallID, &toolName, expiry)
 }
 
 // saveChatMessageWithDetails saves a chat message to the database with additional details
 func saveChatMessageWithDetails(ctx context.Context, roomID, userID, message, role, messageType string, toolCallID, toolName *string, expiry *time.Time) error {
+	// Ensure the message is valid UTF-8 and replace invalid sequences with a replacement character
+	if !utf8.ValidString(message) {
+		log.Warn().Ctx(ctx).
+			Str("room_id", roomID).
+			Str("user_id", userID).
+			Str("role", role).
+			Str("message_type", messageType).
+			Msg("Message contains invalid UTF-8, cleaning up")
+		message = strings.ToValidUTF8(message, "")
+	}
+
 	_, err := pool.Exec(ctx,
 		"INSERT INTO chat_history (room_id, user_id, message, role, message_type, tool_call_id, tool_name, expiry) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
 		roomID, userID, message, role, messageType, toolCallID, toolName, expiry)
