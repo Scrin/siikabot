@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
@@ -203,4 +205,42 @@ func SetCommandEnabled(ctx context.Context, roomID string, command string, enabl
 		`, roomID, command)
 		return err
 	}
+}
+
+// GetRoomChatMaxWebContentSize returns the maximum web content size in bytes for a room
+func GetRoomChatMaxWebContentSize(ctx context.Context, roomID string) (*int, error) {
+	var maxSize *int
+	err := pool.QueryRow(ctx, `
+		SELECT chat_max_web_content_size
+		FROM room_config
+		WHERE room_id = $1
+	`, roomID).Scan(&maxSize)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil && err != sql.ErrNoRows {
+		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Msg("Failed to get room chat max web content size")
+		return nil, fmt.Errorf("failed to get room chat max web content size: %w", err)
+	}
+	return maxSize, nil
+}
+
+// SetRoomChatMaxWebContentSize sets the maximum web content size in bytes for a room
+func SetRoomChatMaxWebContentSize(ctx context.Context, roomID string, maxSize int) error {
+	_, err := pool.Exec(ctx, `
+		INSERT INTO room_config (room_id, chat_max_web_content_size)
+		VALUES ($1, $2)
+		ON CONFLICT (room_id)
+		DO UPDATE SET chat_max_web_content_size = $2
+	`, roomID, maxSize)
+
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).
+			Str("room_id", roomID).
+			Int("max_size", maxSize).
+			Msg("Failed to set room chat max web content size")
+		return fmt.Errorf("failed to set room chat max web content size: %w", err)
+	}
+	return nil
 }

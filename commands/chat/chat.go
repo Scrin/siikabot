@@ -40,6 +40,7 @@ func Init(ctx context.Context) {
 	toolRegistry.RegisterTool(llmtools.ReminderToolDefinition)
 	toolRegistry.RegisterTool(llmtools.GitHubIssueToolDefinition)
 	toolRegistry.RegisterTool(llmtools.FingridToolDefinition)
+	toolRegistry.RegisterTool(llmtools.WebToolDefinition)
 
 	// Start a goroutine to periodically clean up old chat history
 	go func() {
@@ -109,6 +110,16 @@ func getMaxToolIterationsForRoom(ctx context.Context, roomID string) int {
 	return *maxIterations
 }
 
+// getMaxWebContentSizeForRoom returns the max web content size to use for a specific room
+// If no room-specific value is set, returns the default value
+func getMaxWebContentSizeForRoom(ctx context.Context, roomID string) int {
+	maxSize, err := db.GetRoomChatMaxWebContentSize(ctx, roomID)
+	if err != nil || maxSize == nil {
+		return llmtools.DefaultMaxWebResponseSize
+	}
+	return *maxSize
+}
+
 func Handle(ctx context.Context, roomID, sender, msg string) {
 	split := strings.Split(msg, " ")
 	if len(split) < 2 {
@@ -131,13 +142,15 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 		imageModel := getImageModelForRoom(ctx, roomID)
 		maxHistoryMessages := getMaxHistoryMessagesForRoom(ctx, roomID)
 		maxToolIterations := getMaxToolIterationsForRoom(ctx, roomID)
+		maxWebContentSize := getMaxWebContentSizeForRoom(ctx, roomID)
 
 		matrix.SendMessage(roomID, fmt.Sprintf("Current chat configuration for this room:\n"+
 			"Text model: %s\n"+
 			"Image model: %s\n"+
 			"Max history messages: %d\n"+
-			"Max tool iterations: %d",
-			textModel, imageModel, maxHistoryMessages, maxToolIterations))
+			"Max tool iterations: %d\n"+
+			"Max web content size: %d bytes",
+			textModel, imageModel, maxHistoryMessages, maxToolIterations, maxWebContentSize))
 	case "model":
 		if len(split) < 4 {
 			matrix.SendMessage(roomID, "Usage: !chat model [text|image] <model_name>")
@@ -250,6 +263,38 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 			Int("max_iterations", maxIterations).
 			Msg("Max tool iterations changed")
 		matrix.SendMessage(roomID, fmt.Sprintf("Max tool iterations changed to: %d", maxIterations))
+	case "web":
+		if len(split) < 3 {
+			matrix.SendMessage(roomID, "Usage: !chat web <max_size_bytes>")
+			return
+		}
+
+		if sender != config.Admin {
+			matrix.SendMessage(roomID, "Only admins can change the max web content size")
+			return
+		}
+
+		var maxSize int
+		_, err := fmt.Sscanf(split[2], "%d", &maxSize)
+		if err != nil || maxSize <= 0 {
+			matrix.SendMessage(roomID, "Max web content size must be a positive integer")
+			return
+		}
+
+		err = db.SetRoomChatMaxWebContentSize(ctx, roomID, maxSize)
+		if err != nil {
+			log.Error().Ctx(ctx).Err(err).
+				Str("room_id", roomID).
+				Int("max_size", maxSize).
+				Msg("Failed to set room max web content size")
+			matrix.SendMessage(roomID, "Failed to set max web content size")
+			return
+		}
+		log.Info().Ctx(ctx).
+			Str("room_id", roomID).
+			Int("max_size", maxSize).
+			Msg("Max web content size changed")
+		matrix.SendMessage(roomID, fmt.Sprintf("Max web content size changed to: %d bytes", maxSize))
 	default:
 		matrix.SendMessage(roomID, "Unknown command")
 	}
