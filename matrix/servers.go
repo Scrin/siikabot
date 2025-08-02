@@ -82,8 +82,8 @@ func GetServerVersion(ctx context.Context, serverName string) (string, error) {
 
 	// If federation API fails, try client API as fallback
 	var clientResp struct {
-		Versions []string               `json:"versions"`
-		Unstable map[string]interface{} `json:"unstable_features,omitempty"`
+		Versions []string       `json:"versions"`
+		Unstable map[string]any `json:"unstable_features,omitempty"`
 	}
 
 	// Build the client API URL - use the original server name for this
@@ -131,6 +131,7 @@ func discoverServer(ctx context.Context, serverName string) (string, string, err
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&wellKnown); err == nil && wellKnown.ServerName != "" {
 			log.Debug().
+				Ctx(ctx).
 				Str("server_name", serverName).
 				Str("delegated_server", wellKnown.ServerName).
 				Msg("Found server delegation in .well-known")
@@ -169,6 +170,7 @@ func discoverServer(ctx context.Context, serverName string) (string, string, err
 
 	// Fall back to port 8448 with original server name
 	log.Debug().
+		Ctx(ctx).
 		Str("server_name", serverName).
 		Msg("Failed to lookup SRV record, falling back to port 8448")
 	return fmt.Sprintf("%s:8448", serverName), serverName, nil

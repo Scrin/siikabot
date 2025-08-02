@@ -19,7 +19,7 @@ import (
 // GetEventImageURL retrieves the URL of an image from an event.
 // Returns the URL of the image as a string, or an empty string if the event is not an image.
 // For encrypted images, it also returns the encryption info needed for decryption and the full content.
-func GetEventImageURL(ctx context.Context, roomID string, eventID string) (string, map[string]interface{}, map[string]interface{}, error) {
+func GetEventImageURL(ctx context.Context, roomID string, eventID string) (string, map[string]any, map[string]any, error) {
 	// Get the event from the server
 	evt, err := client.GetEvent(ctx, id.RoomID(roomID), id.EventID(eventID))
 	if err != nil {
@@ -71,7 +71,7 @@ func GetEventImageURL(ctx context.Context, roomID string, eventID string) (strin
 	fullContent := evt.Content.Raw
 
 	// For encrypted images, the URL and encryption info are in the file section
-	if file, ok := evt.Content.Raw["file"].(map[string]interface{}); ok {
+	if file, ok := evt.Content.Raw["file"].(map[string]any); ok {
 		// This is an encrypted file
 		log.Debug().Ctx(ctx).
 			Str("room_id", roomID).
@@ -94,8 +94,8 @@ func GetEventImageURL(ctx context.Context, roomID string, eventID string) (strin
 	}
 
 	// Check if there's a thumbnail available for encrypted images
-	if info, ok := evt.Content.Raw["info"].(map[string]interface{}); ok {
-		if thumbnailFile, ok := info["thumbnail_file"].(map[string]interface{}); ok {
+	if info, ok := evt.Content.Raw["info"].(map[string]any); ok {
+		if thumbnailFile, ok := info["thumbnail_file"].(map[string]any); ok {
 			// This is an encrypted thumbnail
 			log.Debug().Ctx(ctx).
 				Str("room_id", roomID).
@@ -122,7 +122,7 @@ func GetEventImageURL(ctx context.Context, roomID string, eventID string) (strin
 	}
 
 	// Check if there's a thumbnail available for unencrypted images
-	if info, ok := evt.Content.Raw["info"].(map[string]interface{}); ok {
+	if info, ok := evt.Content.Raw["info"].(map[string]any); ok {
 		if thumbnailUrl, ok := info["thumbnail_url"].(string); ok {
 			log.Debug().Ctx(ctx).
 				Str("room_id", roomID).
@@ -196,7 +196,7 @@ func GetEventType(ctx context.Context, roomID string, eventID string) (string, e
 }
 
 // DownloadImageAsBase64 downloads an image from a Matrix URL and returns it as a base64 data URL.
-func DownloadImageAsBase64(ctx context.Context, imageURL string, encryptionInfo map[string]interface{}, fullContent map[string]interface{}) (string, error) {
+func DownloadImageAsBase64(ctx context.Context, imageURL string, encryptionInfo map[string]any, fullContent map[string]any) (string, error) {
 	originalURL := imageURL
 	var lastError error
 
@@ -283,7 +283,7 @@ func DownloadImageAsBase64(ctx context.Context, imageURL string, encryptionInfo 
 }
 
 // downloadAndDecryptMedia downloads and decrypts an encrypted media file
-func downloadAndDecryptMedia(ctx context.Context, encryptedURL string, encryptionInfo map[string]interface{}, fullContent map[string]interface{}) (string, error) {
+func downloadAndDecryptMedia(ctx context.Context, encryptedURL string, encryptionInfo map[string]any, fullContent map[string]any) (string, error) {
 	// Check if the size info is available in the encryption info
 	if encryptionInfo != nil {
 		if size, ok := encryptionInfo["size"].(float64); ok {
@@ -296,7 +296,7 @@ func downloadAndDecryptMedia(ctx context.Context, encryptedURL string, encryptio
 
 	// Also check the info section of the full content for size
 	if fullContent != nil {
-		if info, ok := fullContent["info"].(map[string]interface{}); ok {
+		if info, ok := fullContent["info"].(map[string]any); ok {
 			if size, ok := info["size"].(float64); ok {
 				const maxSize = 5 * 1024 * 1024 // 5MB
 				if int(size) > maxSize {
@@ -406,7 +406,7 @@ func downloadAndDecryptMedia(ctx context.Context, encryptedURL string, encryptio
 }
 
 // downloadAndDecryptMediaWithURL is a helper function to download and decrypt media with a specific URL
-func downloadAndDecryptMediaWithURL(ctx context.Context, url string, encryptionInfo map[string]interface{}, fullContent map[string]interface{}) (string, error) {
+func downloadAndDecryptMediaWithURL(ctx context.Context, url string, encryptionInfo map[string]any, fullContent map[string]any) (string, error) {
 	// Create a new HTTP request
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -440,7 +440,7 @@ func downloadAndDecryptMediaWithURL(ctx context.Context, url string, encryptionI
 }
 
 // decryptAndEncodeMedia decrypts and encodes media data from an HTTP response
-func decryptAndEncodeMedia(ctx context.Context, resp *http.Response, encryptionInfo map[string]interface{}, fullContent map[string]interface{}) (string, error) {
+func decryptAndEncodeMedia(ctx context.Context, resp *http.Response, encryptionInfo map[string]any, fullContent map[string]any) (string, error) {
 	// Read the encrypted data with a size limit
 	const maxSize = 5 * 1024 * 1024 // 5MB
 	limitedReader := io.LimitReader(resp.Body, maxSize+1)
@@ -463,7 +463,7 @@ func decryptAndEncodeMedia(ctx context.Context, resp *http.Response, encryptionI
 	var decryptedData []byte
 
 	// Extract the key object
-	keyObj, ok := encryptionInfo["key"].(map[string]interface{})
+	keyObj, ok := encryptionInfo["key"].(map[string]any)
 	if !ok {
 		return "", fmt.Errorf("missing key in encryption info")
 	}
@@ -564,7 +564,7 @@ func decryptAndEncodeMedia(ctx context.Context, resp *http.Response, encryptionI
 		// Try to extract image info from the full content
 		if fullContent != nil {
 			// First check if there's an info section with mimetype
-			if info, ok := fullContent["info"].(map[string]interface{}); ok {
+			if info, ok := fullContent["info"].(map[string]any); ok {
 				if mimetype, ok := info["mimetype"].(string); ok && strings.HasPrefix(mimetype, "image/") {
 					contentType = mimetype
 					log.Debug().Ctx(ctx).
@@ -585,8 +585,8 @@ func decryptAndEncodeMedia(ctx context.Context, resp *http.Response, encryptionI
 		}
 
 		// If we still don't have a valid image content type, check if there's a direct mimetype
-		if !strings.HasPrefix(contentType, "image/") && encryptionInfo != nil {
-			if info, ok := encryptionInfo["info"].(map[string]interface{}); ok {
+		if !strings.HasPrefix(contentType, "image/") {
+			if info, ok := encryptionInfo["info"].(map[string]any); ok {
 				if mimetype, ok := info["mimetype"].(string); ok && strings.HasPrefix(mimetype, "image/") {
 					contentType = mimetype
 					log.Debug().Ctx(ctx).

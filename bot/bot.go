@@ -15,6 +15,7 @@ import (
 	"github.com/Scrin/siikabot/commands/traceroute"
 	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/db"
+	"github.com/Scrin/siikabot/logging"
 	"github.com/Scrin/siikabot/matrix"
 	"github.com/Scrin/siikabot/metrics"
 	"github.com/rs/zerolog/log"
@@ -48,6 +49,10 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 	if evt.Sender.String() == config.UserID {
 		return
 	}
+
+	ctx = logging.ContextWithStr(ctx, "msg_room_id", evt.RoomID.String())
+	ctx = logging.ContextWithStr(ctx, "msg_sender", evt.Sender.String())
+	ctx = logging.ContextWithStr(ctx, "msg_event_id", evt.ID.String())
 
 	msgtype := ""
 	if m, ok := evt.Content.Raw["msgtype"].(string); ok {
@@ -86,15 +91,15 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 			isCommand = false
 
 			// Extract the m.relates_to field if it exists
-			var relatesTo map[string]interface{}
-			if relates, ok := evt.Content.Raw["m.relates_to"].(map[string]interface{}); ok {
+			var relatesTo map[string]any
+			if relates, ok := evt.Content.Raw["m.relates_to"].(map[string]any); ok {
 				relatesTo = relates
 			}
 
 			// Check if the message is a reply to a message sent by the bot
 			isReplyToBot := false
 			if relatesTo != nil {
-				if inReplyTo, ok := relatesTo["m.in_reply_to"].(map[string]interface{}); ok {
+				if inReplyTo, ok := relatesTo["m.in_reply_to"].(map[string]any); ok {
 					if replyEventID, ok := inReplyTo["event_id"].(string); ok {
 						// Get the sender of the replied-to message
 						repliedToSender, err := matrix.GetEventSender(ctx, evt.RoomID.String(), replyEventID)

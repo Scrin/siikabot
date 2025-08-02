@@ -10,8 +10,8 @@ import (
 )
 
 func main() {
-	logging.Setup()
 	config.LoadEnv()
+	logging.Setup()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -17,7 +17,7 @@ import (
 type grafanaResponse struct {
 	Results []struct {
 		Series []struct {
-			Values [][]interface{} `json:"values"`
+			Values [][]any `json:"values"`
 		} `json:"series"`
 	} `json:"results"`
 }

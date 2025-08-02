@@ -25,11 +25,11 @@ type ContentPart struct {
 
 // Message represents a message in the OpenRouter chat API
 type Message struct {
-	Role       string      `json:"role"`
-	Content    interface{} `json:"content"`
-	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
-	ToolCallID string      `json:"tool_call_id,omitempty"`
-	Refusal    interface{} `json:"refusal,omitempty"`
+	Role       string     `json:"role"`
+	Content    any        `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Refusal    any        `json:"refusal,omitempty"`
 }
 
 // ChatRequest represents a request to the OpenRouter chat API
@@ -41,11 +41,11 @@ type ChatRequest struct {
 
 // Choice represents a choice in the OpenRouter chat API response
 type Choice struct {
-	Message            Message     `json:"message"`
-	FinishReason       string      `json:"finish_reason,omitempty"`
-	NativeFinishReason string      `json:"native_finish_reason,omitempty"`
-	Index              int         `json:"index,omitempty"`
-	LogProbs           interface{} `json:"logprobs"`
+	Message            Message `json:"message"`
+	FinishReason       string  `json:"finish_reason,omitempty"`
+	NativeFinishReason string  `json:"native_finish_reason,omitempty"`
+	Index              int     `json:"index,omitempty"`
+	LogProbs           any     `json:"logprobs"`
 }
 
 // Usage represents token usage information in the OpenRouter chat API response
@@ -154,32 +154,32 @@ func SendChatRequest(ctx context.Context, req ChatRequest) (*ChatResponse, error
 // GenerationStats represents the statistics from the OpenRouter generation API
 type GenerationStats struct {
 	Data struct {
-		ID                     string      `json:"id"`
-		UpstreamID             string      `json:"upstream_id"`
-		TotalCost              float64     `json:"total_cost"`
-		CacheDiscount          interface{} `json:"cache_discount"`
-		ProviderName           string      `json:"provider_name"`
-		CreatedAt              string      `json:"created_at"`
-		Model                  string      `json:"model"`
-		AppID                  int         `json:"app_id"`
-		Streamed               bool        `json:"streamed"`
-		Cancelled              bool        `json:"cancelled"`
-		Latency                int         `json:"latency"`
-		ModerationLatency      int         `json:"moderation_latency"`
-		GenerationTime         int         `json:"generation_time"`
-		TokensPrompt           int         `json:"tokens_prompt"`
-		TokensCompletion       int         `json:"tokens_completion"`
-		NativeTokensPrompt     int         `json:"native_tokens_prompt"`
-		NativeTokensCompletion int         `json:"native_tokens_completion"`
-		NativeTokensReasoning  int         `json:"native_tokens_reasoning"`
-		NumMediaPrompt         interface{} `json:"num_media_prompt"`
-		NumMediaCompletion     interface{} `json:"num_media_completion"`
-		NumSearchResults       interface{} `json:"num_search_results"`
-		Origin                 string      `json:"origin"`
-		IsByok                 bool        `json:"is_byok"`
-		FinishReason           string      `json:"finish_reason"`
-		NativeFinishReason     string      `json:"native_finish_reason"`
-		Usage                  float64     `json:"usage"`
+		ID                     string  `json:"id"`
+		UpstreamID             string  `json:"upstream_id"`
+		TotalCost              float64 `json:"total_cost"`
+		CacheDiscount          any     `json:"cache_discount"`
+		ProviderName           string  `json:"provider_name"`
+		CreatedAt              string  `json:"created_at"`
+		Model                  string  `json:"model"`
+		AppID                  int     `json:"app_id"`
+		Streamed               bool    `json:"streamed"`
+		Cancelled              bool    `json:"cancelled"`
+		Latency                int     `json:"latency"`
+		ModerationLatency      int     `json:"moderation_latency"`
+		GenerationTime         int     `json:"generation_time"`
+		TokensPrompt           int     `json:"tokens_prompt"`
+		TokensCompletion       int     `json:"tokens_completion"`
+		NativeTokensPrompt     int     `json:"native_tokens_prompt"`
+		NativeTokensCompletion int     `json:"native_tokens_completion"`
+		NativeTokensReasoning  int     `json:"native_tokens_reasoning"`
+		NumMediaPrompt         any     `json:"num_media_prompt"`
+		NumMediaCompletion     any     `json:"num_media_completion"`
+		NumSearchResults       any     `json:"num_search_results"`
+		Origin                 string  `json:"origin"`
+		IsByok                 bool    `json:"is_byok"`
+		FinishReason           string  `json:"finish_reason"`
+		NativeFinishReason     string  `json:"native_finish_reason"`
+		Usage                  float64 `json:"usage"`
 	} `json:"data"`
 }
 

@@ -98,7 +98,7 @@ func SendMarkdownFormattedNoticeWithDebugData(roomID string, markdownText string
 	return SendFormattedNoticeWithDebugData(roomID, htmlOutput, debugData)
 }
 
-func sendMessage(roomID string, message interface{}, retryOnFailure bool) <-chan string {
+func sendMessage(roomID string, message any, retryOnFailure bool) <-chan string {
 	done := make(chan string, 1)
 	outboundEvents <- outboundEvent{roomID, "m.room.message", message, retryOnFailure, done}
 	return done

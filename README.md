@@ -7,5 +7,5 @@ This is not intended to be used by others and I don't expect anyone to want to r
 For local development, a postgres container can be brought up with:
 
 ```sh
-docker run --rm --name siikabot-dev-postgres -e POSTGRES_PASSWORD=password -v "$(pwd)/postgres_data:/var/lib/postgresql/data" postgres -c log_statement=all
+docker run --rm --name siikabot-dev-postgres -p 5432:5432 -e POSTGRES_PASSWORD=password -v "$(pwd)/postgres_data:/var/lib/postgresql/data" postgres -c log_statement=all
 ```

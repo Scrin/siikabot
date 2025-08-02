@@ -15,7 +15,7 @@ import (
 )
 
 // HandleMention handles the chat command
-func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, relatesTo map[string]interface{}) {
+func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, relatesTo map[string]any) {
 	if strings.TrimSpace(msg) == "" {
 		return
 	}
@@ -129,7 +129,7 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 }
 
 // buildInitialMessages creates the initial messages array with system prompt, history, and user message
-func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relatesTo map[string]interface{}) ([]openrouter.Message, bool, string) {
+func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relatesTo map[string]any) ([]openrouter.Message, bool, string) {
 	// Create a system prompt with bot identity and current time
 	loc, _ := time.LoadLocation(config.Timezone)
 	currentTime := time.Now().In(loc).Format("Monday, January 2, 2006 15:04:05 MST")
@@ -292,14 +292,14 @@ func processHistoryMessages(ctx context.Context, history []db.ChatMessage, messa
 
 // processRelatedMessage handles messages that are replies to other messages
 // Returns base64ImageURL if the message is a reply to an image
-func processRelatedMessage(ctx context.Context, roomID string, relatesTo map[string]interface{}, messages *[]openrouter.Message) string {
+func processRelatedMessage(ctx context.Context, roomID string, relatesTo map[string]any, messages *[]openrouter.Message) string {
 	log.Debug().Ctx(ctx).
 		Str("room_id", roomID).
 		Interface("relates_to", relatesTo).
 		Msg("Message has relation information")
 
 	// Check for m.in_reply_to
-	if inReplyTo, ok := relatesTo["m.in_reply_to"].(map[string]interface{}); ok {
+	if inReplyTo, ok := relatesTo["m.in_reply_to"].(map[string]any); ok {
 		if replyEventID, ok := inReplyTo["event_id"].(string); ok {
 			log.Debug().Ctx(ctx).
 				Str("room_id", roomID).
@@ -350,11 +350,6 @@ func processRepliedImage(ctx context.Context, roomID, replyEventID string, messa
 
 		// Add a note about the failed attempt to process the image
 		errorMsg := "Note: The user replied to an image, but I couldn't process it. Please make sure the image is accessible and try again."
-
-		// Add more detailed error information for debugging
-		if config.Debug {
-			errorMsg += fmt.Sprintf(" Technical details: %v", err)
-		}
 
 		*messages = append(*messages, openrouter.Message{
 			Role:    "system",
@@ -528,7 +523,7 @@ func extractAssistantResponse(ctx context.Context, roomID, sender, model string,
 			Bool("has_image", hasImage).
 			Int("response_length", len(assistantResponse)).
 			Msg("Received string response from OpenRouter")
-	} else if contentMap, ok := chatResp.Choices[0].Message.Content.(map[string]interface{}); ok {
+	} else if contentMap, ok := chatResp.Choices[0].Message.Content.(map[string]any); ok {
 		log.Debug().Ctx(ctx).
 			Str("room_id", roomID).
 			Str("sender", sender).

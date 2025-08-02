@@ -27,7 +27,7 @@ var (
 type outboundEvent struct {
 	RoomID         string
 	EventType      string
-	Content        interface{}
+	Content        any
 	RetryOnFailure bool
 	done           chan<- string
 }

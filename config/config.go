@@ -21,7 +21,7 @@ var (
 	OpenrouterAPIKey         = ""
 	PostgresConnectionString = ""
 	PickleKey                = ""
-	Debug                    = false
+	ConsoleOutput            = false
 	Timezone                 = ""
 	GoogleAPIKey             = ""
 	GoogleSearchEngineID     = ""
@@ -36,6 +36,7 @@ func loadConfig() error {
 	OpenrouterAPIKey = os.Getenv("SIIKABOT_OPENROUTER_API_KEY")
 	PostgresConnectionString = os.Getenv("SIIKABOT_POSTGRES_CONNECTION_STRING")
 	PickleKey = os.Getenv("SIIKABOT_PICKLE_KEY")
+	ConsoleOutput = os.Getenv("SIIKABOT_CONSOLE_OUTPUT") == "true"
 	Timezone = os.Getenv("SIIKABOT_TIMEZONE")
 	GoogleAPIKey = os.Getenv("SIIKABOT_GOOGLE_API_KEY")
 	GoogleSearchEngineID = os.Getenv("SIIKABOT_GOOGLE_SEARCH_ENGINE_ID")
