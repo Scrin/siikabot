@@ -122,13 +122,24 @@ func GetServerVersion(ctx context.Context, serverName string) (string, error) {
 // discoverServer attempts to discover the correct server and port to use
 // Returns the target (with port) and the original server name (without port) for Host header
 func discoverServer(ctx context.Context, serverName string) (string, string, error) {
+	log.Trace().
+		Ctx(ctx).
+		Str("server_name", serverName).
+		Msg("Starting server discovery")
+
 	// Try .well-known first
 	wellKnownURL := fmt.Sprintf("https://%s/.well-known/matrix/server", serverName)
-	resp, err := http.DefaultClient.Get(wellKnownURL)
+
+	// Create a client with timeout for .well-known request
+	wellKnownClient := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+	resp, err := wellKnownClient.Get(wellKnownURL)
 	if err == nil && resp.StatusCode == 200 {
 		var wellKnown struct {
 			ServerName string `json:"m.server"`
 		}
+		defer resp.Body.Close()
 		if err := json.NewDecoder(resp.Body).Decode(&wellKnown); err == nil && wellKnown.ServerName != "" {
 			log.Debug().
 				Ctx(ctx).
@@ -153,18 +164,23 @@ func discoverServer(ctx context.Context, serverName string) (string, string, err
 			}
 
 			// If both default ports fail, try SRV record
-			if host, port, err := lookupSRV(wellKnown.ServerName); err == nil {
+			if host, port, err := lookupSRV(ctx, wellKnown.ServerName); err == nil {
 				return fmt.Sprintf("%s:%d", host, port), wellKnown.ServerName, nil
 			}
 
 			// Fall back to port 8448 if everything else fails
 			return fmt.Sprintf("%s:8448", wellKnown.ServerName), wellKnown.ServerName, nil
 		}
-		resp.Body.Close()
 	}
 
+	log.Debug().
+		Ctx(ctx).
+		Err(err).
+		Str("server_name", serverName).
+		Msg("Failed to lookup .well-known, trying SRV record")
+
 	// If .well-known fails, try SRV record
-	if host, port, err := lookupSRV(serverName); err == nil {
+	if host, port, err := lookupSRV(ctx, serverName); err == nil {
 		return fmt.Sprintf("%s:%d", host, port), serverName, nil
 	}
 
@@ -217,13 +233,74 @@ func checkServerPort(serverName string, port int) error {
 }
 
 // lookupSRV performs SRV record lookup for a server
-func lookupSRV(serverName string) (string, int, error) {
-	_, addrs, err := net.LookupSRV("matrix-fed", "tcp", serverName)
-	if err != nil {
-		return "", 0, err
+func lookupSRV(ctx context.Context, serverName string) (addr string, port int, err error) {
+	log.Trace().
+		Ctx(ctx).
+		Str("server_name", serverName).
+		Msg("Starting SRV lookup for matrix-fed")
+
+	// Use a channel to handle the timeout
+	resultChan := make(chan struct {
+		addrs []*net.SRV
+		err   error
+	}, 1)
+
+	go func() {
+		log.Trace().
+			Ctx(ctx).
+			Str("server_name", serverName).
+			Msg("Performing net.LookupSRV for matrix-fed")
+
+		_, addrs, err := net.LookupSRV("matrix-fed", "tcp", serverName)
+
+		log.Trace().
+			Ctx(ctx).
+			Str("server_name", serverName).
+			Int("addr_count", len(addrs)).
+			Err(err).
+			Msg("SRV lookup completed")
+
+		resultChan <- struct {
+			addrs []*net.SRV
+			err   error
+		}{addrs, err}
+	}()
+
+	select {
+	case result := <-resultChan:
+		if result.err != nil {
+			log.Trace().
+				Ctx(ctx).
+				Str("server_name", serverName).
+				Err(result.err).
+				Msg("SRV lookup failed")
+			return "", 0, result.err
+		}
+		if len(result.addrs) == 0 {
+			log.Trace().
+				Ctx(ctx).
+				Str("server_name", serverName).
+				Msg("No SRV records found")
+			return "", 0, fmt.Errorf("no SRV records found")
+		}
+
+		target := strings.TrimSuffix(result.addrs[0].Target, ".")
+		port := int(result.addrs[0].Port)
+
+		log.Trace().
+			Ctx(ctx).
+			Str("server_name", serverName).
+			Str("target", target).
+			Int("port", port).
+			Msg("SRV lookup successful")
+
+		return target, port, nil
+	case <-ctx.Done():
+		log.Trace().
+			Ctx(ctx).
+			Str("server_name", serverName).
+			Err(ctx.Err()).
+			Msg("SRV lookup timed out")
+		return "", 0, fmt.Errorf("SRV lookup timeout: %v", ctx.Err())
 	}
-	if len(addrs) == 0 {
-		return "", 0, fmt.Errorf("no SRV records found")
-	}
-	return strings.TrimSuffix(addrs[0].Target, "."), int(addrs[0].Port), nil
 }

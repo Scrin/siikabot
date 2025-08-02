@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Scrin/siikabot/config"
+	"github.com/Scrin/siikabot/logging"
 	"github.com/rs/zerolog/log"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/crypto"
@@ -38,23 +39,6 @@ type simpleMessage struct {
 	Format        string         `json:"format,omitempty"`
 	FormattedBody string         `json:"formatted_body,omitempty"`
 	DebugData     map[string]any `json:"fi.2kgwf.debug,omitempty"`
-}
-
-type messageEdit struct {
-	MsgType       string `json:"msgtype"`
-	Body          string `json:"body"`
-	Format        string `json:"format,omitempty"`
-	FormattedBody string `json:"formatted_body,omitempty"`
-	NewContent    struct {
-		MsgType       string `json:"msgtype"`
-		Body          string `json:"body"`
-		Format        string `json:"format,omitempty"`
-		FormattedBody string `json:"formatted_body,omitempty"`
-	} `json:"m.new_content"`
-	RelatesTo struct {
-		RelType string `json:"rel_type"`
-		EventID string `json:"event_id"`
-	} `json:"m.relates_to"`
 }
 
 type httpError struct {
@@ -216,7 +200,13 @@ func Init(ctx context.Context, handleEvent func(ctx context.Context, evt *event.
 	}
 	client.Store = syncStore
 
-	olmMachine = crypto.NewOlmMachine(client, &log.Logger, cryptoStore, stateStore)
+	mautrixLogger := log.Logger.Hook(logging.FieldHook{
+		Fields: map[string]string{
+			"lib": "mautrix",
+		},
+	})
+
+	olmMachine = crypto.NewOlmMachine(client, &mautrixLogger, cryptoStore, stateStore)
 	err = olmMachine.Load(ctx)
 	if err != nil {
 		return err
