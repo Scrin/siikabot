@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <!-- Main purple-blue gradient -->
+    <linearGradient id="mainGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#a855f7"/>
+      <stop offset="50%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#3b82f6"/>
+    </linearGradient>
+
+    <!-- Glow gradient for outer ring -->
+    <linearGradient id="glowGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#c084fc"/>
+      <stop offset="100%" stop-color="#60a5fa"/>
+    </linearGradient>
+
+    <!-- Eye glow -->
+    <radialGradient id="eyeGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="70%" stop-color="#059669"/>
+      <stop offset="100%" stop-color="#047857"/>
+    </radialGradient>
+
+    <!-- Inner shadow for depth -->
+    <filter id="innerShadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="2" result="blur"/>
+      <feOffset dx="0" dy="2"/>
+      <feComposite in2="SourceAlpha" operator="arithmetic" k2="-1" k3="1"/>
+      <feColorMatrix values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.3 0"/>
+      <feBlend in2="SourceGraphic"/>
+    </filter>
+
+    <!-- Outer glow -->
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background circle with gradient -->
+  <circle cx="32" cy="32" r="30" fill="url(#mainGradient)" filter="url(#glow)"/>
+
+  <!-- Inner dark circle for contrast -->
+  <circle cx="32" cy="32" r="24" fill="#0f172a" opacity="0.9"/>
+
+  <!-- Bot face outline -->
+  <rect x="18" y="20" width="28" height="22" rx="4" fill="none" stroke="url(#glowGradient)" stroke-width="2"/>
+
+  <!-- Antenna -->
+  <line x1="32" y1="14" x2="32" y2="20" stroke="url(#glowGradient)" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="32" cy="12" r="3" fill="url(#glowGradient)"/>
+
+  <!-- Left eye -->
+  <circle cx="25" cy="29" r="4" fill="url(#eyeGlow)" filter="url(#glow)"/>
+  <circle cx="25" cy="29" r="2" fill="#fff" opacity="0.8"/>
+
+  <!-- Right eye -->
+  <circle cx="39" cy="29" r="4" fill="url(#eyeGlow)" filter="url(#glow)"/>
+  <circle cx="39" cy="29" r="2" fill="#fff" opacity="0.8"/>
+
+  <!-- Mouth/speaker grille -->
+  <rect x="26" y="36" width="12" height="2" rx="1" fill="url(#glowGradient)" opacity="0.8"/>
+
+  <!-- Decorative circuit lines -->
+  <path d="M10 32 L14 32 M50 32 L54 32" stroke="url(#glowGradient)" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+  <path d="M32 50 L32 54 M32 10 L32 6" stroke="url(#glowGradient)" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+</svg>

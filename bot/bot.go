@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/Scrin/siikabot/api"
 	"github.com/Scrin/siikabot/commands/chat"
 	configcmd "github.com/Scrin/siikabot/commands/config"
 	"github.com/Scrin/siikabot/commands/federation"
@@ -258,6 +259,7 @@ func Init(ctx context.Context) error {
 
 	remind.Init(ctx)
 	chat.Init(ctx)
+	api.Init()
 	initHTTP()
 
 	return nil
