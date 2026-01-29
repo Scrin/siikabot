@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/Scrin/siikabot/api"
+	"github.com/Scrin/siikabot/auth"
+	authcmd "github.com/Scrin/siikabot/commands/auth"
 	"github.com/Scrin/siikabot/commands/chat"
 	configcmd "github.com/Scrin/siikabot/commands/config"
 	"github.com/Scrin/siikabot/commands/federation"
@@ -88,6 +90,8 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 			go federation.Handle(ctx, evt.RoomID.String(), msg)
 		case "!config":
 			go configcmd.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
+		case "!auth":
+			go authcmd.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
 		default:
 			isCommand = false
 
@@ -259,6 +263,7 @@ func Init(ctx context.Context) error {
 
 	remind.Init(ctx)
 	chat.Init(ctx)
+	auth.Init()
 	api.Init()
 	initHTTP()
 

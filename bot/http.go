@@ -15,6 +15,10 @@ func initHTTP() {
 
 	// Register specific API endpoints first (these take priority)
 	mux.HandleFunc("/api/healthcheck", api.HealthCheckHandler)
+	mux.HandleFunc("/api/auth/challenge", api.ChallengeHandler)
+	mux.HandleFunc("/api/auth/poll", api.PollHandler)
+	mux.HandleFunc("/api/auth/me", api.MeHandler)
+	mux.HandleFunc("/api/auth/logout", api.LogoutHandler)
 	mux.HandleFunc("/hooks/github", githubHandler(config.HookSecret))
 	mux.Handle("/metrics", promhttp.Handler())
 

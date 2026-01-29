@@ -1,14 +1,18 @@
 import { useHealthCheck } from './api/queries'
 import { useInterpolatedUptime } from './hooks/useInterpolatedUptime'
+import { useAuth } from './context/AuthContext'
 import { RetroBackground } from './components/RetroBackground'
 import { PageHeader } from './components/PageHeader'
 import { LoadingSpinner } from './components/LoadingSpinner'
 import { ErrorMessage } from './components/ErrorMessage'
 import { SystemStatusCard } from './components/SystemStatusCard'
+import { AuthFlow } from './components/AuthFlow'
+import { UserInfo } from './components/UserInfo'
 
 function App() {
   const { data: health, isLoading, error } = useHealthCheck()
   const interpolatedUptime = useInterpolatedUptime(health?.uptime)
+  const { isAuthenticated, isLoading: authLoading } = useAuth()
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-black">
@@ -39,7 +43,7 @@ function App() {
 
               {error && <ErrorMessage message={error.message} />}
 
-              {health && (
+              {health && !error && (
                 <div className="animate-[fadeIn_0.5s_ease-in]">
                   <SystemStatusCard
                     status={health.status}
@@ -47,6 +51,23 @@ function App() {
                   />
                 </div>
               )}
+
+              {/* Auth Section */}
+              <div className="mt-8 border-t border-slate-700/50 pt-8">
+                <h3 className="mb-4 font-mono text-sm uppercase tracking-wider text-slate-500">
+                  Authentication
+                </h3>
+                {authLoading ? (
+                  <div className="flex items-center gap-2 text-slate-400">
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-purple-500 border-t-transparent" />
+                    <span className="font-mono text-sm">Checking auth status...</span>
+                  </div>
+                ) : isAuthenticated ? (
+                  <UserInfo />
+                ) : (
+                  <AuthFlow />
+                )}
+              </div>
             </div>
 
             {/* Bottom accent bar */}
