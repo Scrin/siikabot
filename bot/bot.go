@@ -89,7 +89,8 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 		case "!servers":
 			go federation.Handle(ctx, evt.RoomID.String(), msg)
 		case "!config":
-			go configcmd.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
+			mentionedUsers := extractMentionedUsers(evt)
+			go configcmd.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg, mentionedUsers)
 		case "!auth":
 			go authcmd.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
 		default:
@@ -141,6 +142,27 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 			metrics.RecordCommandHandled(msgCommand)
 		}
 	}
+}
+
+// extractMentionedUsers extracts user IDs from the m.mentions field of an event
+func extractMentionedUsers(evt *event.Event) []string {
+	mentions, ok := evt.Content.Raw["m.mentions"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	userIDs, ok := mentions["user_ids"].([]any)
+	if !ok {
+		return nil
+	}
+
+	result := make([]string, 0, len(userIDs))
+	for _, id := range userIDs {
+		if strID, ok := id.(string); ok {
+			result = append(result, strID)
+		}
+	}
+	return result
 }
 
 // containsBotMention checks if the message contains a mention of the bot

@@ -74,6 +74,10 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 			"<b>!grafana set template &lt;template-name> &lt;templatestring></b> sets the template string for a template config<br>"+
 			"<b>!grafana set datasource &lt;template-name> &lt;datasource-name> &lt;datasource-url></b> sets a datasource for a template config. <b>-</b> as url will remove the datasource")
 	case "config":
+		if !validUser(ctx, sender) {
+			matrix.SendMessage(roomID, "Only authorized users can use this command")
+			return
+		}
 		configs, err := db.GetGrafanaConfigs(ctx)
 		if err != nil {
 			matrix.SendMessage(roomID, "Error getting configs: "+err.Error())
@@ -218,21 +222,11 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 		default:
 			matrix.SendMessage(roomID, "Usage: !grafana set [template/datasource]")
 		}
-	case "authorize":
-		if sender != config.Admin {
-			matrix.SendMessage(roomID, "Only admins can use this command")
-			return
-		}
-		if len(params) < 3 {
-			matrix.SendMessage(roomID, "Usage: !grafana authorize <user>")
-			return
-		}
-		if err := db.AuthorizeGrafanaUser(ctx, params[2]); err != nil {
-			matrix.SendMessage(roomID, "Failed to authorize user: "+err.Error())
-			return
-		}
-		matrix.SendMessage(roomID, "User "+params[2]+" authorized for grafana commands")
 	default:
+		if !validUser(ctx, sender) {
+			matrix.SendMessage(roomID, "Only authorized users can use this command")
+			return
+		}
 		if len(params) == 2 {
 			configs, err := db.GetGrafanaConfigs(ctx)
 			if err != nil {
