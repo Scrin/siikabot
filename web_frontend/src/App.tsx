@@ -1,6 +1,8 @@
+import { motion, AnimatePresence } from 'framer-motion'
 import { useHealthCheck, useMetrics } from './api/queries'
 import { useInterpolatedUptime } from './hooks/useInterpolatedUptime'
 import { useAuth } from './context/AuthContext'
+import { useReducedMotion } from './hooks/useReducedMotion'
 import { RetroBackground } from './components/RetroBackground'
 import { PageHeader } from './components/PageHeader'
 import { LoadingSpinner } from './components/LoadingSpinner'
@@ -10,17 +12,24 @@ import { AuthFlow } from './components/AuthFlow'
 import { UserInfo } from './components/UserInfo'
 import { RemindersCard } from './components/RemindersCard'
 import { RoomsCard } from './components/RoomsCard'
+import { ScanlineOverlay } from './components/ui/ScanlineOverlay'
+import { TiltCard } from './components/ui/TiltCard'
+import { FadeInSection } from './components/ui/FadeInSection'
 
 function App() {
   const { data: health, isLoading, error } = useHealthCheck()
   const { data: metrics } = useMetrics()
   const interpolatedUptime = useInterpolatedUptime(health?.uptime)
   const { isAuthenticated, isLoading: authLoading } = useAuth()
+  const prefersReducedMotion = useReducedMotion()
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-black">
       {/* WebGL Retro Background */}
       <RetroBackground />
+
+      {/* Scanline CRT effect overlay */}
+      <ScanlineOverlay intensity="light" />
 
       {/* Overlay gradient for depth */}
       <div
@@ -36,79 +45,176 @@ function App() {
         <div className="w-full max-w-4xl">
           <PageHeader />
 
-          {/* Main Content Card */}
-          <div className="overflow-hidden border border-purple-500/30 bg-slate-900/90 shadow-2xl shadow-purple-900/30 backdrop-blur-xl">
-            {/* Top accent bar */}
-            <div className="h-px bg-gradient-to-r from-purple-500 via-blue-500 to-purple-500" />
+          {/* Main Content Card with TiltCard effect */}
+          <TiltCard glowColor="rgba(168, 85, 247, 0.2)">
+            <motion.div
+              className="overflow-hidden border border-purple-500/30 bg-slate-900/90 shadow-2xl shadow-purple-900/30 backdrop-blur-xl"
+              initial={prefersReducedMotion ? {} : { opacity: 0, y: 30, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              transition={{ duration: 0.6, delay: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
+            >
+              {/* Top accent bar with animation */}
+              <motion.div
+                className="h-px bg-gradient-to-r from-purple-500 via-blue-500 to-purple-500"
+                initial={prefersReducedMotion ? {} : { scaleX: 0 }}
+                animate={{ scaleX: 1 }}
+                transition={{ duration: 0.8, delay: 0.4 }}
+              />
 
-            <div className="p-8 md:p-12">
-              {isLoading && <LoadingSpinner />}
+              <div className="p-8 md:p-12">
+                <AnimatePresence mode="wait">
+                  {isLoading && (
+                    <motion.div
+                      key="loading"
+                      initial={prefersReducedMotion ? {} : { opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={prefersReducedMotion ? {} : { opacity: 0 }}
+                    >
+                      <LoadingSpinner />
+                    </motion.div>
+                  )}
 
-              {error && <ErrorMessage message={error.message} />}
+                  {error && (
+                    <motion.div
+                      key="error"
+                      initial={prefersReducedMotion ? {} : { opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={prefersReducedMotion ? {} : { opacity: 0 }}
+                    >
+                      <ErrorMessage message={error.message} />
+                    </motion.div>
+                  )}
 
-              {health && !error && (
-                <div className="animate-[fadeIn_0.5s_ease-in]">
-                  <SystemStatusCard
-                    status={health.status}
-                    uptime={interpolatedUptime}
-                    metrics={metrics}
-                  />
-                </div>
-              )}
+                  {health && !error && (
+                    <motion.div
+                      key="content"
+                      initial={prefersReducedMotion ? {} : { opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={prefersReducedMotion ? {} : { opacity: 0 }}
+                    >
+                      <SystemStatusCard
+                        status={health.status}
+                        uptime={interpolatedUptime}
+                        metrics={metrics}
+                      />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
 
-              {/* Auth Section */}
-              <div className="mt-8 border-t border-slate-700/50 pt-8">
-                <h3 className="mb-4 font-mono text-sm tracking-wider text-slate-500 uppercase">
-                  Authentication
-                </h3>
-                {authLoading ? (
-                  <div className="flex items-center gap-2 text-slate-400">
-                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-purple-500 border-t-transparent" />
-                    <span className="font-mono text-sm">
-                      Checking auth status...
-                    </span>
+                {/* Auth Section */}
+                <FadeInSection delay={0.3}>
+                  <div className="mt-8 border-t border-slate-700/50 pt-8">
+                    <motion.h3
+                      className="mb-4 font-mono text-sm uppercase tracking-wider text-slate-500"
+                      initial={prefersReducedMotion ? {} : { opacity: 0, x: -10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: 0.4 }}
+                    >
+                      Authentication
+                    </motion.h3>
+                    <AnimatePresence mode="wait">
+                      {authLoading ? (
+                        <motion.div
+                          key="auth-loading"
+                          className="flex items-center gap-2 text-slate-400"
+                          initial={prefersReducedMotion ? {} : { opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          exit={prefersReducedMotion ? {} : { opacity: 0 }}
+                        >
+                          <motion.div
+                            className="h-4 w-4 rounded-full border-2 border-purple-500 border-t-transparent"
+                            animate={{ rotate: 360 }}
+                            transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+                          />
+                          <span className="font-mono text-sm">Checking auth status...</span>
+                        </motion.div>
+                      ) : isAuthenticated ? (
+                        <motion.div
+                          key="user-info"
+                          initial={prefersReducedMotion ? {} : { opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={prefersReducedMotion ? {} : { opacity: 0, y: -10 }}
+                        >
+                          <UserInfo />
+                        </motion.div>
+                      ) : (
+                        <motion.div
+                          key="auth-flow"
+                          initial={prefersReducedMotion ? {} : { opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={prefersReducedMotion ? {} : { opacity: 0, y: -10 }}
+                        >
+                          <AuthFlow />
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
-                ) : isAuthenticated ? (
-                  <UserInfo />
-                ) : (
-                  <AuthFlow />
-                )}
+                </FadeInSection>
+
+                {/* Reminders Section - only show when authenticated */}
+                <AnimatePresence>
+                  {isAuthenticated && (
+                    <motion.div
+                      initial={prefersReducedMotion ? {} : { opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={prefersReducedMotion ? {} : { opacity: 0, height: 0 }}
+                      transition={{ duration: 0.3 }}
+                    >
+                      <FadeInSection delay={0.4}>
+                        <div className="mt-8 border-t border-slate-700/50 pt-8">
+                          <motion.h3
+                            className="mb-4 font-mono text-sm uppercase tracking-wider text-slate-500"
+                            initial={prefersReducedMotion ? {} : { opacity: 0, x: -10 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: 0.5 }}
+                          >
+                            Active reminders
+                          </motion.h3>
+                          <RemindersCard />
+                        </div>
+                      </FadeInSection>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* Rooms Section - only show when authenticated */}
+                <AnimatePresence>
+                  {isAuthenticated && (
+                    <motion.div
+                      initial={prefersReducedMotion ? {} : { opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={prefersReducedMotion ? {} : { opacity: 0, height: 0 }}
+                      transition={{ duration: 0.3 }}
+                    >
+                      <FadeInSection delay={0.5}>
+                        <div className="mt-8 border-t border-slate-700/50 pt-8">
+                          <motion.h3
+                            className="mb-4 font-mono text-sm uppercase tracking-wider text-slate-500"
+                            initial={prefersReducedMotion ? {} : { opacity: 0, x: -10 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: 0.6 }}
+                          >
+                            Known rooms
+                          </motion.h3>
+                          <RoomsCard />
+                        </div>
+                      </FadeInSection>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
 
-              {/* Reminders Section - only show when authenticated */}
-              {isAuthenticated && (
-                <div className="mt-8 border-t border-slate-700/50 pt-8">
-                  <h3 className="mb-4 font-mono text-sm tracking-wider text-slate-500 uppercase">
-                    Active reminders
-                  </h3>
-                  <RemindersCard />
-                </div>
-              )}
-
-              {/* Rooms Section - only show when authenticated */}
-              {isAuthenticated && (
-                <div className="mt-8 border-t border-slate-700/50 pt-8">
-                  <h3 className="mb-4 font-mono text-sm tracking-wider text-slate-500 uppercase">
-                    Known rooms
-                  </h3>
-                  <RoomsCard />
-                </div>
-              )}
-            </div>
-
-            {/* Bottom accent bar */}
-            <div className="h-px bg-gradient-to-r from-purple-500/50 via-blue-500/50 to-purple-500/50" />
-          </div>
+              {/* Bottom accent bar with animation */}
+              <motion.div
+                className="h-px bg-gradient-to-r from-purple-500/50 via-blue-500/50 to-purple-500/50"
+                initial={prefersReducedMotion ? {} : { scaleX: 0 }}
+                animate={{ scaleX: 1 }}
+                transition={{ duration: 0.8, delay: 0.6 }}
+              />
+            </motion.div>
+          </TiltCard>
         </div>
       </div>
-
-      {/* CSS for custom animations */}
-      <style>{`
-        @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(10px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-      `}</style>
     </div>
   )
 }
