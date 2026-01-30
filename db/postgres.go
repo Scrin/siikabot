@@ -40,3 +40,12 @@ func Init() (err error) {
 func GetDB() *sql.DB {
 	return stdlib.OpenDBFromPool(pool)
 }
+
+// GetPoolStats returns the current pool statistics
+// Returns nil if pool is not initialized
+func GetPoolStats() *pgxpool.Stat {
+	if pool == nil {
+		return nil
+	}
+	return pool.Stat()
+}

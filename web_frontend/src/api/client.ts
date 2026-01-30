@@ -2,6 +2,7 @@
 
 import type {
   HealthCheckResponse,
+  MetricsResponse,
   ChallengeResponse,
   PollResponse,
   MeResponse,
@@ -30,6 +31,19 @@ export async function fetchHealthCheck(): Promise<HealthCheckResponse> {
 
   if (!response.ok) {
     throw new Error(`Health check failed: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+/**
+ * Fetch system metrics
+ */
+export async function fetchMetrics(): Promise<MetricsResponse> {
+  const response = await fetch(`${API_BASE}/metrics`)
+
+  if (!response.ok) {
+    throw new Error(`Metrics fetch failed: ${response.statusText}`)
   }
 
   return response.json()

@@ -5,6 +5,23 @@ export interface HealthCheckResponse {
   uptime: string
 }
 
+export interface MetricsResponse {
+  memory: {
+    resident_mb: number
+  }
+  runtime: {
+    goroutines: number
+  }
+  database: {
+    active_conns: number
+    max_conns: number
+    idle_conns: number
+  }
+  bot: {
+    events_handled: number
+  }
+}
+
 // Auth types
 export interface ChallengeResponse {
   challenge: string

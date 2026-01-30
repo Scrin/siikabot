@@ -1,4 +1,4 @@
-import { useHealthCheck } from './api/queries'
+import { useHealthCheck, useMetrics } from './api/queries'
 import { useInterpolatedUptime } from './hooks/useInterpolatedUptime'
 import { useAuth } from './context/AuthContext'
 import { RetroBackground } from './components/RetroBackground'
@@ -13,6 +13,7 @@ import { RoomsCard } from './components/RoomsCard'
 
 function App() {
   const { data: health, isLoading, error } = useHealthCheck()
+  const { data: metrics } = useMetrics()
   const interpolatedUptime = useInterpolatedUptime(health?.uptime)
   const { isAuthenticated, isLoading: authLoading } = useAuth()
 
@@ -50,6 +51,7 @@ function App() {
                   <SystemStatusCard
                     status={health.status}
                     uptime={interpolatedUptime}
+                    metrics={metrics}
                   />
                 </div>
               )}

@@ -1,7 +1,7 @@
 // TanStack Query hooks
 
 import { useQuery } from '@tanstack/react-query'
-import { fetchHealthCheck, fetchReminders, fetchRooms } from './client'
+import { fetchHealthCheck, fetchMetrics, fetchReminders, fetchRooms } from './client'
 import { useAuth } from '../context/AuthContext'
 
 /**
@@ -9,6 +9,7 @@ import { useAuth } from '../context/AuthContext'
  */
 export const queryKeys = {
   healthCheck: ['healthCheck'] as const,
+  metrics: ['metrics'] as const,
   reminders: ['reminders'] as const,
   rooms: ['rooms'] as const,
 }
@@ -21,6 +22,17 @@ export function useHealthCheck() {
   return useQuery({
     queryKey: queryKeys.healthCheck,
     queryFn: fetchHealthCheck,
+  })
+}
+
+/**
+ * Hook to fetch system metrics
+ * Auto-refetches every 10 seconds (configured in QueryClient)
+ */
+export function useMetrics() {
+  return useQuery({
+    queryKey: queryKeys.metrics,
+    queryFn: fetchMetrics,
   })
 }
 
