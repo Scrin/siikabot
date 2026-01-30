@@ -89,7 +89,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback((token: string, userId: string) => {
     localStorage.setItem(AUTH_TOKEN_KEY, token)
-    // Note: authorizations will be null initially, but will be fetched on validateToken
     setState({
       isAuthenticated: true,
       isLoading: false,
@@ -97,6 +96,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       token,
       authorizations: null,
     })
+    // Fetch authorizations after login
+    fetchCurrentUser(token)
+      .then((response) => {
+        setState((prev) => ({
+          ...prev,
+          authorizations: response.authorizations,
+        }))
+      })
+      .catch(() => {
+        // Ignore errors - user is already logged in, authorizations can be fetched later
+      })
   }, [])
 
   const logout = useCallback(async () => {
