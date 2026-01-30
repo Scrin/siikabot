@@ -43,3 +43,13 @@ export interface ReminderResponse {
 export interface RemindersResponse {
   reminders: ReminderResponse[]
 }
+
+// Room types
+export interface RoomResponse {
+  room_id: string
+  room_name?: string
+}
+
+export interface RoomsResponse {
+  rooms: RoomResponse[]
+}

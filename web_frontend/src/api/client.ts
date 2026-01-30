@@ -6,6 +6,7 @@ import type {
   PollResponse,
   MeResponse,
   RemindersResponse,
+  RoomsResponse,
 } from './types'
 
 const API_BASE = '/api'
@@ -124,6 +125,27 @@ export async function fetchReminders(token: string): Promise<RemindersResponse> 
     }
     const error = await response.json().catch(() => ({ error: response.statusText }))
     throw new Error(error.error || 'Failed to fetch reminders')
+  }
+
+  return response.json()
+}
+
+/**
+ * Fetch the rooms shared between the bot and the current user
+ */
+export async function fetchRooms(token: string): Promise<RoomsResponse> {
+  const response = await fetch(`${API_BASE}/rooms`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to fetch rooms')
   }
 
   return response.json()

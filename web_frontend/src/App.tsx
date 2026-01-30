@@ -9,6 +9,7 @@ import { SystemStatusCard } from './components/SystemStatusCard'
 import { AuthFlow } from './components/AuthFlow'
 import { UserInfo } from './components/UserInfo'
 import { RemindersCard } from './components/RemindersCard'
+import { RoomsCard } from './components/RoomsCard'
 
 function App() {
   const { data: health, isLoading, error } = useHealthCheck()
@@ -55,13 +56,15 @@ function App() {
 
               {/* Auth Section */}
               <div className="mt-8 border-t border-slate-700/50 pt-8">
-                <h3 className="mb-4 font-mono text-sm uppercase tracking-wider text-slate-500">
+                <h3 className="mb-4 font-mono text-sm tracking-wider text-slate-500 uppercase">
                   Authentication
                 </h3>
                 {authLoading ? (
                   <div className="flex items-center gap-2 text-slate-400">
                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-purple-500 border-t-transparent" />
-                    <span className="font-mono text-sm">Checking auth status...</span>
+                    <span className="font-mono text-sm">
+                      Checking auth status...
+                    </span>
                   </div>
                 ) : isAuthenticated ? (
                   <UserInfo />
@@ -73,10 +76,20 @@ function App() {
               {/* Reminders Section - only show when authenticated */}
               {isAuthenticated && (
                 <div className="mt-8 border-t border-slate-700/50 pt-8">
-                  <h3 className="mb-4 font-mono text-sm uppercase tracking-wider text-slate-500">
-                    Active Reminders
+                  <h3 className="mb-4 font-mono text-sm tracking-wider text-slate-500 uppercase">
+                    Active reminders
                   </h3>
                   <RemindersCard />
+                </div>
+              )}
+
+              {/* Rooms Section - only show when authenticated */}
+              {isAuthenticated && (
+                <div className="mt-8 border-t border-slate-700/50 pt-8">
+                  <h3 className="mb-4 font-mono text-sm tracking-wider text-slate-500 uppercase">
+                    Known rooms
+                  </h3>
+                  <RoomsCard />
                 </div>
               )}
             </div>

@@ -20,6 +20,7 @@ func initHTTP() {
 	mux.HandleFunc("/api/auth/me", api.MeHandler)
 	mux.HandleFunc("/api/auth/logout", api.LogoutHandler)
 	mux.Handle("/api/reminders", api.AuthMiddleware(http.HandlerFunc(api.RemindersHandler)))
+	mux.Handle("/api/rooms", api.AuthMiddleware(http.HandlerFunc(api.RoomsHandler)))
 	mux.HandleFunc("/hooks/github", githubHandler(config.HookSecret))
 	mux.Handle("/metrics", promhttp.Handler())
 
