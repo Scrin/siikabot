@@ -49,3 +49,14 @@ func RemoveReminder(ctx context.Context, id int64) error {
 	}
 	return nil
 }
+
+func GetRemindersByUserID(ctx context.Context, userID string) ([]Reminder, error) {
+	rows, err := pool.Query(ctx,
+		"SELECT id, remind_time, user_id, room_id, message FROM reminders WHERE user_id = $1 AND remind_time > NOW() ORDER BY remind_time ASC",
+		userID)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Str("user_id", userID).Msg("Failed to query reminders by user ID")
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByName[Reminder])
+}

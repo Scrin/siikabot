@@ -27,7 +27,13 @@ type PollResponse struct {
 
 // MeResponse is the response for the me endpoint
 type MeResponse struct {
-	UserID string `json:"user_id"`
+	UserID         string         `json:"user_id"`
+	Authorizations Authorizations `json:"authorizations"`
+}
+
+// Authorizations represents user permission flags
+type Authorizations struct {
+	Grafana bool `json:"grafana"`
 }
 
 // ErrorResponse is a generic error response
@@ -155,7 +161,7 @@ func MeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, err := db.GetUserByWebSessionToken(ctx, token)
+	user, err := db.GetUserByWebSessionToken(ctx, token)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
@@ -164,7 +170,10 @@ func MeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := MeResponse{
-		UserID: userID,
+		UserID: user.UserID,
+		Authorizations: Authorizations{
+			Grafana: user.Authorizations.Grafana,
+		},
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
@@ -192,7 +201,7 @@ func LogoutHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get user ID from token
-	userID, err := db.GetUserByWebSessionToken(ctx, token)
+	user, err := db.GetUserByWebSessionToken(ctx, token)
 	if err != nil {
 		// Token already invalid, consider logout successful
 		w.Header().Set("Content-Type", "application/json")
@@ -202,15 +211,15 @@ func LogoutHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Clear the token from DB
-	if err := db.ClearWebSessionToken(ctx, userID); err != nil {
-		log.Error().Ctx(ctx).Err(err).Str("user_id", userID).Msg("Failed to clear web session token")
+	if err := db.ClearWebSessionToken(ctx, user.UserID); err != nil {
+		log.Error().Ctx(ctx).Err(err).Str("user_id", user.UserID).Msg("Failed to clear web session token")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(ErrorResponse{Error: "Failed to logout"})
 		return
 	}
 
-	log.Info().Ctx(ctx).Str("user_id", userID).Msg("User logged out from web via API")
+	log.Info().Ctx(ctx).Str("user_id", user.UserID).Msg("User logged out from web via API")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
@@ -243,7 +252,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		userID, err := db.GetUserByWebSessionToken(ctx, token)
+		user, err := db.GetUserByWebSessionToken(ctx, token)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
@@ -252,7 +261,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
 		}
 
 		// Add user ID to context
-		ctx = context.WithValue(ctx, userIDContextKey, userID)
+		ctx = context.WithValue(ctx, userIDContextKey, user.UserID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

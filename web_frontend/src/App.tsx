@@ -8,6 +8,7 @@ import { ErrorMessage } from './components/ErrorMessage'
 import { SystemStatusCard } from './components/SystemStatusCard'
 import { AuthFlow } from './components/AuthFlow'
 import { UserInfo } from './components/UserInfo'
+import { RemindersCard } from './components/RemindersCard'
 
 function App() {
   const { data: health, isLoading, error } = useHealthCheck()
@@ -68,6 +69,16 @@ function App() {
                   <AuthFlow />
                 )}
               </div>
+
+              {/* Reminders Section - only show when authenticated */}
+              {isAuthenticated && (
+                <div className="mt-8 border-t border-slate-700/50 pt-8">
+                  <h3 className="mb-4 font-mono text-sm uppercase tracking-wider text-slate-500">
+                    Active Reminders
+                  </h3>
+                  <RemindersCard />
+                </div>
+              )}
             </div>
 
             {/* Bottom accent bar */}

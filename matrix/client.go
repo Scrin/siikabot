@@ -65,6 +65,18 @@ func GetDisplayName(ctx context.Context, mxid string) string {
 	return dn.DisplayName
 }
 
+func GetRoomName(ctx context.Context, roomID string) string {
+	var nameContent struct {
+		Name string `json:"name"`
+	}
+	err := client.StateEvent(ctx, id.RoomID(roomID), event.StateRoomName, "", &nameContent)
+	if err != nil {
+		log.Debug().Ctx(ctx).Err(err).Str("room_id", roomID).Msg("Failed to get room name")
+		return ""
+	}
+	return nameContent.Name
+}
+
 func processOutboundEvents(ctx context.Context) {
 outboundProcessingLoop:
 	for evt := range outboundEvents {

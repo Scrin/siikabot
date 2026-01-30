@@ -5,6 +5,7 @@ import type {
   ChallengeResponse,
   PollResponse,
   MeResponse,
+  RemindersResponse,
 } from './types'
 
 const API_BASE = '/api'
@@ -105,4 +106,25 @@ export async function logout(token: string): Promise<void> {
     const error = await response.json().catch(() => ({ error: response.statusText }))
     throw new Error(error.error || 'Failed to logout')
   }
+}
+
+/**
+ * Fetch the current user's active reminders
+ */
+export async function fetchReminders(token: string): Promise<RemindersResponse> {
+  const response = await fetch(`${API_BASE}/reminders`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to fetch reminders')
+  }
+
+  return response.json()
 }

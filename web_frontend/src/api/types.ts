@@ -20,8 +20,26 @@ export interface PollResponse {
 
 export interface MeResponse {
   user_id: string
+  authorizations: Authorizations
+}
+
+export interface Authorizations {
+  grafana: boolean
 }
 
 export interface AuthErrorResponse {
   error: string
+}
+
+// Reminder types
+export interface ReminderResponse {
+  id: number
+  remind_time: string
+  room_id: string
+  room_name?: string
+  message: string
+}
+
+export interface RemindersResponse {
+  reminders: ReminderResponse[]
 }

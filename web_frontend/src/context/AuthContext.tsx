@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from 'react'
 import { fetchCurrentUser, logout as apiLogout, AuthError } from '../api/client'
+import type { Authorizations } from '../api/types'
 
 const AUTH_TOKEN_KEY = 'siikabot_auth_token'
 
@@ -15,6 +16,7 @@ interface AuthState {
   isLoading: boolean
   userId: string | null
   token: string | null
+  authorizations: Authorizations | null
 }
 
 interface AuthContextValue extends AuthState {
@@ -31,6 +33,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isLoading: true,
     userId: null,
     token: null,
+    authorizations: null,
   })
 
   // Validate token on mount
@@ -46,6 +49,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             isLoading: false,
             userId: response.user_id,
             token: storedToken,
+            authorizations: response.authorizations,
           })
         })
         .catch((error) => {
@@ -58,6 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               isLoading: false,
               userId: null,
               token: null,
+              authorizations: null,
             })
           } else {
             // Server error or network issue - keep token, assume authenticated
@@ -67,6 +72,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               isLoading: false,
               userId: null, // Unknown due to error
               token: storedToken,
+              authorizations: null,
             })
           }
         })
@@ -76,17 +82,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isLoading: false,
         userId: null,
         token: null,
+        authorizations: null,
       })
     }
   }, [])
 
   const login = useCallback((token: string, userId: string) => {
     localStorage.setItem(AUTH_TOKEN_KEY, token)
+    // Note: authorizations will be null initially, but will be fetched on validateToken
     setState({
       isAuthenticated: true,
       isLoading: false,
       userId,
       token,
+      authorizations: null,
     })
   }, [])
 
@@ -100,6 +109,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isLoading: false,
       userId: null,
       token: null,
+      authorizations: null,
     })
 
     // Then clear the token from the server (fire and forget)
@@ -123,6 +133,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isAuthenticated: true,
         userId: response.user_id,
         token: storedToken,
+        authorizations: response.authorizations,
       }))
       return true
     } catch (error) {
