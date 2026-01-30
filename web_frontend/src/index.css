@@ -7,9 +7,242 @@
   --neon-blue: #3b82f6;
   --neon-pink: #ec4899;
   --neon-green: #10b981;
+  --neon-orange: #f97316;
+  --neon-violet: #7c3aed;
 }
 
-/* Neon border animation class */
+/* =====================================================
+   AURORA BOREALIS BACKGROUND EFFECT
+   ===================================================== */
+.aurora-bg {
+  position: relative;
+}
+
+.aurora-bg::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(125deg, rgba(168, 85, 247, 0.08) 0%, transparent 40%),
+    linear-gradient(225deg, rgba(6, 182, 212, 0.08) 0%, transparent 40%),
+    linear-gradient(315deg, rgba(236, 72, 153, 0.08) 0%, transparent 40%),
+    linear-gradient(45deg, rgba(59, 130, 246, 0.05) 0%, transparent 30%);
+  animation: aurora-shift 20s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 1;
+}
+
+@keyframes aurora-shift {
+  0%,
+  100% {
+    background-position:
+      0% 50%,
+      100% 50%,
+      50% 0%,
+      50% 100%;
+    filter: hue-rotate(0deg);
+  }
+  25% {
+    background-position:
+      50% 0%,
+      50% 100%,
+      0% 50%,
+      100% 50%;
+    filter: hue-rotate(15deg);
+  }
+  50% {
+    background-position:
+      100% 50%,
+      0% 50%,
+      50% 100%,
+      50% 0%;
+    filter: hue-rotate(30deg);
+  }
+  75% {
+    background-position:
+      50% 100%,
+      50% 0%,
+      100% 50%,
+      0% 50%;
+    filter: hue-rotate(15deg);
+  }
+}
+
+/* =====================================================
+   PLASMA EFFECT LAYER
+   ===================================================== */
+.plasma-bg {
+  position: relative;
+}
+
+.plasma-bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+      ellipse 80% 50% at 20% 40%,
+      rgba(168, 85, 247, 0.1),
+      transparent
+    ),
+    radial-gradient(
+      ellipse 60% 80% at 80% 60%,
+      rgba(6, 182, 212, 0.1),
+      transparent
+    ),
+    radial-gradient(ellipse 50% 60% at 50% 80%, rgba(236, 72, 153, 0.08), transparent);
+  animation: plasma-pulse 8s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 1;
+}
+
+@keyframes plasma-pulse {
+  0%,
+  100% {
+    opacity: 0.6;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+}
+
+/* =====================================================
+   FLOATING ANIMATION
+   ===================================================== */
+.float-animation {
+  animation: float 6s ease-in-out infinite;
+}
+
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+.float-subtle {
+  animation: float-subtle 8s ease-in-out infinite;
+}
+
+@keyframes float-subtle {
+  0%,
+  100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  25% {
+    transform: translateY(-3px) rotate(0.3deg);
+  }
+  50% {
+    transform: translateY(-5px) rotate(0deg);
+  }
+  75% {
+    transform: translateY(-3px) rotate(-0.3deg);
+  }
+}
+
+/* =====================================================
+   MARCHING ANTS BORDER ANIMATION
+   ===================================================== */
+.marching-ants {
+  position: relative;
+}
+
+.marching-ants::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1px dashed var(--neon-purple);
+  animation: marchingAnts 1s linear infinite;
+}
+
+@keyframes marchingAnts {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: 16;
+  }
+}
+
+/* For SVG marching ants */
+.marching-ants-svg {
+  stroke-dasharray: 8 4;
+  animation: marchingAnts 1s linear infinite;
+}
+
+/* =====================================================
+   MULTI-LAYER GLOW EFFECTS
+   ===================================================== */
+.glow-multi-purple {
+  box-shadow:
+    0 0 5px var(--neon-purple),
+    0 0 15px rgba(168, 85, 247, 0.5),
+    0 0 30px rgba(168, 85, 247, 0.3),
+    0 0 50px rgba(168, 85, 247, 0.1);
+}
+
+.glow-multi-cyan {
+  box-shadow:
+    0 0 5px var(--neon-cyan),
+    0 0 15px rgba(6, 182, 212, 0.5),
+    0 0 30px rgba(6, 182, 212, 0.3),
+    0 0 50px rgba(6, 182, 212, 0.1);
+}
+
+.glow-multi-rainbow {
+  animation: glow-rainbow 3s linear infinite;
+}
+
+@keyframes glow-rainbow {
+  0% {
+    box-shadow:
+      0 0 5px #a855f7,
+      0 0 20px rgba(168, 85, 247, 0.5);
+  }
+  33% {
+    box-shadow:
+      0 0 5px #3b82f6,
+      0 0 20px rgba(59, 130, 246, 0.5);
+  }
+  66% {
+    box-shadow:
+      0 0 5px #06b6d4,
+      0 0 20px rgba(6, 182, 212, 0.5);
+  }
+  100% {
+    box-shadow:
+      0 0 5px #a855f7,
+      0 0 20px rgba(168, 85, 247, 0.5);
+  }
+}
+
+/* =====================================================
+   DATA STREAM ANIMATION (for DataStreamLite)
+   ===================================================== */
+@keyframes dataStreamFall {
+  0% {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(100vh);
+    opacity: 0;
+  }
+}
+
+/* =====================================================
+   NEON BORDER ANIMATION
+   ===================================================== */
 .neon-border {
   position: relative;
 }
@@ -51,7 +284,47 @@
   }
 }
 
-/* Holographic/iridescent effect */
+/* Rotating gradient border */
+.rotating-border {
+  position: relative;
+  overflow: hidden;
+}
+
+.rotating-border::before {
+  content: '';
+  position: absolute;
+  inset: -50%;
+  background: conic-gradient(
+    from 0deg,
+    var(--neon-purple),
+    var(--neon-blue),
+    var(--neon-cyan),
+    var(--neon-pink),
+    var(--neon-purple)
+  );
+  animation: rotate-border 4s linear infinite;
+}
+
+.rotating-border::after {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  background: inherit;
+  border-radius: inherit;
+}
+
+@keyframes rotate-border {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* =====================================================
+   HOLOGRAPHIC / IRIDESCENT EFFECTS
+   ===================================================== */
 .holographic {
   background: linear-gradient(
     135deg,
@@ -80,17 +353,24 @@
   }
 }
 
-/* Cyber grid pattern */
+/* =====================================================
+   CYBER GRID PATTERN
+   ===================================================== */
 .cyber-grid {
-  background-image: linear-gradient(
-      rgba(168, 85, 247, 0.1) 1px,
-      transparent 1px
-    ),
+  background-image: linear-gradient(rgba(168, 85, 247, 0.1) 1px, transparent 1px),
     linear-gradient(90deg, rgba(168, 85, 247, 0.1) 1px, transparent 1px);
   background-size: 50px 50px;
 }
 
-/* Neon text glow */
+.cyber-grid-dense {
+  background-image: linear-gradient(rgba(168, 85, 247, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(168, 85, 247, 0.08) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* =====================================================
+   NEON TEXT GLOW EFFECTS
+   ===================================================== */
 .neon-text-purple {
   text-shadow:
     0 0 10px var(--neon-purple),
@@ -112,7 +392,34 @@
     0 0 40px var(--neon-blue);
 }
 
-/* Gradient text animation */
+.neon-text-flicker {
+  animation: neon-flicker 3s infinite;
+}
+
+@keyframes neon-flicker {
+  0%,
+  19%,
+  21%,
+  23%,
+  25%,
+  54%,
+  56%,
+  100% {
+    text-shadow:
+      0 0 10px var(--neon-purple),
+      0 0 20px var(--neon-purple),
+      0 0 40px var(--neon-purple);
+  }
+  20%,
+  24%,
+  55% {
+    text-shadow: none;
+  }
+}
+
+/* =====================================================
+   GRADIENT TEXT ANIMATION
+   ===================================================== */
 .gradient-text-animated {
   background: linear-gradient(
     90deg,
@@ -137,7 +444,9 @@
   }
 }
 
-/* Glowing border on hover */
+/* =====================================================
+   GLOWING BORDER ON HOVER
+   ===================================================== */
 .glow-border-hover {
   transition: box-shadow 0.3s ease;
 }
@@ -149,7 +458,9 @@
     inset 0 0 10px rgba(168, 85, 247, 0.1);
 }
 
-/* Pulse dot animation */
+/* =====================================================
+   PULSE DOT ANIMATION
+   ===================================================== */
 .pulse-dot {
   animation: pulse-dot 2s ease-in-out infinite;
 }
@@ -166,7 +477,118 @@
   }
 }
 
-/* Reduced motion support */
+/* =====================================================
+   SCANLINE EFFECT (enhanced)
+   ===================================================== */
+.scanlines {
+  position: relative;
+}
+
+.scanlines::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0.1) 0px,
+    rgba(0, 0, 0, 0.1) 1px,
+    transparent 1px,
+    transparent 2px
+  );
+  pointer-events: none;
+  animation: scanline-scroll 10s linear infinite;
+}
+
+@keyframes scanline-scroll {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 0 100vh;
+  }
+}
+
+/* =====================================================
+   GLITCH EFFECT
+   ===================================================== */
+.glitch-effect {
+  animation: glitch 2s infinite;
+}
+
+@keyframes glitch {
+  0%,
+  90%,
+  100% {
+    transform: translate(0);
+    filter: none;
+  }
+  92% {
+    transform: translate(-2px, 1px);
+    filter: hue-rotate(90deg);
+  }
+  94% {
+    transform: translate(2px, -1px);
+    filter: hue-rotate(-90deg);
+  }
+  96% {
+    transform: translate(-1px, -1px);
+    filter: hue-rotate(45deg);
+  }
+  98% {
+    transform: translate(1px, 1px);
+    filter: hue-rotate(-45deg);
+  }
+}
+
+/* =====================================================
+   ENERGY PULSE EFFECT
+   ===================================================== */
+.energy-pulse {
+  animation: energy-pulse 2s ease-out infinite;
+}
+
+@keyframes energy-pulse {
+  0% {
+    transform: scale(0.95);
+    box-shadow:
+      0 0 0 0 rgba(168, 85, 247, 0.7),
+      0 0 0 0 rgba(6, 182, 212, 0.5);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow:
+      0 0 0 15px rgba(168, 85, 247, 0),
+      0 0 0 30px rgba(6, 182, 212, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow:
+      0 0 0 0 rgba(168, 85, 247, 0),
+      0 0 0 0 rgba(6, 182, 212, 0);
+  }
+}
+
+/* =====================================================
+   TYPING CURSOR
+   ===================================================== */
+.typing-cursor::after {
+  content: '|';
+  animation: blink-cursor 0.7s infinite;
+}
+
+@keyframes blink-cursor {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+/* =====================================================
+   REDUCED MOTION SUPPORT
+   ===================================================== */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -179,12 +601,18 @@
 
   .holographic,
   .gradient-text-animated,
-  .neon-border::before {
+  .neon-border::before,
+  .aurora-bg::before,
+  .plasma-bg::after,
+  .float-animation,
+  .float-subtle {
     animation: none;
   }
 }
 
-/* Custom scrollbar for futuristic feel */
+/* =====================================================
+   CUSTOM SCROLLBAR
+   ===================================================== */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -203,7 +631,9 @@
   background: linear-gradient(180deg, var(--neon-cyan), var(--neon-purple));
 }
 
-/* Selection color */
+/* =====================================================
+   SELECTION COLOR
+   ===================================================== */
 ::selection {
   background: rgba(168, 85, 247, 0.4);
   color: white;

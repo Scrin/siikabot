@@ -15,6 +15,9 @@ import { RoomsCard } from './components/RoomsCard'
 import { ScanlineOverlay } from './components/ui/ScanlineOverlay'
 import { TiltCard } from './components/ui/TiltCard'
 import { FadeInSection } from './components/ui/FadeInSection'
+import { CursorTrail } from './components/ui/CursorTrail'
+import { CornerBrackets } from './components/ui/CornerBrackets'
+import { Waveform } from './components/ui/Waveform'
 
 function App() {
   const { data: health, isLoading, error } = useHealthCheck()
@@ -24,9 +27,12 @@ function App() {
   const prefersReducedMotion = useReducedMotion()
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-black">
+    <div className="aurora-bg plasma-bg relative min-h-screen overflow-hidden bg-black">
       {/* WebGL Retro Background */}
       <RetroBackground />
+
+      {/* Cursor particle trail effect */}
+      <CursorTrail />
 
       {/* Scanline CRT effect overlay */}
       <ScanlineOverlay intensity="light" />
@@ -42,17 +48,20 @@ function App() {
         className="relative flex min-h-screen items-center justify-center p-4"
         style={{ zIndex: 10 }}
       >
-        <div className="w-full max-w-4xl">
+        <div className={`w-full max-w-4xl ${prefersReducedMotion ? '' : 'float-subtle'}`}>
           <PageHeader />
 
-          {/* Main Content Card with TiltCard effect */}
-          <TiltCard glowColor="rgba(168, 85, 247, 0.2)">
+          {/* Main Content Card with TiltCard effect and holographic overlay */}
+          <TiltCard glowColor="rgba(168, 85, 247, 0.2)" holographic>
             <motion.div
-              className="overflow-hidden border border-purple-500/30 bg-slate-900/90 shadow-2xl shadow-purple-900/30 backdrop-blur-xl"
+              className="relative overflow-hidden border border-purple-500/30 bg-slate-900/90 shadow-2xl shadow-purple-900/30 backdrop-blur-xl"
               initial={prefersReducedMotion ? {} : { opacity: 0, y: 30, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               transition={{ duration: 0.6, delay: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
             >
+              {/* Animated corner brackets */}
+              <CornerBrackets size={24} color="#a855f7" glowColor="rgba(168, 85, 247, 0.5)" />
+
               {/* Top accent bar with animation */}
               <motion.div
                 className="h-px bg-gradient-to-r from-purple-500 via-blue-500 to-purple-500"
@@ -101,9 +110,18 @@ function App() {
                   )}
                 </AnimatePresence>
 
+                {/* Waveform divider */}
+                <div className="my-6 opacity-40">
+                  <Waveform
+                    height={30}
+                    color="#a855f7"
+                    status={health?.status === 'ok' ? 'ok' : health?.status === 'degraded' ? 'degraded' : 'error'}
+                  />
+                </div>
+
                 {/* Auth Section */}
                 <FadeInSection delay={0.3}>
-                  <div className="mt-8 border-t border-slate-700/50 pt-8">
+                  <div className="border-t border-slate-700/50 pt-6">
                     <motion.h3
                       className="mb-4 font-mono text-sm uppercase tracking-wider text-slate-500"
                       initial={prefersReducedMotion ? {} : { opacity: 0, x: -10 }}
@@ -161,7 +179,7 @@ function App() {
                       transition={{ duration: 0.3 }}
                     >
                       <FadeInSection delay={0.4}>
-                        <div className="mt-8 border-t border-slate-700/50 pt-8">
+                        <div className="mt-6 border-t border-slate-700/50 pt-6">
                           <motion.h3
                             className="mb-4 font-mono text-sm uppercase tracking-wider text-slate-500"
                             initial={prefersReducedMotion ? {} : { opacity: 0, x: -10 }}
@@ -187,7 +205,7 @@ function App() {
                       transition={{ duration: 0.3 }}
                     >
                       <FadeInSection delay={0.5}>
-                        <div className="mt-8 border-t border-slate-700/50 pt-8">
+                        <div className="mt-6 border-t border-slate-700/50 pt-6">
                           <motion.h3
                             className="mb-4 font-mono text-sm uppercase tracking-wider text-slate-500"
                             initial={prefersReducedMotion ? {} : { opacity: 0, x: -10 }}
