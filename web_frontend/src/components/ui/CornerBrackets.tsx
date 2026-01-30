@@ -1,4 +1,4 @@
-import { motion } from 'framer-motion'
+import { motion, type Variants } from 'framer-motion'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 
 interface CornerBracketsProps {
@@ -21,19 +21,19 @@ export function CornerBrackets({
   const prefersReducedMotion = useReducedMotion()
   const shouldAnimate = animated && !prefersReducedMotion
 
-  const pathVariants = {
+  const pathVariants: Variants = {
     hidden: { pathLength: 0, opacity: 0 },
     visible: {
       pathLength: 1,
       opacity: 1,
       transition: {
-        pathLength: { duration: 0.8, ease: 'easeInOut' },
+        pathLength: { duration: 0.8, ease: 'easeInOut' as const },
         opacity: { duration: 0.2 },
       },
     },
   }
 
-  const pulseVariants = {
+  const pulseVariants: Variants = {
     pulse: {
       filter: [
         `drop-shadow(0 0 2px ${glowColor})`,
@@ -43,7 +43,7 @@ export function CornerBrackets({
       transition: {
         duration: 2,
         repeat: Infinity,
-        ease: 'easeInOut',
+        ease: 'easeInOut' as const,
       },
     },
   }
