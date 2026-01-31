@@ -6,12 +6,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
+	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/table"
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/openrouter"
+	strip "github.com/grokify/html-strip-tags-go"
 	"github.com/rs/zerolog/log"
 )
 
@@ -20,7 +27,7 @@ var WebToolDefinition = openrouter.ToolDefinition{
 	Type: "function",
 	Function: openrouter.FunctionSchema{
 		Name:        "get_web_content",
-		Description: "Fetch the content of a web page via HTTP GET request (max 10kB by default)",
+		Description: "Fetch the content of a web page. HTML is converted to markdown for readability. (max 10kB output by default)",
 		Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -41,6 +48,69 @@ const DefaultMaxWebResponseSize = 10 * 1024
 
 // Maximum number of redirects to follow
 const maxRedirects = 5
+
+// Multiplier for raw HTML pre-limit (prevents memory issues on huge pages)
+const maxRawHTMLMultiplier = 10
+
+// isHTMLContentType checks if the content type indicates HTML
+func isHTMLContentType(contentType string) bool {
+	mediaType, _, _ := mime.ParseMediaType(contentType)
+	return mediaType == "text/html" || mediaType == "application/xhtml+xml"
+}
+
+// isTextContentType checks if the content type indicates text
+func isTextContentType(contentType string) bool {
+	mediaType, _, _ := mime.ParseMediaType(contentType)
+	return strings.HasPrefix(mediaType, "text/")
+}
+
+// formatNonHTMLContent wraps non-HTML text content appropriately
+func formatNonHTMLContent(content, contentType string) string {
+	mediaType, _, _ := mime.ParseMediaType(contentType)
+
+	switch mediaType {
+	case "application/json":
+		return "```json\n" + content + "\n```"
+	case "application/xml", "text/xml":
+		return "```xml\n" + content + "\n```"
+	default:
+		return content
+	}
+}
+
+// convertHTMLToMarkdown converts HTML content to markdown
+func convertHTMLToMarkdown(ctx context.Context, htmlContent string, baseURL string) (string, error) {
+	// Parse the base URL to extract domain for relative link resolution
+	parsedURL, err := url.Parse(baseURL)
+	var domain string
+	if err == nil && parsedURL.Host != "" {
+		domain = parsedURL.Scheme + "://" + parsedURL.Host
+	}
+
+	// Create converter with plugins
+	conv := converter.NewConverter(
+		converter.WithPlugins(
+			base.NewBasePlugin(),
+			commonmark.NewCommonmarkPlugin(),
+			table.NewTablePlugin(),
+		),
+	)
+
+	// Convert with domain option if available
+	var markdown string
+	if domain != "" {
+		markdown, err = conv.ConvertString(htmlContent, converter.WithDomain(domain))
+	} else {
+		markdown, err = conv.ConvertString(htmlContent)
+	}
+
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Msg("Failed to convert HTML to markdown")
+		return "", err
+	}
+
+	return markdown, nil
+}
 
 // handleWebToolCall handles web content fetching tool calls
 func handleWebToolCall(ctx context.Context, arguments string) (string, error) {
@@ -117,36 +187,67 @@ func handleWebToolCall(ctx context.Context, arguments string) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	// Read the response body with size limit
-	limitedReader := io.LimitReader(resp.Body, int64(maxSize))
+	if resp.StatusCode != http.StatusOK {
+		log.Error().Ctx(ctx).Int("status_code", resp.StatusCode).Str("url", args.URL).Msg("Web request returned non-OK status")
+		return "", fmt.Errorf("web request returned status code %d", resp.StatusCode)
+	}
+
+	// Check content type
+	contentType := resp.Header.Get("Content-Type")
+
+	// Reject binary content types
+	if !isTextContentType(contentType) && !isHTMLContentType(contentType) &&
+		contentType != "application/json" && contentType != "application/xml" {
+		mediaType, _, _ := mime.ParseMediaType(contentType)
+		log.Warn().Ctx(ctx).Str("url", args.URL).Str("content_type", mediaType).Msg("Cannot process binary content")
+		return "", fmt.Errorf("cannot process binary content type: %s", mediaType)
+	}
+
+	// Use pre-limit for raw content (prevents memory issues on huge pages)
+	preLimit := int64(maxSize * maxRawHTMLMultiplier)
+	limitedReader := io.LimitReader(resp.Body, preLimit)
 	body, err := io.ReadAll(limitedReader)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("url", args.URL).Msg("Failed to read web response")
 		return "", fmt.Errorf("failed to read response: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		log.Error().Ctx(ctx).Int("status_code", resp.StatusCode).Str("url", args.URL).Msg("Web request returned non-OK status")
-		return "", fmt.Errorf("web request returned status code %d", resp.StatusCode)
+	rawSize := len(body)
+	var result string
+
+	// Process content based on type
+	if isHTMLContentType(contentType) {
+		// Convert HTML to markdown
+		markdown, err := convertHTMLToMarkdown(ctx, string(body), args.URL)
+		if err != nil {
+			// Fallback to basic tag stripping
+			log.Warn().Ctx(ctx).Err(err).Str("url", args.URL).Msg("HTML to markdown conversion failed, falling back to tag stripping")
+			result = strip.StripTags(string(body))
+		} else {
+			result = markdown
+		}
+	} else {
+		// Format non-HTML content appropriately
+		result = formatNonHTMLContent(string(body), contentType)
 	}
 
-	// Check if response was truncated
-	contentLength := resp.ContentLength
-	if contentLength > int64(maxSize) {
-		log.Warn().Ctx(ctx).
-			Str("url", args.URL).
-			Int64("content_length", contentLength).
-			Int("max_size", maxSize).
-			Msg("Response truncated due to size limit")
+	// Apply final size limit
+	truncated := false
+	if len(result) > maxSize {
+		result = result[:maxSize]
+		truncated = true
+		result += "\n\n[Content truncated]"
 	}
 
-	// Log success with content length
+	// Log success with size information
 	log.Debug().Ctx(ctx).
 		Str("url", args.URL).
-		Int("content_length", len(body)).
+		Str("content_type", contentType).
+		Int("raw_size", rawSize).
+		Int("processed_size", len(result)).
 		Int("max_size", maxSize).
-		Msg("Successfully fetched web content")
+		Bool("truncated", truncated).
+		Msg("Successfully fetched and processed web content")
 
-	// Return the content
-	return string(body), nil
+	return result, nil
 }

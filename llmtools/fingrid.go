@@ -342,7 +342,7 @@ func getFingridPowerStats(ctx context.Context, targetTime time.Time) (*PowerStat
 			stats.Timestamp = timestamp
 			stats.Production = value
 			dataTimestamp = timestamp
-		} else if dataError == nil {
+		} else {
 			dataError = err
 		}
 	} else if len(fingridResponse.Consumption) > 0 {
@@ -351,7 +351,7 @@ func getFingridPowerStats(ctx context.Context, targetTime time.Time) (*PowerStat
 			stats.Timestamp = timestamp
 			stats.Consumption = value
 			dataTimestamp = timestamp
-		} else if dataError == nil {
+		} else {
 			dataError = err
 		}
 	}
