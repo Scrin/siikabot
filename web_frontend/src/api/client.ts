@@ -8,6 +8,8 @@ import type {
   MeResponse,
   RemindersResponse,
   RoomsResponse,
+  GrafanaTemplatesResponse,
+  GrafanaRenderResponse,
 } from './types'
 
 const API_BASE = '/api'
@@ -160,6 +162,207 @@ export async function fetchRooms(token: string): Promise<RoomsResponse> {
     }
     const error = await response.json().catch(() => ({ error: response.statusText }))
     throw new Error(error.error || 'Failed to fetch rooms')
+  }
+
+  return response.json()
+}
+
+/**
+ * Fetch all Grafana templates with their datasources
+ */
+export async function fetchGrafanaTemplates(token: string): Promise<GrafanaTemplatesResponse> {
+  const response = await fetch(`${API_BASE}/grafana/templates`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    if (response.status === 403) {
+      throw new Error('Grafana access not authorized')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to fetch templates')
+  }
+
+  return response.json()
+}
+
+/**
+ * Create a new Grafana template
+ */
+export async function createGrafanaTemplate(
+  token: string,
+  name: string,
+  template: string
+): Promise<void> {
+  const response = await fetch(`${API_BASE}/grafana/templates`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ name, template }),
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    if (response.status === 403) {
+      throw new Error('Grafana access not authorized')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to create template')
+  }
+}
+
+/**
+ * Update a Grafana template's content
+ */
+export async function updateGrafanaTemplate(
+  token: string,
+  name: string,
+  template: string
+): Promise<void> {
+  const response = await fetch(`${API_BASE}/grafana/templates/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ template }),
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    if (response.status === 403) {
+      throw new Error('Grafana access not authorized')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to update template')
+  }
+}
+
+/**
+ * Delete a Grafana template
+ */
+export async function deleteGrafanaTemplate(token: string, name: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/grafana/templates/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    if (response.status === 403) {
+      throw new Error('Grafana access not authorized')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to delete template')
+  }
+}
+
+/**
+ * Set or update a datasource for a Grafana template
+ */
+export async function setGrafanaDatasource(
+  token: string,
+  templateName: string,
+  datasourceName: string,
+  url: string
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE}/grafana/templates/${encodeURIComponent(templateName)}/datasources/${encodeURIComponent(datasourceName)}`,
+    {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ url }),
+    }
+  )
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    if (response.status === 403) {
+      throw new Error('Grafana access not authorized')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to set datasource')
+  }
+}
+
+/**
+ * Delete a datasource from a Grafana template
+ */
+export async function deleteGrafanaDatasource(
+  token: string,
+  templateName: string,
+  datasourceName: string
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE}/grafana/templates/${encodeURIComponent(templateName)}/datasources/${encodeURIComponent(datasourceName)}`,
+    {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }
+  )
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    if (response.status === 403) {
+      throw new Error('Grafana access not authorized')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to delete datasource')
+  }
+}
+
+/**
+ * Render a Grafana template with real data from datasources
+ */
+export async function renderGrafanaTemplate(
+  token: string,
+  name: string
+): Promise<GrafanaRenderResponse> {
+  const response = await fetch(
+    `${API_BASE}/grafana/templates/${encodeURIComponent(name)}/render`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }
+  )
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    if (response.status === 403) {
+      throw new Error('Grafana access not authorized')
+    }
+    if (response.status === 404) {
+      throw new Error('Template not found')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to render template')
   }
 
   return response.json()

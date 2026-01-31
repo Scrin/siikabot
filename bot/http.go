@@ -21,6 +21,8 @@ func initHTTP() {
 	mux.HandleFunc("/api/auth/logout", api.LogoutHandler)
 	mux.Handle("/api/reminders", api.AuthMiddleware(http.HandlerFunc(api.RemindersHandler)))
 	mux.Handle("/api/rooms", api.AuthMiddleware(http.HandlerFunc(api.RoomsHandler)))
+	mux.Handle("/api/grafana/templates", api.AuthMiddleware(http.HandlerFunc(api.GrafanaTemplatesHandler)))
+	mux.Handle("/api/grafana/templates/", api.AuthMiddleware(http.HandlerFunc(api.GrafanaTemplateRouteHandler)))
 	mux.HandleFunc("/api/metrics", api.MetricsHandler)
 	mux.HandleFunc("/hooks/github", githubHandler(config.HookSecret))
 	mux.Handle("/metrics", promhttp.Handler())

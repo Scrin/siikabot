@@ -638,3 +638,58 @@
   background: rgba(168, 85, 247, 0.4);
   color: white;
 }
+
+/* =====================================================
+   HTML PREVIEW CONTAINER (Grafana Template Preview)
+   ===================================================== */
+.html-preview-container {
+  border: 1px solid rgba(168, 85, 247, 0.3);
+  background: rgba(0, 0, 0, 0.5);
+  padding: 1rem;
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Monaco, Consolas, monospace;
+  font-size: 0.875rem;
+  color: #e2e8f0;
+  overflow-x: auto;
+}
+
+.html-preview-container table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.html-preview-container th,
+.html-preview-container td {
+  border: 1px solid rgba(168, 85, 247, 0.2);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+}
+
+.html-preview-container th {
+  background: rgba(168, 85, 247, 0.1);
+  color: #c4b5fd;
+  font-weight: 500;
+}
+
+.html-preview-container tr:hover td {
+  background: rgba(168, 85, 247, 0.05);
+}
+
+.html-preview-container a {
+  color: #60a5fa;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.html-preview-container a:hover {
+  color: #93c5fd;
+}
+
+.html-preview-container b {
+  color: #f1f5f9;
+  font-weight: 600;
+}
+
+.html-preview-container i {
+  color: #cbd5e1;
+  font-style: italic;
+}

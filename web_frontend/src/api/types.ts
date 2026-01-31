@@ -70,3 +70,23 @@ export interface RoomResponse {
 export interface RoomsResponse {
   rooms: RoomResponse[]
 }
+
+// Grafana types
+export interface GrafanaDatasource {
+  name: string
+  url: string
+}
+
+export interface GrafanaTemplate {
+  name: string
+  template: string
+  datasources: GrafanaDatasource[]
+}
+
+export interface GrafanaTemplatesResponse {
+  templates: GrafanaTemplate[]
+}
+
+export interface GrafanaRenderResponse {
+  rendered: string
+}

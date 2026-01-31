@@ -12,6 +12,7 @@ import { AuthFlow } from './components/AuthFlow'
 import { UserInfo } from './components/UserInfo'
 import { RemindersCard } from './components/RemindersCard'
 import { RoomsCard } from './components/RoomsCard'
+import { GrafanaCard } from './components/GrafanaCard'
 import { ScanlineOverlay } from './components/ui/ScanlineOverlay'
 import { TiltCard } from './components/ui/TiltCard'
 import { FadeInSection } from './components/ui/FadeInSection'
@@ -23,7 +24,7 @@ function App() {
   const { data: health, isLoading, error } = useHealthCheck()
   const { data: metrics } = useMetrics()
   const interpolatedUptime = useInterpolatedUptime(health?.uptime)
-  const { isAuthenticated, isLoading: authLoading } = useAuth()
+  const { isAuthenticated, isLoading: authLoading, authorizations } = useAuth()
   const prefersReducedMotion = useReducedMotion()
 
   return (
@@ -48,19 +49,31 @@ function App() {
         className="relative flex min-h-screen items-center justify-center p-4"
         style={{ zIndex: 10 }}
       >
-        <div className={`w-full max-w-4xl ${prefersReducedMotion ? '' : 'float-subtle'}`}>
+        <div
+          className={`w-full max-w-4xl ${prefersReducedMotion ? '' : 'float-subtle'}`}
+        >
           <PageHeader />
 
           {/* Main Content Card with TiltCard effect and holographic overlay */}
           <TiltCard glowColor="rgba(168, 85, 247, 0.2)" holographic>
             <motion.div
               className="relative overflow-hidden border border-purple-500/30 bg-slate-900/90 shadow-2xl shadow-purple-900/30 backdrop-blur-xl"
-              initial={prefersReducedMotion ? {} : { opacity: 0, y: 30, scale: 0.98 }}
+              initial={
+                prefersReducedMotion ? {} : { opacity: 0, y: 30, scale: 0.98 }
+              }
               animate={{ opacity: 1, y: 0, scale: 1 }}
-              transition={{ duration: 0.6, delay: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
+              transition={{
+                duration: 0.6,
+                delay: 0.2,
+                ease: [0.25, 0.1, 0.25, 1],
+              }}
             >
               {/* Animated corner brackets */}
-              <CornerBrackets size={24} color="#a855f7" glowColor="rgba(168, 85, 247, 0.5)" />
+              <CornerBrackets
+                size={24}
+                color="#a855f7"
+                glowColor="rgba(168, 85, 247, 0.5)"
+              />
 
               {/* Top accent bar with animation */}
               <motion.div
@@ -115,7 +128,13 @@ function App() {
                   <Waveform
                     height={30}
                     color="#a855f7"
-                    status={health?.status === 'ok' ? 'ok' : health?.status === 'degraded' ? 'degraded' : 'error'}
+                    status={
+                      health?.status === 'ok'
+                        ? 'ok'
+                        : health?.status === 'degraded'
+                          ? 'degraded'
+                          : 'error'
+                    }
                   />
                 </div>
 
@@ -123,8 +142,10 @@ function App() {
                 <FadeInSection delay={0.3}>
                   <div className="border-t border-slate-700/50 pt-6">
                     <motion.h3
-                      className="mb-4 font-mono text-sm uppercase tracking-wider text-slate-500"
-                      initial={prefersReducedMotion ? {} : { opacity: 0, x: -10 }}
+                      className="mb-4 font-mono text-sm tracking-wider text-slate-500 uppercase"
+                      initial={
+                        prefersReducedMotion ? {} : { opacity: 0, x: -10 }
+                      }
                       animate={{ opacity: 1, x: 0 }}
                       transition={{ delay: 0.4 }}
                     >
@@ -142,25 +163,39 @@ function App() {
                           <motion.div
                             className="h-4 w-4 rounded-full border-2 border-purple-500 border-t-transparent"
                             animate={{ rotate: 360 }}
-                            transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+                            transition={{
+                              duration: 1,
+                              repeat: Infinity,
+                              ease: 'linear',
+                            }}
                           />
-                          <span className="font-mono text-sm">Checking auth status...</span>
+                          <span className="font-mono text-sm">
+                            Checking auth status...
+                          </span>
                         </motion.div>
                       ) : isAuthenticated ? (
                         <motion.div
                           key="user-info"
-                          initial={prefersReducedMotion ? {} : { opacity: 0, y: 10 }}
+                          initial={
+                            prefersReducedMotion ? {} : { opacity: 0, y: 10 }
+                          }
                           animate={{ opacity: 1, y: 0 }}
-                          exit={prefersReducedMotion ? {} : { opacity: 0, y: -10 }}
+                          exit={
+                            prefersReducedMotion ? {} : { opacity: 0, y: -10 }
+                          }
                         >
                           <UserInfo />
                         </motion.div>
                       ) : (
                         <motion.div
                           key="auth-flow"
-                          initial={prefersReducedMotion ? {} : { opacity: 0, y: 10 }}
+                          initial={
+                            prefersReducedMotion ? {} : { opacity: 0, y: 10 }
+                          }
                           animate={{ opacity: 1, y: 0 }}
-                          exit={prefersReducedMotion ? {} : { opacity: 0, y: -10 }}
+                          exit={
+                            prefersReducedMotion ? {} : { opacity: 0, y: -10 }
+                          }
                         >
                           <AuthFlow />
                         </motion.div>
@@ -173,16 +208,22 @@ function App() {
                 <AnimatePresence>
                   {isAuthenticated && (
                     <motion.div
-                      initial={prefersReducedMotion ? {} : { opacity: 0, height: 0 }}
+                      initial={
+                        prefersReducedMotion ? {} : { opacity: 0, height: 0 }
+                      }
                       animate={{ opacity: 1, height: 'auto' }}
-                      exit={prefersReducedMotion ? {} : { opacity: 0, height: 0 }}
+                      exit={
+                        prefersReducedMotion ? {} : { opacity: 0, height: 0 }
+                      }
                       transition={{ duration: 0.3 }}
                     >
                       <FadeInSection delay={0.4}>
                         <div className="mt-6 border-t border-slate-700/50 pt-6">
                           <motion.h3
-                            className="mb-4 font-mono text-sm uppercase tracking-wider text-slate-500"
-                            initial={prefersReducedMotion ? {} : { opacity: 0, x: -10 }}
+                            className="mb-4 font-mono text-sm tracking-wider text-slate-500 uppercase"
+                            initial={
+                              prefersReducedMotion ? {} : { opacity: 0, x: -10 }
+                            }
                             animate={{ opacity: 1, x: 0 }}
                             transition={{ delay: 0.5 }}
                           >
@@ -195,20 +236,58 @@ function App() {
                   )}
                 </AnimatePresence>
 
+                {/* Grafana Templates Section - only show when authenticated AND has grafana authorization */}
+                <AnimatePresence>
+                  {isAuthenticated && authorizations?.grafana && (
+                    <motion.div
+                      initial={
+                        prefersReducedMotion ? {} : { opacity: 0, height: 0 }
+                      }
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={
+                        prefersReducedMotion ? {} : { opacity: 0, height: 0 }
+                      }
+                      transition={{ duration: 0.3 }}
+                    >
+                      <FadeInSection delay={0.6}>
+                        <div className="mt-6 border-t border-slate-700/50 pt-6">
+                          <motion.h3
+                            className="mb-4 font-mono text-sm tracking-wider text-slate-500 uppercase"
+                            initial={
+                              prefersReducedMotion ? {} : { opacity: 0, x: -10 }
+                            }
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: 0.7 }}
+                          >
+                            Grafana Templates
+                          </motion.h3>
+                          <GrafanaCard />
+                        </div>
+                      </FadeInSection>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
                 {/* Rooms Section - only show when authenticated */}
                 <AnimatePresence>
                   {isAuthenticated && (
                     <motion.div
-                      initial={prefersReducedMotion ? {} : { opacity: 0, height: 0 }}
+                      initial={
+                        prefersReducedMotion ? {} : { opacity: 0, height: 0 }
+                      }
                       animate={{ opacity: 1, height: 'auto' }}
-                      exit={prefersReducedMotion ? {} : { opacity: 0, height: 0 }}
+                      exit={
+                        prefersReducedMotion ? {} : { opacity: 0, height: 0 }
+                      }
                       transition={{ duration: 0.3 }}
                     >
                       <FadeInSection delay={0.5}>
                         <div className="mt-6 border-t border-slate-700/50 pt-6">
                           <motion.h3
-                            className="mb-4 font-mono text-sm uppercase tracking-wider text-slate-500"
-                            initial={prefersReducedMotion ? {} : { opacity: 0, x: -10 }}
+                            className="mb-4 font-mono text-sm tracking-wider text-slate-500 uppercase"
+                            initial={
+                              prefersReducedMotion ? {} : { opacity: 0, x: -10 }
+                            }
                             animate={{ opacity: 1, x: 0 }}
                             transition={{ delay: 0.6 }}
                           >
