@@ -15,6 +15,7 @@ import (
 	"github.com/Scrin/siikabot/commands/ping"
 	"github.com/Scrin/siikabot/commands/remind"
 	"github.com/Scrin/siikabot/commands/ruuvi"
+	"github.com/Scrin/siikabot/commands/stats"
 	"github.com/Scrin/siikabot/commands/traceroute"
 	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/db"
@@ -64,6 +65,10 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 
 	if msgtype == "m.text" && evt.Sender.String() != config.UserID {
 		msg := evt.Content.Raw["body"].(string)
+
+		// Track message stats asynchronously
+		go db.UpdateMessageStats(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
+
 		format, _ := evt.Content.Raw["format"].(string)
 		formattedBody, _ := evt.Content.Raw["formatted_body"].(string)
 		msgCommand := strings.Split(msg, " ")[0]
@@ -93,6 +98,8 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 			go configcmd.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg, mentionedUsers)
 		case "!auth":
 			go authcmd.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
+		case "!stats":
+			go stats.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
 		default:
 			isCommand = false
 
