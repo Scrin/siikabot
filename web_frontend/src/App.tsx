@@ -3,6 +3,10 @@ import { useHealthCheck, useMetrics } from './api/queries'
 import { useInterpolatedUptime } from './hooks/useInterpolatedUptime'
 import { useAuth } from './context/AuthContext'
 import { useReducedMotion } from './hooks/useReducedMotion'
+import {
+  ReducedEffectsProvider,
+  useReducedEffects,
+} from './context/ReducedEffectsContext'
 import { RetroBackground } from './components/RetroBackground'
 import { PageHeader } from './components/PageHeader'
 import { LoadingSpinner } from './components/LoadingSpinner'
@@ -19,21 +23,26 @@ import { FadeInSection } from './components/ui/FadeInSection'
 import { CursorTrail } from './components/ui/CursorTrail'
 import { CornerBrackets } from './components/ui/CornerBrackets'
 import { Waveform } from './components/ui/Waveform'
+import { ReducedEffectsToggle } from './components/ui/ReducedEffectsToggle'
 
-function App() {
+function AppContent() {
   const { data: health, isLoading, error } = useHealthCheck()
   const { data: metrics } = useMetrics()
   const interpolatedUptime = useInterpolatedUptime(health?.uptime)
   const { isAuthenticated, isLoading: authLoading, authorizations } = useAuth()
   const prefersReducedMotion = useReducedMotion()
+  const { isReduced, isMinimal } = useReducedEffects()
 
   return (
     <div className="aurora-bg plasma-bg relative min-h-screen overflow-hidden bg-black">
       {/* WebGL Retro Background */}
-      <RetroBackground />
+      {!isMinimal && <RetroBackground reducedEffects={isReduced} />}
+
+      {/* Reduced effects toggle button */}
+      <ReducedEffectsToggle />
 
       {/* Cursor particle trail effect */}
-      <CursorTrail />
+      {!isMinimal && <CursorTrail />}
 
       {/* Scanline CRT effect overlay */}
       <ScanlineOverlay intensity="light" />
@@ -50,7 +59,7 @@ function App() {
         style={{ zIndex: 10 }}
       >
         <div
-          className={`w-full max-w-4xl ${prefersReducedMotion ? '' : 'float-subtle'}`}
+          className={`w-full max-w-4xl ${prefersReducedMotion || isReduced ? '' : 'float-subtle'}`}
         >
           <PageHeader />
 
@@ -313,6 +322,14 @@ function App() {
         </div>
       </div>
     </div>
+  )
+}
+
+function App() {
+  return (
+    <ReducedEffectsProvider>
+      <AppContent />
+    </ReducedEffectsProvider>
   )
 }
 

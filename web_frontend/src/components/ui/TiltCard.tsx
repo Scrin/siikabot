@@ -1,6 +1,7 @@
 import { motion, useMotionValue, useSpring, useTransform } from 'framer-motion'
 import { useRef, useEffect, type ReactNode } from 'react'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
+import { useReducedEffects } from '../../context/ReducedEffectsContext'
 
 interface TiltCardProps {
   children: ReactNode
@@ -21,6 +22,8 @@ export function TiltCard({
 }: TiltCardProps) {
   const cardRef = useRef<HTMLDivElement>(null)
   const prefersReducedMotion = useReducedMotion()
+  const { isReduced } = useReducedEffects()
+  const shouldReduceMotion = prefersReducedMotion || isReduced
 
   const x = useMotionValue(0)
   const y = useMotionValue(0)
@@ -44,9 +47,59 @@ export function TiltCard({
   const holoHue = useTransform(x, [-0.5, 0.5], [0, 60])
   const shimmerPos = useTransform(x, [-0.5, 0.5], [0, 100])
 
+  // Pre-compute all derived transforms at the top level (hooks must be called unconditionally)
+  const glowBackground = useTransform(
+    [glowX, glowY] as const,
+    ([gx, gy]: string[]) =>
+      `radial-gradient(600px circle at ${gx} ${gy}, ${glowColor}, transparent 40%)`,
+  )
+
+  const holoBackground = useTransform(
+    holoAngle,
+    (angle) =>
+      `linear-gradient(
+        ${angle}deg,
+        rgba(168, 85, 247, 0.15) 0%,
+        rgba(59, 130, 246, 0.15) 25%,
+        rgba(6, 182, 212, 0.15) 50%,
+        rgba(236, 72, 153, 0.15) 75%,
+        rgba(168, 85, 247, 0.15) 100%
+      )`,
+  )
+
+  const holoFilter = useTransform(holoHue, (hue) => `hue-rotate(${hue}deg)`)
+
+  const rainbowBackground = useTransform(
+    [glowX, glowY] as const,
+    ([gx, gy]: string[]) =>
+      `conic-gradient(
+        from ${parseFloat(gx) * 3.6}deg at ${gx} ${gy},
+        transparent 0deg,
+        rgba(255, 0, 0, 0.1) 60deg,
+        rgba(255, 255, 0, 0.1) 120deg,
+        rgba(0, 255, 0, 0.1) 180deg,
+        rgba(0, 255, 255, 0.1) 240deg,
+        rgba(0, 0, 255, 0.1) 300deg,
+        transparent 360deg
+      )`,
+  )
+
+  const shimmerBackground = useTransform(
+    shimmerPos,
+    (pos) =>
+      `linear-gradient(
+        90deg,
+        transparent,
+        transparent ${pos - 5}%,
+        rgba(255, 255, 255, 0.2) ${pos}%,
+        transparent ${pos + 5}%,
+        transparent
+      )`,
+  )
+
   // Global mouse tracking
   useEffect(() => {
-    if (prefersReducedMotion || !trackGlobally) return
+    if (shouldReduceMotion || !trackGlobally) return
 
     const handleGlobalMouseMove = (e: MouseEvent) => {
       const rect = cardRef.current?.getBoundingClientRect()
@@ -65,11 +118,11 @@ export function TiltCard({
 
     window.addEventListener('mousemove', handleGlobalMouseMove)
     return () => window.removeEventListener('mousemove', handleGlobalMouseMove)
-  }, [prefersReducedMotion, trackGlobally, x, y])
+  }, [shouldReduceMotion, trackGlobally, x, y])
 
   // Local mouse tracking (fallback when trackGlobally is false)
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (prefersReducedMotion || trackGlobally) return
+    if (shouldReduceMotion || trackGlobally) return
 
     const rect = cardRef.current?.getBoundingClientRect()
     if (!rect) return
@@ -87,7 +140,8 @@ export function TiltCard({
     y.set(0)
   }
 
-  if (prefersReducedMotion) {
+  // Use conditional rendering instead of early return to keep hook count stable
+  if (shouldReduceMotion) {
     return <div className={className}>{children}</div>
   }
 
@@ -107,13 +161,7 @@ export function TiltCard({
       {/* Dynamic glow following cursor */}
       <motion.div
         className="pointer-events-none absolute -inset-px"
-        style={{
-          background: useTransform(
-            [glowX, glowY] as const,
-            ([gx, gy]: string[]) =>
-              `radial-gradient(600px circle at ${gx} ${gy}, ${glowColor}, transparent 40%)`,
-          ),
-        }}
+        style={{ background: glowBackground }}
       />
 
       {/* Holographic overlay effect */}
@@ -123,19 +171,8 @@ export function TiltCard({
           <motion.div
             className="pointer-events-none absolute -inset-px overflow-hidden"
             style={{
-              background: useTransform(
-                holoAngle,
-                (angle) =>
-                  `linear-gradient(
-                    ${angle}deg,
-                    rgba(168, 85, 247, 0.15) 0%,
-                    rgba(59, 130, 246, 0.15) 25%,
-                    rgba(6, 182, 212, 0.15) 50%,
-                    rgba(236, 72, 153, 0.15) 75%,
-                    rgba(168, 85, 247, 0.15) 100%
-                  )`,
-              ),
-              filter: useTransform(holoHue, (hue) => `hue-rotate(${hue}deg)`),
+              background: holoBackground,
+              filter: holoFilter,
               mixBlendMode: 'overlay',
             }}
           />
@@ -144,20 +181,7 @@ export function TiltCard({
           <motion.div
             className="pointer-events-none absolute inset-0"
             style={{
-              background: useTransform(
-                [glowX, glowY] as const,
-                ([gx, gy]: string[]) =>
-                  `conic-gradient(
-                    from ${parseFloat(gx) * 3.6}deg at ${gx} ${gy},
-                    transparent 0deg,
-                    rgba(255, 0, 0, 0.1) 60deg,
-                    rgba(255, 255, 0, 0.1) 120deg,
-                    rgba(0, 255, 0, 0.1) 180deg,
-                    rgba(0, 255, 255, 0.1) 240deg,
-                    rgba(0, 0, 255, 0.1) 300deg,
-                    transparent 360deg
-                  )`,
-              ),
+              background: rainbowBackground,
               opacity: 0.3,
               mixBlendMode: 'screen',
             }}
@@ -166,20 +190,7 @@ export function TiltCard({
           {/* Shimmer line effect */}
           <motion.div
             className="pointer-events-none absolute inset-0 overflow-hidden"
-            style={{
-              background: useTransform(
-                shimmerPos,
-                (pos) =>
-                  `linear-gradient(
-                    90deg,
-                    transparent,
-                    transparent ${pos - 5}%,
-                    rgba(255, 255, 255, 0.2) ${pos}%,
-                    transparent ${pos + 5}%,
-                    transparent
-                  )`,
-              ),
-            }}
+            style={{ background: shimmerBackground }}
           />
         </>
       )}

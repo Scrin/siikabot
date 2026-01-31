@@ -106,9 +106,17 @@ function createDNAHelix(): THREE.BufferGeometry {
   return geometry
 }
 
-export function RetroBackground() {
+interface RetroBackgroundProps {
+  reducedEffects?: boolean
+}
+
+export function RetroBackground({ reducedEffects = false }: RetroBackgroundProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const mouseRef = useRef({ x: 0, y: 0, targetX: 0, targetY: 0, speed: 0, prevX: 0, prevY: 0 })
+  const reducedEffectsRef = useRef(reducedEffects)
+
+  // Keep the ref in sync with the prop
+  reducedEffectsRef.current = reducedEffects
 
   useEffect(() => {
     if (!canvasRef.current) return
@@ -510,6 +518,9 @@ export function RetroBackground() {
       // Rotate particle field slowly
       particles.rotation.y += 0.0002
       particles.rotation.x += 0.0001
+
+      // Hide particles in reduced effects mode
+      particles.visible = !reducedEffectsRef.current
 
       // === DYNAMIC GRID ANIMATION ===
       const gridWave = Math.sin(time * 0.5) * 0.05
