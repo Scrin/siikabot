@@ -184,7 +184,7 @@ func GetRoomMembers(ctx context.Context, roomID mid.RoomID) ([]mid.UserID, error
 // FindSharedRooms finds rooms shared with a user
 func FindSharedRooms(ctx context.Context, userID mid.UserID) ([]mid.RoomID, error) {
 	rows, err := pool.Query(ctx,
-		"SELECT room_id FROM room_members WHERE user_id = $1",
+		"SELECT room_id FROM room_members WHERE user_id = $1 ORDER BY room_id",
 		userID)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).

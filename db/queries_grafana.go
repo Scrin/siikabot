@@ -13,7 +13,7 @@ type GrafanaConfig struct {
 
 func GetGrafanaConfigs(ctx context.Context) (map[string]GrafanaConfig, error) {
 	// First get all templates
-	rows, err := pool.Query(ctx, "SELECT name, template FROM grafana_templates")
+	rows, err := pool.Query(ctx, "SELECT name, template FROM grafana_templates ORDER BY name")
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Msg("Failed to query grafana templates")
 		return nil, err
@@ -38,7 +38,7 @@ func GetGrafanaConfigs(ctx context.Context) (map[string]GrafanaConfig, error) {
 	}
 
 	// Then get all datasources and add them to their respective templates
-	rows, err = pool.Query(ctx, "SELECT template_name, name, url FROM grafana_datasources")
+	rows, err = pool.Query(ctx, "SELECT template_name, name, url FROM grafana_datasources ORDER BY template_name, name")
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Msg("Failed to query grafana datasources")
 		return nil, err
