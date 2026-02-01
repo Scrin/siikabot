@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/Scrin/siikabot/commands/grafana"
@@ -148,12 +149,28 @@ func handleListTemplates(ctx context.Context, w http.ResponseWriter) {
 		Templates: make([]GrafanaTemplateResponse, 0, len(configs)),
 	}
 
-	for name, cfg := range configs {
+	// Sort template names for consistent ordering
+	templateNames := make([]string, 0, len(configs))
+	for name := range configs {
+		templateNames = append(templateNames, name)
+	}
+	slices.Sort(templateNames)
+
+	for _, name := range templateNames {
+		cfg := configs[name]
 		datasources := make([]GrafanaDatasourceResponse, 0, len(cfg.DataSources))
-		for dsName, dsURL := range cfg.DataSources {
+
+		// Sort datasource names for consistent ordering
+		dsNames := make([]string, 0, len(cfg.DataSources))
+		for dsName := range cfg.DataSources {
+			dsNames = append(dsNames, dsName)
+		}
+		slices.Sort(dsNames)
+
+		for _, dsName := range dsNames {
 			datasources = append(datasources, GrafanaDatasourceResponse{
 				Name: dsName,
-				URL:  dsURL,
+				URL:  cfg.DataSources[dsName],
 			})
 		}
 		response.Templates = append(response.Templates, GrafanaTemplateResponse{
