@@ -172,7 +172,7 @@ func getWeatherData(ctx context.Context, location string) (*WeatherData, error) 
 
 	// Extract temperature (t2m)
 	t2mData := extractMeasurement(body, "obs-obs-1-1-t2m")
-	if t2mData.Value != 0 {
+	if t2mData.Found {
 		parameterMap["t2m"] = t2mData.Value
 		if t2mData.Time > latestTimeStr {
 			latestTimeStr = t2mData.Time
@@ -181,7 +181,7 @@ func getWeatherData(ctx context.Context, location string) (*WeatherData, error) 
 
 	// Extract wind speed (ws_10min)
 	wsData := extractMeasurement(body, "obs-obs-1-1-ws_10min")
-	if wsData.Value != 0 {
+	if wsData.Found {
 		parameterMap["ws_10min"] = wsData.Value
 		if wsData.Time > latestTimeStr {
 			latestTimeStr = wsData.Time
@@ -190,7 +190,7 @@ func getWeatherData(ctx context.Context, location string) (*WeatherData, error) 
 
 	// Extract humidity (rh)
 	rhData := extractMeasurement(body, "obs-obs-1-1-rh")
-	if rhData.Value != 0 {
+	if rhData.Found {
 		parameterMap["rh"] = rhData.Value
 		if rhData.Time > latestTimeStr {
 			latestTimeStr = rhData.Time
@@ -199,7 +199,7 @@ func getWeatherData(ctx context.Context, location string) (*WeatherData, error) 
 
 	// Extract precipitation (r_1h)
 	r1hData := extractMeasurement(body, "obs-obs-1-1-r_1h")
-	if r1hData.Value != 0 && !strings.Contains(r1hData.RawValue, "NaN") {
+	if r1hData.Found {
 		parameterMap["r_1h"] = r1hData.Value
 		if r1hData.Time > latestTimeStr {
 			latestTimeStr = r1hData.Time
@@ -208,7 +208,7 @@ func getWeatherData(ctx context.Context, location string) (*WeatherData, error) 
 
 	// Extract pressure (p_sea)
 	pSeaData := extractMeasurement(body, "obs-obs-1-1-p_sea")
-	if pSeaData.Value != 0 {
+	if pSeaData.Found {
 		parameterMap["p_sea"] = pSeaData.Value
 		if pSeaData.Time > latestTimeStr {
 			latestTimeStr = pSeaData.Time
@@ -217,7 +217,7 @@ func getWeatherData(ctx context.Context, location string) (*WeatherData, error) 
 
 	// Extract visibility (vis)
 	visData := extractMeasurement(body, "obs-obs-1-1-vis")
-	if visData.Value != 0 {
+	if visData.Found {
 		parameterMap["vis"] = visData.Value
 		if visData.Time > latestTimeStr {
 			latestTimeStr = visData.Time
@@ -282,6 +282,7 @@ type MeasurementData struct {
 	Time     string
 	Value    float64
 	RawValue string
+	Found    bool
 }
 
 // extractMeasurement extracts a specific measurement from the XML response
@@ -303,7 +304,8 @@ func extractMeasurement(xmlData []byte, measurementID string) MeasurementData {
 	nextSeriesIndex := strings.Index(section[1:], "gml:id=")
 	if nextSeriesIndex != -1 {
 		// Limit the section to just this measurement series
-		section = section[:nextSeriesIndex]
+		// Add 1 because nextSeriesIndex is relative to section[1:]
+		section = section[:nextSeriesIndex+1]
 	}
 
 	// Find all measurement points
@@ -350,13 +352,22 @@ func extractMeasurement(xmlData []byte, measurementID string) MeasurementData {
 		return MeasurementData{}
 	}
 
+	// Check for NaN value
+	if strings.Contains(lastValue, "NaN") {
+		return MeasurementData{}
+	}
+
 	// Convert value to float
-	value, _ := strconv.ParseFloat(lastValue, 64)
+	value, err := strconv.ParseFloat(lastValue, 64)
+	if err != nil {
+		return MeasurementData{}
+	}
 
 	return MeasurementData{
 		Time:     lastTime,
 		Value:    value,
 		RawValue: lastValue,
+		Found:    true,
 	}
 }
 

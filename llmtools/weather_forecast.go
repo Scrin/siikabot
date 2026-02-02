@@ -83,13 +83,18 @@ func handleWeatherForecastToolCall(ctx context.Context, arguments string) (strin
 
 // ForecastEntry represents a single forecast entry
 type ForecastEntry struct {
-	Time          time.Time
-	Temperature   float64
-	WindSpeed     float64
-	Humidity      float64
-	Pressure      float64
-	Precipitation float64
-	HasData       bool
+	Time             time.Time
+	Temperature      float64
+	WindSpeed        float64
+	Humidity         float64
+	Pressure         float64
+	Precipitation    float64
+	HasData          bool
+	HasTemperature   bool
+	HasWindSpeed     bool
+	HasHumidity      bool
+	HasPressure      bool
+	HasPrecipitation bool
 }
 
 // ForecastData holds the processed forecast information
@@ -200,9 +205,10 @@ func getForecastData(ctx context.Context, location string, days int) (*ForecastD
 		}
 
 		entry := ForecastEntry{
-			Time:        t,
-			Temperature: value,
-			HasData:     true,
+			Time:           t,
+			Temperature:    value,
+			HasData:        true,
+			HasTemperature: true,
 		}
 
 		forecastMap[timeStr] = entry
@@ -229,6 +235,7 @@ func getForecastData(ctx context.Context, location string, days int) (*ForecastD
 		}
 
 		entry.WindSpeed = value
+		entry.HasWindSpeed = true
 		forecastMap[timeStr] = entry
 	}
 
@@ -253,6 +260,7 @@ func getForecastData(ctx context.Context, location string, days int) (*ForecastD
 		}
 
 		entry.Humidity = value
+		entry.HasHumidity = true
 		forecastMap[timeStr] = entry
 	}
 
@@ -277,6 +285,7 @@ func getForecastData(ctx context.Context, location string, days int) (*ForecastD
 		}
 
 		entry.Pressure = value
+		entry.HasPressure = true
 		forecastMap[timeStr] = entry
 	}
 
@@ -301,6 +310,7 @@ func getForecastData(ctx context.Context, location string, days int) (*ForecastD
 		}
 
 		entry.Precipitation = value
+		entry.HasPrecipitation = true
 		forecastMap[timeStr] = entry
 	}
 
@@ -337,64 +347,74 @@ func extractForecastData(xmlData []byte, dataType string) map[string]float64 {
 	// Map to store time -> value pairs
 	data := make(map[string]float64)
 
-	// Different data types have different patterns in the XML
-	var searchPattern string
+	// Different data types have different gml:id patterns in the XML
+	// The FMI API uses patterns like gml:id="mts-1-1-Temperature"
+	var idPattern string
 	switch dataType {
 	case "temperature":
-		// Look for the temperature section (usually the second data block)
-		searchPattern = "Temperature"
+		idPattern = "mts-1-1-Temperature"
 	case "windspeed":
-		searchPattern = "WindSpeedMS"
+		idPattern = "mts-1-1-WindSpeedMS"
 	case "humidity":
-		searchPattern = "Humidity"
+		idPattern = "mts-1-1-Humidity"
 	case "pressure":
-		searchPattern = "Pressure"
+		idPattern = "mts-1-1-Pressure"
 	case "precipitation1h":
-		searchPattern = "Precipitation1h"
+		idPattern = "mts-1-1-Precipitation1h"
 	default:
 		return data
 	}
 
-	// Find the section containing the data type
-	sectionIndex := strings.Index(xmlStr, searchPattern)
-	if sectionIndex == -1 {
+	// Find the measurement timeseries section by gml:id
+	idMarker := fmt.Sprintf("gml:id=\"%s\"", idPattern)
+	idIndex := strings.Index(xmlStr, idMarker)
+	if idIndex == -1 {
 		return data
 	}
 
-	// Get the section after the data type marker
-	section := xmlStr[sectionIndex:]
+	// Get the section after the ID
+	section := xmlStr[idIndex:]
 
-	// Extract all time-value pairs
+	// Find the end of this measurement series by looking for the next gml:id
+	nextSeriesIndex := strings.Index(section[1:], "gml:id=")
+	if nextSeriesIndex != -1 {
+		// Limit the section to just this measurement series
+		// Add 1 because nextSeriesIndex is relative to section[1:]
+		section = section[:nextSeriesIndex+1]
+	}
+
+	// Extract all time-value pairs within this bounded section
 	timePattern := "<wml2:time>"
 	valuePattern := "<wml2:value>"
 
+	currentIndex := 0
 	for {
-		timeStartIndex := strings.Index(section, timePattern)
+		pointSection := section[currentIndex:]
+
+		timeStartIndex := strings.Index(pointSection, timePattern)
 		if timeStartIndex == -1 {
 			break
 		}
 
-		timeEndIndex := strings.Index(section[timeStartIndex:], "</wml2:time>")
+		timeEndIndex := strings.Index(pointSection[timeStartIndex:], "</wml2:time>")
 		if timeEndIndex == -1 {
 			break
 		}
 
-		timeStr := section[timeStartIndex+len(timePattern) : timeStartIndex+timeEndIndex]
+		timeStr := pointSection[timeStartIndex+len(timePattern) : timeStartIndex+timeEndIndex]
 
-		// Move to the value part
-		valueSection := section[timeStartIndex+timeEndIndex:]
-
-		valueStartIndex := strings.Index(valueSection, valuePattern)
+		// Find the value within the same point
+		valueStartIndex := strings.Index(pointSection[timeStartIndex:], valuePattern)
 		if valueStartIndex == -1 {
 			break
 		}
 
-		valueEndIndex := strings.Index(valueSection[valueStartIndex:], "</wml2:value>")
+		valueEndIndex := strings.Index(pointSection[timeStartIndex+valueStartIndex:], "</wml2:value>")
 		if valueEndIndex == -1 {
 			break
 		}
 
-		valueStr := valueSection[valueStartIndex+len(valuePattern) : valueStartIndex+valueEndIndex]
+		valueStr := pointSection[timeStartIndex+valueStartIndex+len(valuePattern) : timeStartIndex+valueStartIndex+valueEndIndex]
 
 		// Skip NaN values
 		if valueStr != "NaN" {
@@ -404,8 +424,8 @@ func extractForecastData(xmlData []byte, dataType string) map[string]float64 {
 			}
 		}
 
-		// Move to the next pair
-		section = valueSection[valueStartIndex+valueEndIndex:]
+		// Move to the next point
+		currentIndex += timeStartIndex + timeEndIndex + len("</wml2:time>")
 	}
 
 	return data
@@ -474,21 +494,23 @@ func formatForecastData(data *ForecastData, location string, days int) string {
 				timeStr := localTime.Format("15:04")
 
 				sb.WriteString(fmt.Sprintf("**%s**:\n", timeStr))
-				sb.WriteString(fmt.Sprintf("  Temperature: %.1f°C\n", forecast.Temperature))
+				if forecast.HasTemperature {
+					sb.WriteString(fmt.Sprintf("  Temperature: %.1f°C\n", forecast.Temperature))
+				}
 
-				if forecast.WindSpeed > 0 {
+				if forecast.HasWindSpeed {
 					sb.WriteString(fmt.Sprintf("  Wind Speed: %.1f m/s\n", forecast.WindSpeed))
 				}
 
-				if forecast.Humidity > 0 {
+				if forecast.HasHumidity {
 					sb.WriteString(fmt.Sprintf("  Humidity: %.1f%%\n", forecast.Humidity))
 				}
 
-				if forecast.Precipitation > 0 {
+				if forecast.HasPrecipitation {
 					sb.WriteString(fmt.Sprintf("  Precipitation: %.1f mm\n", forecast.Precipitation))
 				}
 
-				if forecast.Pressure > 0 {
+				if forecast.HasPressure {
 					sb.WriteString(fmt.Sprintf("  Pressure: %.1f hPa\n", forecast.Pressure))
 				}
 
