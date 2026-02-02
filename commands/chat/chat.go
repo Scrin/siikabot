@@ -41,6 +41,7 @@ func Init(ctx context.Context) {
 	toolRegistry.RegisterTool(llmtools.GitHubIssueToolDefinition)
 	toolRegistry.RegisterTool(llmtools.FingridToolDefinition)
 	toolRegistry.RegisterTool(llmtools.WebToolDefinition)
+	toolRegistry.RegisterTool(llmtools.WhoisToolDefinition)
 
 	// Start a goroutine to periodically clean up old chat history
 	go func() {

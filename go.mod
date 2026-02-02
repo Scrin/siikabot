@@ -8,6 +8,7 @@ require (
 	github.com/grokify/html-strip-tags-go v0.1.0
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/joho/godotenv v1.5.1
+	github.com/likexian/whois v1.15.7
 	github.com/prometheus/client_golang v1.23.2
 	github.com/rs/zerolog v1.34.0
 	go.mau.fi/util v0.9.5
