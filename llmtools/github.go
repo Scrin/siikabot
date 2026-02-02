@@ -35,7 +35,8 @@ var GitHubIssueToolDefinition = openrouter.ToolDefinition{
 				"required": ["repo", "issue_number"]
 			}`),
 	},
-	Handler: handleGitHubIssueToolCall,
+	Handler:          handleGitHubIssueToolCall,
+	ValidityDuration: 10 * time.Minute,
 }
 
 // handleGitHubIssueToolCall handles GitHub issue tool calls

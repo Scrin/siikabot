@@ -40,7 +40,7 @@ var WebToolDefinition = openrouter.ToolDefinition{
 			}`),
 	},
 	Handler:          handleWebToolCall,
-	ValidityDuration: 1 * time.Minute,
+	ValidityDuration: 10 * time.Minute,
 }
 
 // Default maximum size of response body to read (10kB)

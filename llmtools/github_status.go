@@ -30,7 +30,8 @@ var GitHubStatusToolDefinition = openrouter.ToolDefinition{
 			"required": []
 		}`),
 	},
-	Handler: handleGitHubStatusToolCall,
+	Handler:          handleGitHubStatusToolCall,
+	ValidityDuration: 5 * time.Minute,
 }
 
 // GitHub Status API response types

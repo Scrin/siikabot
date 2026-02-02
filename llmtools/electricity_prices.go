@@ -32,7 +32,8 @@ var ElectricityPricesToolDefinition = openrouter.ToolDefinition{
 				"required": ["date"]
 			}`),
 	},
-	Handler: handleElectricityPricesToolCall,
+	Handler:          handleElectricityPricesToolCall,
+	ValidityDuration: 1 * time.Hour,
 }
 
 // Cache for electricity prices

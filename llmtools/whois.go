@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Scrin/siikabot/openrouter"
 	"github.com/likexian/whois"
@@ -28,7 +29,8 @@ var WhoisToolDefinition = openrouter.ToolDefinition{
 			"required": ["query"]
 		}`),
 	},
-	Handler: handleWhoisToolCall,
+	Handler:          handleWhoisToolCall,
+	ValidityDuration: 1 * time.Hour,
 }
 
 // handleWhoisToolCall handles whois tool calls

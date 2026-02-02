@@ -31,7 +31,8 @@ var FingridToolDefinition = openrouter.ToolDefinition{
 				"required": ["datetime"]
 			}`),
 	},
-	Handler: handleFingridToolCall,
+	Handler:          handleFingridToolCall,
+	ValidityDuration: 3 * time.Minute,
 }
 
 // handleFingridToolCall handles Fingrid power production statistics tool calls
