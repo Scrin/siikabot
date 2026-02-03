@@ -25,6 +25,7 @@ func initHTTP() {
 	mux.Handle("/api/grafana/templates/", api.AuthMiddleware(http.HandlerFunc(api.GrafanaTemplateRouteHandler)))
 	mux.HandleFunc("/api/metrics", api.MetricsHandler)
 	mux.HandleFunc("/hooks/github", githubHandler(config.HookSecret))
+	mux.HandleFunc("/hooks/alertmanager", alertmanagerHandler(config.AlertmanagerUser, config.AlertmanagerPassword))
 	mux.Handle("/metrics", promhttp.Handler())
 
 	// Register the catch-all static file handler for everything else

@@ -25,6 +25,8 @@ var (
 	Timezone                 = ""
 	GoogleAPIKey             = ""
 	GoogleSearchEngineID     = ""
+	AlertmanagerUser         = ""
+	AlertmanagerPassword     = ""
 )
 
 func loadConfig() error {
@@ -40,6 +42,8 @@ func loadConfig() error {
 	Timezone = os.Getenv("SIIKABOT_TIMEZONE")
 	GoogleAPIKey = os.Getenv("SIIKABOT_GOOGLE_API_KEY")
 	GoogleSearchEngineID = os.Getenv("SIIKABOT_GOOGLE_SEARCH_ENGINE_ID")
+	AlertmanagerUser = os.Getenv("SIIKABOT_ALERTMANAGER_USER")
+	AlertmanagerPassword = os.Getenv("SIIKABOT_ALERTMANAGER_PASSWORD")
 
 	if HomeserverURL == "" {
 		return fmt.Errorf("SIIKABOT_HOMESERVER_URL is not set")
@@ -73,6 +77,12 @@ func loadConfig() error {
 	}
 	if GoogleSearchEngineID == "" {
 		return fmt.Errorf("SIIKABOT_GOOGLE_SEARCH_ENGINE_ID is not set")
+	}
+	if AlertmanagerUser == "" {
+		return fmt.Errorf("SIIKABOT_ALERTMANAGER_USER is not set")
+	}
+	if AlertmanagerPassword == "" {
+		return fmt.Errorf("SIIKABOT_ALERTMANAGER_PASSWORD is not set")
 	}
 	return nil
 }
