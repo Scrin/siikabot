@@ -2,11 +2,11 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"runtime"
 
 	"github.com/Scrin/siikabot/db"
+	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
@@ -42,21 +42,15 @@ type BotMetrics struct {
 }
 
 // MetricsHandler returns parsed metrics as JSON for the web UI
-func MetricsHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+func MetricsHandler(c *gin.Context) {
+	ctx := c.Request.Context()
 
-	response := MetricsResponse{
+	c.JSON(http.StatusOK, MetricsResponse{
 		Memory:   getMemoryMetrics(ctx),
 		Runtime:  getRuntimeMetrics(),
 		Database: getDatabaseMetrics(),
 		Bot:      getBotMetrics(ctx),
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Error().Ctx(ctx).Err(err).Msg("Failed to encode metrics response")
-	}
+	})
 }
 
 func getMemoryMetrics(ctx context.Context) MemoryMetrics {

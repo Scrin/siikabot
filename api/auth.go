@@ -1,13 +1,12 @@
 package api
 
 import (
-	"context"
-	"encoding/json"
 	"net/http"
 	"strings"
 
 	"github.com/Scrin/siikabot/auth"
 	"github.com/Scrin/siikabot/db"
+	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
 )
 
@@ -43,160 +42,105 @@ type ErrorResponse struct {
 
 // ChallengeHandler generates a new authentication challenge
 // POST /api/auth/challenge
-func ChallengeHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+func ChallengeHandler(c *gin.Context) {
+	ctx := c.Request.Context()
 
 	challenge, pollSecret, expiresAt, err := auth.GenerateChallenge(ctx)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Msg("Failed to generate auth challenge")
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(ErrorResponse{Error: "Too many pending authentication requests"})
+		c.JSON(http.StatusServiceUnavailable, ErrorResponse{Error: "Too many pending authentication requests"})
 		return
 	}
 
-	response := ChallengeResponse{
+	c.JSON(http.StatusOK, ChallengeResponse{
 		Challenge:  challenge,
 		PollSecret: pollSecret,
 		ExpiresAt:  expiresAt.UTC().Format("2006-01-02T15:04:05Z"),
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Error().Ctx(ctx).Err(err).Msg("Failed to encode challenge response")
-	}
+	})
 }
 
 // PollHandler checks if a challenge has been completed
 // GET /api/auth/poll?challenge=xxx&poll_secret=yyy
-func PollHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+func PollHandler(c *gin.Context) {
+	ctx := c.Request.Context()
 
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	challenge := r.URL.Query().Get("challenge")
-	pollSecret := r.URL.Query().Get("poll_secret")
+	challenge := c.Query("challenge")
+	pollSecret := c.Query("poll_secret")
 	if challenge == "" || pollSecret == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(ErrorResponse{Error: "Missing challenge or poll_secret parameter"})
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "Missing challenge or poll_secret parameter"})
 		return
 	}
 
 	// Try to consume the result (this removes it from the store)
 	token, userID, err := auth.ConsumeChallengeResult(ctx, challenge, pollSecret)
 	if err == nil {
-		response := PollResponse{
+		c.JSON(http.StatusOK, PollResponse{
 			Status: "authenticated",
 			Token:  token,
 			UserID: userID,
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(response); err != nil {
-			log.Error().Ctx(ctx).Err(err).Msg("Failed to encode poll response")
-		}
+		})
 		return
 	}
 
 	// Check if the error is invalid poll secret (potential attack)
 	if err == auth.ErrInvalidPollSecret {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusForbidden)
-		json.NewEncoder(w).Encode(ErrorResponse{Error: "Invalid poll secret"})
+		c.JSON(http.StatusForbidden, ErrorResponse{Error: "Invalid poll secret"})
 		return
 	}
 
 	// Check if the challenge is still pending (not completed yet)
 	completed, _, _, pollErr := auth.PollChallenge(ctx, challenge, pollSecret)
 	if pollErr == auth.ErrInvalidPollSecret {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusForbidden)
-		json.NewEncoder(w).Encode(ErrorResponse{Error: "Invalid poll secret"})
+		c.JSON(http.StatusForbidden, ErrorResponse{Error: "Invalid poll secret"})
 		return
 	}
 	if completed {
 		// Shouldn't happen since ConsumeChallengeResult would have caught it
 		// but handle it gracefully
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusGone)
-		json.NewEncoder(w).Encode(ErrorResponse{Error: "Challenge already consumed"})
+		c.JSON(http.StatusGone, ErrorResponse{Error: "Challenge already consumed"})
 		return
 	}
 
 	// Challenge exists but not yet completed, or challenge doesn't exist
 	// We don't distinguish to avoid leaking information about valid challenges
-	response := PollResponse{
-		Status: "pending",
-	}
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Error().Ctx(ctx).Err(err).Msg("Failed to encode poll response")
-	}
+	c.JSON(http.StatusOK, PollResponse{Status: "pending"})
 }
 
 // MeHandler returns the current authenticated user
 // GET /api/auth/me
 // Requires Authorization: Bearer <token> header
-func MeHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+func MeHandler(c *gin.Context) {
+	ctx := c.Request.Context()
 
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	token := extractBearerToken(r)
+	token := extractBearerToken(c.Request)
 	if token == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(ErrorResponse{Error: "Missing or invalid Authorization header"})
+		c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "Missing or invalid Authorization header"})
 		return
 	}
 
 	user, err := db.GetUserByWebSessionToken(ctx, token)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(ErrorResponse{Error: "Invalid or expired token"})
+		c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "Invalid or expired token"})
 		return
 	}
 
-	response := MeResponse{
+	c.JSON(http.StatusOK, MeResponse{
 		UserID: user.UserID,
 		Authorizations: Authorizations{
 			Grafana: user.Authorizations.Grafana,
 		},
-	}
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Error().Ctx(ctx).Err(err).Msg("Failed to encode me response")
-	}
+	})
 }
 
 // LogoutHandler clears the user's web session token
 // POST /api/auth/logout
 // Requires Authorization: Bearer <token> header
-func LogoutHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+func LogoutHandler(c *gin.Context) {
+	ctx := c.Request.Context()
 
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	token := extractBearerToken(r)
+	token := extractBearerToken(c.Request)
 	if token == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(ErrorResponse{Error: "Missing or invalid Authorization header"})
+		c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "Missing or invalid Authorization header"})
 		return
 	}
 
@@ -204,24 +148,19 @@ func LogoutHandler(w http.ResponseWriter, r *http.Request) {
 	user, err := db.GetUserByWebSessionToken(ctx, token)
 	if err != nil {
 		// Token already invalid, consider logout successful
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 		return
 	}
 
 	// Clear the token from DB
 	if err := db.ClearWebSessionToken(ctx, user.UserID); err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("user_id", user.UserID).Msg("Failed to clear web session token")
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(ErrorResponse{Error: "Failed to logout"})
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "Failed to logout"})
 		return
 	}
 
 	log.Info().Ctx(ctx).Str("user_id", user.UserID).Msg("User logged out from web via API")
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
 // extractBearerToken extracts the token from the Authorization header
@@ -239,40 +178,34 @@ func extractBearerToken(r *http.Request) string {
 	return parts[1]
 }
 
-// AuthMiddleware creates middleware that validates the auth token and adds the user ID to the context
-func AuthMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
+// AuthMiddleware creates Gin middleware that validates the auth token and adds the user ID to the context
+func AuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx := c.Request.Context()
 
-		token := extractBearerToken(r)
+		token := extractBearerToken(c.Request)
 		if token == "" {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(ErrorResponse{Error: "Missing or invalid Authorization header"})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, ErrorResponse{Error: "Missing or invalid Authorization header"})
 			return
 		}
 
 		user, err := db.GetUserByWebSessionToken(ctx, token)
 		if err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(ErrorResponse{Error: "Invalid or expired token"})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, ErrorResponse{Error: "Invalid or expired token"})
 			return
 		}
 
-		// Add user ID to context
-		ctx = context.WithValue(ctx, userIDContextKey, user.UserID)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
+		// Add user ID to Gin context
+		c.Set("user_id", user.UserID)
+		c.Next()
+	}
 }
 
-// contextKey is a type for context keys to avoid collisions
-type contextKey string
-
-const userIDContextKey contextKey = "user_id"
-
-// GetUserIDFromContext retrieves the user ID from the request context
-func GetUserIDFromContext(ctx context.Context) (string, bool) {
-	userID, ok := ctx.Value(userIDContextKey).(string)
-	return userID, ok
+// GetUserIDFromContext retrieves the user ID from the Gin context
+func GetUserIDFromContext(c *gin.Context) (string, bool) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		return "", false
+	}
+	return userID.(string), true
 }

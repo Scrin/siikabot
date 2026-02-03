@@ -2,14 +2,13 @@ package bot
 
 import (
 	"bytes"
-	"encoding/json"
-	"io"
 	"net/http"
 	"text/template"
 	"time"
 
 	"github.com/Scrin/siikabot/matrix"
 	"github.com/Scrin/siikabot/metrics"
+	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
 )
 
@@ -60,51 +59,49 @@ func sendAlertmanagerMsg(payload AlertmanagerPayload, roomID string) {
 	}
 }
 
-func alertmanagerHandler(user, password string) func(w http.ResponseWriter, req *http.Request) {
-	return func(w http.ResponseWriter, req *http.Request) {
-		metrics.RecordWebhookHandled("alertmanager")
-
-		reqUser, reqPassword, ok := req.BasicAuth()
-		if !ok || reqUser != user || reqPassword != password {
+// AlertmanagerBasicAuthMiddleware creates Gin middleware for HTTP Basic Auth
+func AlertmanagerBasicAuthMiddleware(expectedUser, expectedPassword string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		user, password, ok := c.Request.BasicAuth()
+		if !ok || user != expectedUser || password != expectedPassword {
 			log.Warn().
 				Bool("auth_provided", ok).
 				Msg("Alertmanager webhook received with invalid credentials")
-			w.Header().Set("WWW-Authenticate", `Basic realm="alertmanager"`)
-			w.WriteHeader(http.StatusUnauthorized)
+			c.Header("WWW-Authenticate", `Basic realm="alertmanager"`)
+			c.AbortWithStatus(http.StatusUnauthorized)
 			return
 		}
-
-		body, err := io.ReadAll(req.Body)
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to read Alertmanager webhook request body")
-			return
-		}
-		req.Body.Close()
-
-		roomID := req.URL.Query().Get("room_id")
-		if roomID == "" {
-			log.Warn().Msg("Alertmanager webhook received without room_id")
-			return
-		}
-
-		payload := AlertmanagerPayload{}
-		err = json.Unmarshal(body, &payload)
-		if err != nil {
-			log.Error().
-				Err(err).
-				Str("room_id", roomID).
-				Str("body", string(body)).
-				Msg("Failed to parse Alertmanager webhook payload")
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		log.Debug().
-			Str("room_id", roomID).
-			Str("status", payload.Status).
-			Int("alert_count", len(payload.Alerts)).
-			Msg("Processing Alertmanager webhook request")
-
-		sendAlertmanagerMsg(payload, roomID)
+		c.Next()
 	}
+}
+
+// AlertmanagerWebhookHandler handles Alertmanager webhook requests
+func AlertmanagerWebhookHandler(c *gin.Context) {
+	metrics.RecordWebhookHandled("alertmanager")
+
+	roomID := c.Query("room_id")
+	if roomID == "" {
+		log.Warn().Msg("Alertmanager webhook received without room_id")
+		c.Status(http.StatusBadRequest)
+		return
+	}
+
+	var payload AlertmanagerPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		log.Error().
+			Err(err).
+			Str("room_id", roomID).
+			Msg("Failed to parse Alertmanager webhook payload")
+		c.String(http.StatusBadRequest, err.Error())
+		return
+	}
+
+	log.Debug().
+		Str("room_id", roomID).
+		Str("status", payload.Status).
+		Int("alert_count", len(payload.Alerts)).
+		Msg("Processing Alertmanager webhook request")
+
+	sendAlertmanagerMsg(payload, roomID)
+	c.Status(http.StatusOK)
 }

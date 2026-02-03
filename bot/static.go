@@ -6,40 +6,51 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
 )
 
 //go:embed all:frontend/dist
 var frontendFS embed.FS
 
-// getStaticHandler returns a handler that serves static files from the embedded frontend
-// It falls back to index.html for client-side routing
-func getStaticHandler() http.Handler {
-	// Get the dist subdirectory from the embedded filesystem
+// SetupStaticRoutes configures static file serving with SPA fallback for Gin
+func SetupStaticRoutes(router *gin.Engine) {
 	distFS, err := fs.Sub(frontendFS, "frontend/dist")
 	if err != nil {
 		log.Warn().Err(err).Msg("Failed to access embedded frontend files, static serving will be unavailable")
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, "Frontend not available", http.StatusNotFound)
-		})
+		return
 	}
 
-	fileServer := http.FileServer(http.FS(distFS))
+	// Use NoRoute handler for SPA fallback
+	router.NoRoute(func(c *gin.Context) {
+		path := c.Request.URL.Path
 
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// For paths that might be client-side routes, try serving the file first
-		// If it doesn't exist, serve index.html for SPA routing
-		path := strings.TrimPrefix(r.URL.Path, "/")
-		if path == "" {
-			path = "index.html"
+		// Don't serve index.html for API routes that 404
+		if strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/hooks/") {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Not found"})
+			return
 		}
 
-		// Check if the file exists
-		if _, err := fs.Stat(distFS, path); err != nil {
-			// File doesn't exist, serve index.html for client-side routing
-			r.URL.Path = "/"
+		// Try to serve the requested file
+		filePath := strings.TrimPrefix(path, "/")
+		if filePath == "" {
+			filePath = "index.html"
 		}
 
-		fileServer.ServeHTTP(w, r)
+		// Check if the file exists in the embedded filesystem
+		if file, err := distFS.Open(filePath); err == nil {
+			file.Close()
+			// File exists, serve it
+			c.FileFromFS(path, http.FS(distFS))
+			return
+		}
+
+		// File doesn't exist, serve index.html for SPA routing
+		indexContent, err := fs.ReadFile(distFS, "index.html")
+		if err != nil {
+			c.String(http.StatusNotFound, "Frontend not available")
+			return
+		}
+		c.Data(http.StatusOK, "text/html; charset=utf-8", indexContent)
 	})
 }

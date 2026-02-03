@@ -1,11 +1,10 @@
 package bot
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha1"
 	"encoding/hex"
-	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/Scrin/siikabot/matrix"
 	"github.com/Scrin/siikabot/metrics"
+	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
 )
 
@@ -132,53 +132,61 @@ func verifySignature(secret []byte, signature string, body []byte) bool {
 	return hmac.Equal([]byte(computed.Sum(nil)), actual)
 }
 
-func githubHandler(hookSecret string) func(w http.ResponseWriter, req *http.Request) {
-	return func(w http.ResponseWriter, req *http.Request) {
-		metrics.RecordWebhookHandled("github")
-		signature := req.Header.Get("x-hub-signature")
+// GithubSignatureMiddleware creates Gin middleware that verifies GitHub webhook signatures
+func GithubSignatureMiddleware(hookSecret string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		signature := c.GetHeader("x-hub-signature")
 		if signature == "" {
 			log.Warn().Msg("GitHub webhook received without signature")
+			c.AbortWithStatus(http.StatusUnauthorized)
 			return
 		}
 
-		body, err := io.ReadAll(req.Body)
+		// Read the body for signature verification
+		body, err := io.ReadAll(c.Request.Body)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to read GitHub webhook request body")
+			c.AbortWithStatus(http.StatusBadRequest)
 			return
 		}
-		req.Body.Close()
 
+		// Verify signature
 		if !verifySignature([]byte(hookSecret), signature, body) {
-			log.Warn().
-				Str("signature", signature).
-				Msg("Invalid GitHub webhook signature")
+			log.Warn().Str("signature", signature).Msg("Invalid GitHub webhook signature")
+			c.AbortWithStatus(http.StatusUnauthorized)
 			return
 		}
 
-		roomID := req.URL.Query().Get("room_id")
-		if roomID == "" {
-			log.Warn().Msg("GitHub webhook received without room_id")
-			return
-		}
-
-		msg := GithubPayload{}
-		err = json.Unmarshal(body, &msg)
-		if err != nil {
-			log.Error().
-				Err(err).
-				Str("room_id", roomID).
-				Str("body", string(body)).
-				Msg("Failed to parse GitHub webhook payload")
-			fmt.Fprintf(w, "%v", err)
-			return
-		}
-
-		log.Debug().
-			Str("room_id", roomID).
-			Str("repository", msg.Repository.FullName).
-			Str("sender", msg.Sender.Login).
-			Msg("Processing GitHub webhook request")
-
-		sendGithubMsg(msg, roomID)
+		// Restore body for handler to use
+		c.Request.Body = io.NopCloser(bytes.NewBuffer(body))
+		c.Next()
 	}
+}
+
+// GithubWebhookHandler handles GitHub webhook requests
+func GithubWebhookHandler(c *gin.Context) {
+	metrics.RecordWebhookHandled("github")
+
+	roomID := c.Query("room_id")
+	if roomID == "" {
+		log.Warn().Msg("GitHub webhook received without room_id")
+		c.Status(http.StatusBadRequest)
+		return
+	}
+
+	var payload GithubPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		log.Error().Err(err).Str("room_id", roomID).Msg("Failed to parse GitHub webhook payload")
+		c.String(http.StatusBadRequest, err.Error())
+		return
+	}
+
+	log.Debug().
+		Str("room_id", roomID).
+		Str("repository", payload.Repository.FullName).
+		Str("sender", payload.Sender.Login).
+		Msg("Processing GitHub webhook request")
+
+	sendGithubMsg(payload, roomID)
+	c.Status(http.StatusOK)
 }

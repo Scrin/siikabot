@@ -1,12 +1,12 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 	"time"
 
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/matrix"
+	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
 )
 
@@ -27,28 +27,19 @@ type RemindersResponse struct {
 // RemindersHandler returns the authenticated user's active reminders
 // GET /api/reminders
 // Requires Authorization: Bearer <token> header (use with AuthMiddleware)
-func RemindersHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+func RemindersHandler(c *gin.Context) {
+	ctx := c.Request.Context()
 
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	userID, ok := GetUserIDFromContext(ctx)
+	userID, ok := GetUserIDFromContext(c)
 	if !ok {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(ErrorResponse{Error: "Not authenticated"})
+		c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "Not authenticated"})
 		return
 	}
 
 	reminders, err := db.GetRemindersByUserID(ctx, userID)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("user_id", userID).Msg("Failed to fetch reminders")
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(ErrorResponse{Error: "Failed to fetch reminders"})
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "Failed to fetch reminders"})
 		return
 	}
 
@@ -66,8 +57,5 @@ func RemindersHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Error().Ctx(ctx).Err(err).Msg("Failed to encode reminders response")
-	}
+	c.JSON(http.StatusOK, response)
 }
