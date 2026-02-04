@@ -148,6 +148,19 @@ func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relat
 		currentTime,
 	)
 
+	// Fetch and append user memories to system prompt
+	memories, err := db.GetUserMemories(ctx, sender)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Str("user_id", sender).Msg("Failed to get user memories")
+		// Continue without memories if there's an error
+	} else if len(memories) > 0 {
+		systemPrompt += "\n\n## User Memories\nThe following things have been remembered about this user:\n"
+		for _, mem := range memories {
+			systemPrompt += fmt.Sprintf("- [ID: %d] %s\n", mem.ID, mem.Memory)
+		}
+		systemPrompt += "\nUse the memory tool to save new memories or manage existing ones when the user asks you to remember or forget something."
+	}
+
 	// Get conversation history
 	maxHistory := getMaxHistoryMessagesForRoom(ctx, roomID)
 	history, err := db.GetChatHistory(ctx, roomID, maxHistory)
