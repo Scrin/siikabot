@@ -46,9 +46,9 @@ describe('RemindersCard', () => {
     it('should show no reminders message when array is empty', () => {
       vi.mocked(queries.useReminders).mockReturnValue({
         isLoading: false,
-        data: { reminders: [] },
+        data: { reminders: [] as const },
         error: null,
-      } as ReturnType<typeof queries.useReminders>)
+      } as unknown as ReturnType<typeof queries.useReminders>)
 
       render(<RemindersCard />)
       expect(screen.getByText('No active reminders')).toBeInTheDocument()

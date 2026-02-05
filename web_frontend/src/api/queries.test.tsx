@@ -170,7 +170,7 @@ describe('React Query Hooks', () => {
         authorizations: { grafana: true },
       })
       vi.mocked(client.fetchRooms).mockResolvedValue({
-        rooms: [{ room_id: '!room:example.com', name: 'Test Room' }],
+        rooms: [{ room_id: '!room:example.com', room_name: 'Test Room' }],
       })
 
       const { result } = renderHook(() => useRooms(), { wrapper: createWrapper() })
@@ -218,7 +218,7 @@ describe('React Query Hooks', () => {
         authorizations: { grafana: true },
       })
       vi.mocked(client.fetchGrafanaTemplates).mockResolvedValue({
-        templates: [{ name: 'test', template: '<html></html>', datasources: {} }],
+        templates: [{ name: 'test', template: '<html></html>', datasources: [] }],
       })
 
       const { result } = renderHook(() => useGrafanaTemplates(), { wrapper: createWrapper() })
