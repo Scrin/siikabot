@@ -1,3 +1,5 @@
+//go:build embed
+
 package bot
 
 import (

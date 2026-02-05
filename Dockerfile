@@ -27,7 +27,7 @@ COPY . ./
 COPY --from=frontend-builder /build/web_frontend/dist ./bot/frontend/dist
 
 # Build the Go binary with embedded frontend
-RUN CGO_ENABLED=1 go build -o /go/bin/siikabot
+RUN CGO_ENABLED=1 go build -tags embed -o /go/bin/siikabot
 
 FROM debian:bookworm-slim
 
