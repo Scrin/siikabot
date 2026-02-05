@@ -42,6 +42,9 @@ func initHTTP() {
 		{
 			protectedGroup.GET("/reminders", api.RemindersHandler)
 			protectedGroup.GET("/rooms", api.RoomsHandler)
+			protectedGroup.GET("/memories", api.MemoriesHandler)
+			protectedGroup.DELETE("/memories", api.DeleteAllMemoriesHandler)
+			protectedGroup.DELETE("/memories/:id", api.DeleteMemoryHandler)
 
 			// Grafana routes (require additional Grafana authorization)
 			grafanaGroup := protectedGroup.Group("/grafana/templates")

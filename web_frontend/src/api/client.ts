@@ -8,6 +8,8 @@ import type {
   MeResponse,
   RemindersResponse,
   RoomsResponse,
+  MemoriesResponse,
+  DeleteAllMemoriesResponse,
   GrafanaTemplatesResponse,
   GrafanaRenderResponse,
 } from './types'
@@ -162,6 +164,69 @@ export async function fetchRooms(token: string): Promise<RoomsResponse> {
     }
     const error = await response.json().catch(() => ({ error: response.statusText }))
     throw new Error(error.error || 'Failed to fetch rooms')
+  }
+
+  return response.json()
+}
+
+/**
+ * Fetch the current user's memories
+ */
+export async function fetchMemories(token: string): Promise<MemoriesResponse> {
+  const response = await fetch(`${API_BASE}/memories`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to fetch memories')
+  }
+
+  return response.json()
+}
+
+/**
+ * Delete a specific memory
+ */
+export async function deleteMemory(token: string, memoryId: number): Promise<void> {
+  const response = await fetch(`${API_BASE}/memories/${memoryId}`, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to delete memory')
+  }
+}
+
+/**
+ * Delete all memories for the current user
+ */
+export async function deleteAllMemories(token: string): Promise<DeleteAllMemoriesResponse> {
+  const response = await fetch(`${API_BASE}/memories`, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to delete memories')
   }
 
   return response.json()

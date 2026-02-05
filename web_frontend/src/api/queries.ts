@@ -6,6 +6,9 @@ import {
   fetchMetrics,
   fetchReminders,
   fetchRooms,
+  fetchMemories,
+  deleteMemory,
+  deleteAllMemories,
   fetchGrafanaTemplates,
   createGrafanaTemplate,
   updateGrafanaTemplate,
@@ -24,6 +27,7 @@ export const queryKeys = {
   metrics: ['metrics'] as const,
   reminders: ['reminders'] as const,
   rooms: ['rooms'] as const,
+  memories: ['memories'] as const,
   grafanaTemplates: ['grafanaTemplates'] as const,
 }
 
@@ -76,6 +80,51 @@ export function useRooms() {
     queryFn: () => fetchRooms(token!),
     enabled: isAuthenticated && !!token,
     refetchInterval: 30000,
+  })
+}
+
+/**
+ * Hook to fetch user's memories
+ * Only fetches when user is authenticated
+ */
+export function useMemories() {
+  const { token, isAuthenticated } = useAuth()
+
+  return useQuery({
+    queryKey: queryKeys.memories,
+    queryFn: () => fetchMemories(token!),
+    enabled: isAuthenticated && !!token,
+    refetchInterval: 30000,
+  })
+}
+
+/**
+ * Hook to delete a specific memory
+ */
+export function useDeleteMemory() {
+  const { token } = useAuth()
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (memoryId: number) => deleteMemory(token!, memoryId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.memories })
+    },
+  })
+}
+
+/**
+ * Hook to delete all memories
+ */
+export function useDeleteAllMemories() {
+  const { token } = useAuth()
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: () => deleteAllMemories(token!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.memories })
+    },
   })
 }
 

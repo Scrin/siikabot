@@ -71,6 +71,21 @@ export interface RoomsResponse {
   rooms: RoomResponse[]
 }
 
+// Memory types
+export interface MemoryResponse {
+  id: number
+  memory: string
+  created_at: string
+}
+
+export interface MemoriesResponse {
+  memories: MemoryResponse[]
+}
+
+export interface DeleteAllMemoriesResponse {
+  deleted_count: number
+}
+
 // Grafana types
 export interface GrafanaDatasource {
   name: string

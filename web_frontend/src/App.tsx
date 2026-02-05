@@ -15,6 +15,7 @@ import { SystemStatusCard } from './components/SystemStatusCard'
 import { AuthFlow } from './components/AuthFlow'
 import { UserInfo } from './components/UserInfo'
 import { RemindersCard } from './components/RemindersCard'
+import { MemoriesCard } from './components/MemoriesCard'
 import { RoomsCard } from './components/RoomsCard'
 import { GrafanaCard } from './components/GrafanaCard'
 import { ScanlineOverlay } from './components/ui/ScanlineOverlay'
@@ -239,6 +240,38 @@ function AppContent() {
                             Active reminders
                           </motion.h3>
                           <RemindersCard />
+                        </div>
+                      </FadeInSection>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* Memories Section - only show when authenticated */}
+                <AnimatePresence>
+                  {isAuthenticated && (
+                    <motion.div
+                      initial={
+                        prefersReducedMotion ? {} : { opacity: 0, height: 0 }
+                      }
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={
+                        prefersReducedMotion ? {} : { opacity: 0, height: 0 }
+                      }
+                      transition={{ duration: 0.3 }}
+                    >
+                      <FadeInSection delay={0.45}>
+                        <div className="mt-6 border-t border-slate-700/50 pt-6">
+                          <motion.h3
+                            className="mb-4 font-mono text-sm tracking-wider text-slate-500 uppercase"
+                            initial={
+                              prefersReducedMotion ? {} : { opacity: 0, x: -10 }
+                            }
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: 0.55 }}
+                          >
+                            Chat Memories
+                          </motion.h3>
+                          <MemoriesCard />
                         </div>
                       </FadeInSection>
                     </motion.div>
