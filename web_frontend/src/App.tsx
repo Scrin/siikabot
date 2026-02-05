@@ -27,8 +27,9 @@ import { Waveform } from './components/ui/Waveform'
 import { ReducedEffectsToggle } from './components/ui/ReducedEffectsToggle'
 
 function AppContent() {
-  const { data: health, isLoading, error } = useHealthCheck()
-  const { data: metrics } = useMetrics()
+  const { data: health, isLoading: healthLoading, error } = useHealthCheck()
+  const { data: metrics, isLoading: metricsLoading } = useMetrics()
+  const isLoading = healthLoading || metricsLoading
   const interpolatedUptime = useInterpolatedUptime(health?.uptime)
   const { isAuthenticated, isLoading: authLoading, authorizations } = useAuth()
   const prefersReducedMotion = useReducedMotion()
