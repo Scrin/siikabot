@@ -48,6 +48,7 @@ func Init(ctx context.Context) {
 	toolRegistry.RegisterTool(llmtools.TimezoneToolDefinition)
 	toolRegistry.RegisterTool(llmtools.WikipediaToolDefinition)
 	toolRegistry.RegisterTool(llmtools.MemoryToolDefinition)
+	toolRegistry.RegisterTool(llmtools.UserGrafanaToolDefinition)
 
 	// Start a goroutine to periodically clean up old chat history
 	go func() {

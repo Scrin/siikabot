@@ -38,8 +38,8 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 	// Build the initial messages with system prompt, history, and handle image if present
 	messages, hasImage, model := buildInitialMessages(ctx, roomID, sender, msg, relatesTo)
 
-	// Get tool definitions from the registry
-	tools := toolRegistry.GetToolDefinitions()
+	// Get tool definitions from the registry, filtering based on user permissions
+	tools := getToolsForUser(ctx, sender)
 
 	// Create the initial request
 	req := openrouter.ChatRequest{
@@ -159,6 +159,21 @@ func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relat
 			systemPrompt += fmt.Sprintf("- [ID: %d] %s\n", mem.ID, mem.Memory)
 		}
 		systemPrompt += "\nUse the memory tool to save new memories or manage existing ones when the user asks you to remember or forget something."
+	}
+
+	// Fetch and append user Grafana datasources to system prompt (only if authorized)
+	if db.IsGrafanaAuthorized(ctx, sender) {
+		datasources, err := db.GetUserGrafanaDatasources(ctx, sender)
+		if err != nil {
+			log.Error().Ctx(ctx).Err(err).Str("user_id", sender).Msg("Failed to get user grafana datasources")
+			// Continue without datasources if there's an error
+		} else if len(datasources) > 0 {
+			systemPrompt += "\n\n## User's Grafana Datasources\nThis user has the following custom data sources you can query:\n"
+			for _, ds := range datasources {
+				systemPrompt += fmt.Sprintf("- %s: %s\n", ds.Name, ds.Description)
+			}
+			systemPrompt += "\nUse the user_grafana tool with action 'query' and the datasource name to fetch current values."
+		}
 	}
 
 	// Get conversation history
@@ -924,4 +939,29 @@ func buildDebugData(model string, messages []openrouter.Message, iterationCount 
 	}
 
 	return debugData
+}
+
+// getToolsForUser returns tool definitions filtered based on user permissions
+func getToolsForUser(ctx context.Context, userID string) []openrouter.ToolDefinition {
+	allTools := toolRegistry.GetToolDefinitions()
+
+	// Check if user has Grafana authorization
+	hasGrafana := db.IsGrafanaAuthorized(ctx, userID)
+
+	// If user has all permissions, return all tools
+	if hasGrafana {
+		return allTools
+	}
+
+	// Filter out tools that require permissions the user doesn't have
+	filtered := make([]openrouter.ToolDefinition, 0, len(allTools))
+	for _, tool := range allTools {
+		// Skip user_grafana tool if user doesn't have Grafana permission
+		if tool.Function.Name == "user_grafana" && !hasGrafana {
+			continue
+		}
+		filtered = append(filtered, tool)
+	}
+
+	return filtered
 }
