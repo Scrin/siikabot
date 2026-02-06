@@ -59,6 +59,13 @@ func initHTTP() {
 				grafanaGroup.PUT("/:name/datasources/:sourceName", api.SetGrafanaDatasourceHandler)
 				grafanaGroup.DELETE("/:name/datasources/:sourceName", api.DeleteGrafanaDatasourceHandler)
 			}
+
+			// Admin routes (require admin authorization)
+			adminGroup := protectedGroup.Group("/admin")
+			adminGroup.Use(api.AdminAuthMiddleware())
+			{
+				adminGroup.GET("/rooms", api.AdminRoomsHandler)
+			}
 		}
 	}
 

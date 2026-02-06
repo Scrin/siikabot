@@ -170,6 +170,30 @@ export async function fetchRooms(token: string): Promise<RoomsResponse> {
 }
 
 /**
+ * Fetch all rooms known to the bot (admin only)
+ */
+export async function fetchAdminRooms(token: string): Promise<RoomsResponse> {
+  const response = await fetch(`${API_BASE}/admin/rooms`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    if (response.status === 403) {
+      throw new Error('Admin access required')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to fetch admin rooms')
+  }
+
+  return response.json()
+}
+
+/**
  * Fetch the current user's memories
  */
 export async function fetchMemories(token: string): Promise<MemoriesResponse> {

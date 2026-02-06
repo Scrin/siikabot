@@ -6,6 +6,7 @@ import {
   fetchMetrics,
   fetchReminders,
   fetchRooms,
+  fetchAdminRooms,
   fetchMemories,
   deleteMemory,
   deleteAllMemories,
@@ -27,6 +28,7 @@ export const queryKeys = {
   metrics: ['metrics'] as const,
   reminders: ['reminders'] as const,
   rooms: ['rooms'] as const,
+  adminRooms: ['adminRooms'] as const,
   memories: ['memories'] as const,
   grafanaTemplates: ['grafanaTemplates'] as const,
 }
@@ -79,6 +81,21 @@ export function useRooms() {
     queryKey: queryKeys.rooms,
     queryFn: () => fetchRooms(token!),
     enabled: isAuthenticated && !!token,
+    refetchInterval: 30000,
+  })
+}
+
+/**
+ * Hook to fetch all rooms known to the bot (admin only)
+ * Only fetches when user is authenticated and has admin authorization
+ */
+export function useAdminRooms() {
+  const { token, isAuthenticated, authorizations } = useAuth()
+
+  return useQuery({
+    queryKey: queryKeys.adminRooms,
+    queryFn: () => fetchAdminRooms(token!),
+    enabled: isAuthenticated && !!token && authorizations?.admin === true,
     refetchInterval: 30000,
   })
 }

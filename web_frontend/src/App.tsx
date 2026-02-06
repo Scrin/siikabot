@@ -17,6 +17,7 @@ import { UserInfo } from './components/UserInfo'
 import { RemindersCard } from './components/RemindersCard'
 import { MemoriesCard } from './components/MemoriesCard'
 import { RoomsCard } from './components/RoomsCard'
+import { AdminRoomsCard } from './components/AdminRoomsCard'
 import { GrafanaCard } from './components/GrafanaCard'
 import { ScanlineOverlay } from './components/ui/ScanlineOverlay'
 import { TiltCard } from './components/ui/TiltCard'
@@ -31,7 +32,8 @@ function AppContent() {
   const { data: metrics, isLoading: metricsLoading } = useMetrics()
   const isLoading = healthLoading || metricsLoading
   const interpolatedUptime = useInterpolatedUptime(health?.uptime)
-  const { isAuthenticated, isLoading: authLoading, authorizations } = useAuth()
+  const { isAuthenticated, isLoading: authLoading, authorizations, adminMode, isAdmin } =
+    useAuth()
   const prefersReducedMotion = useReducedMotion()
   const { isReduced, isMinimal } = useReducedEffects()
 
@@ -64,6 +66,19 @@ function AppContent() {
           className={`w-full max-w-4xl ${prefersReducedMotion || isReduced ? '' : 'float-subtle'}`}
         >
           <PageHeader />
+
+          {/* Admin mode indicator banner */}
+          {isAdmin && adminMode && (
+            <motion.div
+              className="mb-4 border border-purple-500/50 bg-purple-900/20 px-4 py-2 text-center"
+              initial={prefersReducedMotion ? {} : { opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+            >
+              <span className="font-mono text-sm text-purple-300 uppercase tracking-wider">
+                Admin Mode Active
+              </span>
+            </motion.div>
+          )}
 
           {/* Main Content Card with TiltCard effect and holographic overlay */}
           <TiltCard glowColor="rgba(168, 85, 247, 0.2)" holographic>
@@ -215,19 +230,16 @@ function AppContent() {
                   </div>
                 </FadeInSection>
 
-                {/* Reminders Section - only show when authenticated */}
+                {/* NORMAL MODE SECTIONS - Only show when NOT in admin mode */}
                 <AnimatePresence>
-                  {isAuthenticated && (
+                  {isAuthenticated && !adminMode && (
                     <motion.div
-                      initial={
-                        prefersReducedMotion ? {} : { opacity: 0, height: 0 }
-                      }
-                      animate={{ opacity: 1, height: 'auto' }}
-                      exit={
-                        prefersReducedMotion ? {} : { opacity: 0, height: 0 }
-                      }
+                      initial={prefersReducedMotion ? {} : { opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={prefersReducedMotion ? {} : { opacity: 0 }}
                       transition={{ duration: 0.3 }}
                     >
+                      {/* Reminders Section */}
                       <FadeInSection delay={0.4}>
                         <div className="mt-6 border-t border-slate-700/50 pt-6">
                           <motion.h3
@@ -238,28 +250,13 @@ function AppContent() {
                             animate={{ opacity: 1, x: 0 }}
                             transition={{ delay: 0.5 }}
                           >
-                            Active reminders
+                            Active Reminders
                           </motion.h3>
                           <RemindersCard />
                         </div>
                       </FadeInSection>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
 
-                {/* Memories Section - only show when authenticated */}
-                <AnimatePresence>
-                  {isAuthenticated && (
-                    <motion.div
-                      initial={
-                        prefersReducedMotion ? {} : { opacity: 0, height: 0 }
-                      }
-                      animate={{ opacity: 1, height: 'auto' }}
-                      exit={
-                        prefersReducedMotion ? {} : { opacity: 0, height: 0 }
-                      }
-                      transition={{ duration: 0.3 }}
-                    >
+                      {/* Memories Section */}
                       <FadeInSection delay={0.45}>
                         <div className="mt-6 border-t border-slate-700/50 pt-6">
                           <motion.h3
@@ -275,24 +272,28 @@ function AppContent() {
                           <MemoriesCard />
                         </div>
                       </FadeInSection>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
 
-                {/* Grafana Templates Section - only show when authenticated AND has grafana authorization */}
-                <AnimatePresence>
-                  {isAuthenticated && authorizations?.grafana && (
-                    <motion.div
-                      initial={
-                        prefersReducedMotion ? {} : { opacity: 0, height: 0 }
-                      }
-                      animate={{ opacity: 1, height: 'auto' }}
-                      exit={
-                        prefersReducedMotion ? {} : { opacity: 0, height: 0 }
-                      }
-                      transition={{ duration: 0.3 }}
-                    >
-                      <FadeInSection delay={0.6}>
+                      {/* Grafana Section - only if authorized */}
+                      {authorizations?.grafana && (
+                        <FadeInSection delay={0.6}>
+                          <div className="mt-6 border-t border-slate-700/50 pt-6">
+                            <motion.h3
+                              className="mb-4 font-mono text-sm tracking-wider text-slate-500 uppercase"
+                              initial={
+                                prefersReducedMotion ? {} : { opacity: 0, x: -10 }
+                              }
+                              animate={{ opacity: 1, x: 0 }}
+                              transition={{ delay: 0.7 }}
+                            >
+                              Grafana Templates
+                            </motion.h3>
+                            <GrafanaCard />
+                          </div>
+                        </FadeInSection>
+                      )}
+
+                      {/* Known Rooms Section */}
+                      <FadeInSection delay={0.65}>
                         <div className="mt-6 border-t border-slate-700/50 pt-6">
                           <motion.h3
                             className="mb-4 font-mono text-sm tracking-wider text-slate-500 uppercase"
@@ -300,45 +301,44 @@ function AppContent() {
                               prefersReducedMotion ? {} : { opacity: 0, x: -10 }
                             }
                             animate={{ opacity: 1, x: 0 }}
-                            transition={{ delay: 0.7 }}
-                          >
-                            Grafana Templates
-                          </motion.h3>
-                          <GrafanaCard />
-                        </div>
-                      </FadeInSection>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-
-                {/* Rooms Section - only show when authenticated */}
-                <AnimatePresence>
-                  {isAuthenticated && (
-                    <motion.div
-                      initial={
-                        prefersReducedMotion ? {} : { opacity: 0, height: 0 }
-                      }
-                      animate={{ opacity: 1, height: 'auto' }}
-                      exit={
-                        prefersReducedMotion ? {} : { opacity: 0, height: 0 }
-                      }
-                      transition={{ duration: 0.3 }}
-                    >
-                      <FadeInSection delay={0.5}>
-                        <div className="mt-6 border-t border-slate-700/50 pt-6">
-                          <motion.h3
-                            className="mb-4 font-mono text-sm tracking-wider text-slate-500 uppercase"
-                            initial={
-                              prefersReducedMotion ? {} : { opacity: 0, x: -10 }
-                            }
-                            animate={{ opacity: 1, x: 0 }}
-                            transition={{ delay: 0.6 }}
+                            transition={{ delay: 0.75 }}
                           >
                             Known rooms
                           </motion.h3>
                           <RoomsCard />
                         </div>
                       </FadeInSection>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* ADMIN MODE SECTIONS - Only show when in admin mode */}
+                <AnimatePresence>
+                  {isAuthenticated && adminMode && (
+                    <motion.div
+                      initial={prefersReducedMotion ? {} : { opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={prefersReducedMotion ? {} : { opacity: 0 }}
+                      transition={{ duration: 0.3 }}
+                    >
+                      {/* All Known Rooms Section */}
+                      <FadeInSection delay={0.4}>
+                        <div className="mt-6 border-t border-slate-700/50 pt-6">
+                          <motion.h3
+                            className="mb-4 font-mono text-sm tracking-wider text-purple-400 uppercase"
+                            initial={
+                              prefersReducedMotion ? {} : { opacity: 0, x: -10 }
+                            }
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: 0.5 }}
+                          >
+                            All Known Rooms (Admin)
+                          </motion.h3>
+                          <AdminRoomsCard />
+                        </div>
+                      </FadeInSection>
+
+                      {/* Future admin sections can be added here */}
                     </motion.div>
                   )}
                 </AnimatePresence>

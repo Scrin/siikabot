@@ -42,6 +42,7 @@ export interface MeResponse {
 
 export interface Authorizations {
   grafana: boolean
+  admin: boolean
 }
 
 export interface AuthErrorResponse {

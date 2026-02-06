@@ -2,13 +2,14 @@ import { useAuth } from '../context/AuthContext'
 import type { Authorizations } from '../api/types'
 
 export function UserInfo() {
-  const { userId, authorizations, logout } = useAuth()
+  const { userId, authorizations, logout, isAdmin, adminMode, setAdminMode } = useAuth()
 
   if (!userId) return null
 
   // Define all available permissions
   const allPermissions: Array<{ key: keyof Authorizations; label: string }> = [
     { key: 'grafana', label: 'Grafana' },
+    { key: 'admin', label: 'Admin' },
   ]
 
   return (
@@ -54,6 +55,23 @@ export function UserInfo() {
           })}
         </div>
       </div>
+
+      {/* Admin mode toggle - only show if user is admin */}
+      {isAdmin && (
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-xs text-slate-400">Admin Mode:</span>
+          <button
+            onClick={() => setAdminMode(!adminMode)}
+            className={`font-mono text-xs px-3 py-1 rounded border transition-all ${
+              adminMode
+                ? 'bg-purple-500/20 border-purple-500/50 text-purple-300 hover:bg-purple-500/30'
+                : 'bg-slate-800/50 border-slate-600/50 text-slate-400 hover:bg-slate-700/50'
+            }`}
+          >
+            {adminMode ? 'ON' : 'OFF'}
+          </button>
+        </div>
+      )}
     </div>
   )
 }

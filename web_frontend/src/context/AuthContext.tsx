@@ -10,6 +10,7 @@ import { fetchCurrentUser, logout as apiLogout, AuthError } from '../api/client'
 import type { Authorizations } from '../api/types'
 
 const AUTH_TOKEN_KEY = 'siikabot_auth_token'
+const ADMIN_MODE_KEY = 'siikabot_admin_mode'
 
 interface AuthState {
   isAuthenticated: boolean
@@ -17,12 +18,15 @@ interface AuthState {
   userId: string | null
   token: string | null
   authorizations: Authorizations | null
+  adminMode: boolean
+  isAdmin: boolean
 }
 
 interface AuthContextValue extends AuthState {
   login: (token: string, userId: string) => void
   logout: () => void
   validateToken: () => Promise<boolean>
+  setAdminMode: (enabled: boolean) => void
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -34,7 +38,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     userId: null,
     token: null,
     authorizations: null,
+    adminMode: false,
+    isAdmin: false,
   })
+
+  // Load admin mode from localStorage when admin status changes
+  useEffect(() => {
+    const storedAdminMode = localStorage.getItem(ADMIN_MODE_KEY)
+    if (storedAdminMode === 'true' && state.isAdmin) {
+      setState((prev) => ({ ...prev, adminMode: true }))
+    }
+  }, [state.isAdmin])
 
   // Validate token on mount
   useEffect(() => {
@@ -44,12 +58,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Validate the token and fetch user ID from API
       fetchCurrentUser(storedToken)
         .then((response) => {
+          const storedAdminMode = localStorage.getItem(ADMIN_MODE_KEY)
           setState({
             isAuthenticated: true,
             isLoading: false,
             userId: response.user_id,
             token: storedToken,
             authorizations: response.authorizations,
+            adminMode: storedAdminMode === 'true' && response.authorizations.admin,
+            isAdmin: response.authorizations.admin,
           })
         })
         .catch((error) => {
@@ -63,6 +80,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               userId: null,
               token: null,
               authorizations: null,
+              adminMode: false,
+              isAdmin: false,
             })
           } else {
             // Server error or network issue - keep token, assume authenticated
@@ -73,6 +92,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               userId: null, // Unknown due to error
               token: storedToken,
               authorizations: null,
+              adminMode: false,
+              isAdmin: false,
             })
           }
         })
@@ -83,6 +104,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         userId: null,
         token: null,
         authorizations: null,
+        adminMode: false,
+        isAdmin: false,
       })
     }
   }, [])
@@ -95,13 +118,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       userId,
       token,
       authorizations: null,
+      adminMode: false,
+      isAdmin: false,
     })
     // Fetch authorizations after login
     fetchCurrentUser(token)
       .then((response) => {
+        const storedAdminMode = localStorage.getItem(ADMIN_MODE_KEY)
         setState((prev) => ({
           ...prev,
           authorizations: response.authorizations,
+          isAdmin: response.authorizations.admin,
+          adminMode: storedAdminMode === 'true' && response.authorizations.admin,
         }))
       })
       .catch(() => {
@@ -114,12 +142,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Clear local state first for immediate UI feedback
     localStorage.removeItem(AUTH_TOKEN_KEY)
+    localStorage.removeItem(ADMIN_MODE_KEY)
     setState({
       isAuthenticated: false,
       isLoading: false,
       userId: null,
       token: null,
       authorizations: null,
+      adminMode: false,
+      isAdmin: false,
     })
 
     // Then clear the token from the server (fire and forget)
@@ -138,12 +169,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     try {
       const response = await fetchCurrentUser(storedToken)
+      const storedAdminMode = localStorage.getItem(ADMIN_MODE_KEY)
       setState((prev) => ({
         ...prev,
         isAuthenticated: true,
         userId: response.user_id,
         token: storedToken,
         authorizations: response.authorizations,
+        adminMode: storedAdminMode === 'true' && response.authorizations.admin,
+        isAdmin: response.authorizations.admin,
       }))
       return true
     } catch (error) {
@@ -157,6 +191,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [logout])
 
+  const setAdminMode = useCallback(
+    (enabled: boolean) => {
+      if (!state.isAdmin && enabled) {
+        // Can't enable admin mode if not admin
+        return
+      }
+      localStorage.setItem(ADMIN_MODE_KEY, enabled.toString())
+      setState((prev) => ({ ...prev, adminMode: enabled }))
+    },
+    [state.isAdmin]
+  )
+
   return (
     <AuthContext.Provider
       value={{
@@ -164,6 +210,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         login,
         logout,
         validateToken,
+        setAdminMode,
       }}
     >
       {children}

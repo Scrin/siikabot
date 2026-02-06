@@ -129,7 +129,7 @@ describe('React Query Hooks', () => {
       localStorage.setItem('siikabot_auth_token', 'valid-token')
       vi.mocked(client.fetchCurrentUser).mockResolvedValue({
         user_id: '@user:example.com',
-        authorizations: { grafana: true },
+        authorizations: { grafana: true, admin: false },
       })
       vi.mocked(client.fetchReminders).mockResolvedValue({
         reminders: [
@@ -167,7 +167,7 @@ describe('React Query Hooks', () => {
       localStorage.setItem('siikabot_auth_token', 'valid-token')
       vi.mocked(client.fetchCurrentUser).mockResolvedValue({
         user_id: '@user:example.com',
-        authorizations: { grafana: true },
+        authorizations: { grafana: true, admin: false },
       })
       vi.mocked(client.fetchRooms).mockResolvedValue({
         rooms: [{ room_id: '!room:example.com', room_name: 'Test Room' }],
@@ -198,7 +198,7 @@ describe('React Query Hooks', () => {
       localStorage.setItem('siikabot_auth_token', 'valid-token')
       vi.mocked(client.fetchCurrentUser).mockResolvedValue({
         user_id: '@user:example.com',
-        authorizations: { grafana: false },
+        authorizations: { grafana: false, admin: false },
       })
 
       const { result } = renderHook(() => useGrafanaTemplates(), { wrapper: createWrapper() })
@@ -215,7 +215,7 @@ describe('React Query Hooks', () => {
       localStorage.setItem('siikabot_auth_token', 'valid-token')
       vi.mocked(client.fetchCurrentUser).mockResolvedValue({
         user_id: '@user:example.com',
-        authorizations: { grafana: true },
+        authorizations: { grafana: true, admin: false },
       })
       vi.mocked(client.fetchGrafanaTemplates).mockResolvedValue({
         templates: [{ name: 'test', template: '<html></html>', datasources: [] }],

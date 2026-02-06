@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Scrin/siikabot/auth"
+	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/db"
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
@@ -33,6 +34,7 @@ type MeResponse struct {
 // Authorizations represents user permission flags
 type Authorizations struct {
 	Grafana bool `json:"grafana"`
+	Admin   bool `json:"admin"`
 }
 
 // ErrorResponse is a generic error response
@@ -124,10 +126,13 @@ func MeHandler(c *gin.Context) {
 		return
 	}
 
+	isAdmin := user.UserID == config.Admin
+
 	c.JSON(http.StatusOK, MeResponse{
 		UserID: user.UserID,
 		Authorizations: Authorizations{
 			Grafana: user.Authorizations.Grafana,
+			Admin:   isAdmin,
 		},
 	})
 }

@@ -50,7 +50,7 @@ describe('AuthContext', () => {
       localStorage.setItem('siikabot_auth_token', 'stored-token')
       vi.mocked(client.fetchCurrentUser).mockResolvedValue({
         user_id: '@user:example.com',
-        authorizations: { grafana: true },
+        authorizations: { grafana: true, admin: false },
       })
 
       const { result } = renderHook(() => useAuth(), { wrapper })
@@ -101,7 +101,7 @@ describe('AuthContext', () => {
     it('should store token and update state', async () => {
       vi.mocked(client.fetchCurrentUser).mockResolvedValue({
         user_id: '@user:example.com',
-        authorizations: { grafana: false },
+        authorizations: { grafana: false, admin: false },
       })
 
       const { result } = renderHook(() => useAuth(), { wrapper })
@@ -123,7 +123,7 @@ describe('AuthContext', () => {
     it('should fetch authorizations after login', async () => {
       vi.mocked(client.fetchCurrentUser).mockResolvedValue({
         user_id: '@user:example.com',
-        authorizations: { grafana: true },
+        authorizations: { grafana: true, admin: false },
       })
 
       const { result } = renderHook(() => useAuth(), { wrapper })
@@ -147,7 +147,7 @@ describe('AuthContext', () => {
       localStorage.setItem('siikabot_auth_token', 'token')
       vi.mocked(client.fetchCurrentUser).mockResolvedValue({
         user_id: '@user:example.com',
-        authorizations: { grafana: true },
+        authorizations: { grafana: true, admin: false },
       })
       vi.mocked(client.logout).mockResolvedValue()
 
@@ -171,7 +171,7 @@ describe('AuthContext', () => {
       localStorage.setItem('siikabot_auth_token', 'token')
       vi.mocked(client.fetchCurrentUser).mockResolvedValue({
         user_id: '@user:example.com',
-        authorizations: { grafana: true },
+        authorizations: { grafana: true, admin: false },
       })
       vi.mocked(client.logout).mockResolvedValue()
 
@@ -192,7 +192,7 @@ describe('AuthContext', () => {
       localStorage.setItem('siikabot_auth_token', 'token')
       vi.mocked(client.fetchCurrentUser).mockResolvedValue({
         user_id: '@user:example.com',
-        authorizations: { grafana: true },
+        authorizations: { grafana: true, admin: false },
       })
       vi.mocked(client.logout).mockRejectedValue(new Error('Network error'))
 
@@ -228,7 +228,7 @@ describe('AuthContext', () => {
       localStorage.setItem('siikabot_auth_token', 'valid-token')
       vi.mocked(client.fetchCurrentUser).mockResolvedValue({
         user_id: '@user:example.com',
-        authorizations: { grafana: true },
+        authorizations: { grafana: true, admin: false },
       })
 
       const { result } = renderHook(() => useAuth(), { wrapper })
@@ -247,7 +247,7 @@ describe('AuthContext', () => {
       vi.mocked(client.fetchCurrentUser)
         .mockResolvedValueOnce({
           user_id: '@user:example.com',
-          authorizations: { grafana: true },
+          authorizations: { grafana: true, admin: false },
         })
         .mockRejectedValueOnce(new client.AuthError('Token expired'))
       vi.mocked(client.logout).mockResolvedValue()
@@ -274,7 +274,7 @@ describe('AuthContext', () => {
       vi.mocked(client.fetchCurrentUser)
         .mockResolvedValueOnce({
           user_id: '@user:example.com',
-          authorizations: { grafana: true },
+          authorizations: { grafana: true, admin: false },
         })
         .mockRejectedValueOnce(new Error('Server error'))
 
