@@ -68,6 +68,7 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 
 		// Track message stats asynchronously
 		go db.UpdateMessageStats(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
+		go db.UpdateRoomDailyStats(ctx, evt.RoomID.String(), msg)
 
 		format, _ := evt.Content.Raw["format"].(string)
 		formattedBody, _ := evt.Content.Raw["formatted_body"].(string)
