@@ -4,6 +4,7 @@ import (
 	"html"
 	"strings"
 
+	"github.com/Scrin/siikabot/metrics"
 	"github.com/gomarkdown/markdown"
 	mdhtml "github.com/gomarkdown/markdown/html"
 	mdparser "github.com/gomarkdown/markdown/parser"
@@ -101,6 +102,7 @@ func SendMarkdownFormattedNoticeWithDebugData(roomID string, markdownText string
 func sendMessage(roomID string, message any, retryOnFailure bool) <-chan string {
 	done := make(chan string, 1)
 	outboundEvents <- outboundEvent{roomID, "m.room.message", message, retryOnFailure, done}
+	metrics.SetMatrixOutboundQueueDepth(len(outboundEvents))
 	return done
 }
 

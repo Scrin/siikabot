@@ -10,6 +10,7 @@ import (
 	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/matrix"
+	"github.com/Scrin/siikabot/metrics"
 	"github.com/Scrin/siikabot/openrouter"
 	"github.com/rs/zerolog/log"
 )
@@ -19,6 +20,8 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 	if strings.TrimSpace(msg) == "" {
 		return
 	}
+
+	startTime := time.Now()
 
 	log.Debug().Ctx(ctx).
 		Str("room_id", roomID).
@@ -65,6 +68,7 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 			Str("model", model).
 			Bool("has_image", hasImage).
 			Msg("Failed to send chat request")
+		metrics.RecordChatRequestDuration(model, hasImage, time.Since(startTime).Seconds())
 		matrix.SendTyping(ctx, roomID, false, 0) // Stop typing indicator on error
 		matrix.SendMessage(roomID, "Failed to process chat request")
 		return
@@ -77,6 +81,7 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 			Str("model", model).
 			Bool("has_image", hasImage).
 			Msg("Chat API returned no choices")
+		metrics.RecordChatRequestDuration(model, hasImage, time.Since(startTime).Seconds())
 		matrix.SendTyping(ctx, roomID, false, 0) // Stop typing indicator on error
 		matrix.SendMessage(roomID, "No response from chat API")
 		return
@@ -121,6 +126,9 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 		Bool("has_image", hasImage).
 		Int("response_length", len(assistantResponse)).
 		Msg("Chat command completed")
+
+	metrics.RecordChatRequestDuration(model, hasImage, time.Since(startTime).Seconds())
+	metrics.RecordChatToolIterations(iterationCount)
 
 	// Create debug data with model info and tool calls
 	debugData := buildDebugData(model, messages, iterationCount)
@@ -524,6 +532,7 @@ func processImageMessage(ctx context.Context, roomID, msg, base64ImageURL string
 				Role:    "user",
 				Content: contentParts,
 			})
+			metrics.RecordChatImageProcessed()
 		}
 	} else {
 		log.Error().Ctx(ctx).

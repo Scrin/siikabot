@@ -292,6 +292,41 @@ func handleMyToolCall(ctx context.Context, arguments string) (string, error) {
 
 Tools are loaded in `commands/chat/chat.go` based on room configuration.
 
+### Go Code - Metrics Pattern
+
+When adding new features or commands, add appropriate Prometheus metrics for observability:
+
+1. **Define metrics in `./metrics/`** - Group related metrics by feature in dedicated files (e.g., `metrics/matrix.go`, `metrics/remind.go`)
+2. **Use `makeCollector()`** to register all collectors
+3. **Use the `metricPrefix`** constant (`siikabot_`) for all metric names
+4. **Export `Record*` functions** for instrumentation - callers should never interact with collectors directly
+5. **Use low-cardinality labels** - Avoid labels that can produce unbounded values (user IDs, room IDs, raw URL paths)
+6. **Standard metric types**:
+   - Counter for monotonically increasing values (requests, errors, events)
+   - Gauge for values that go up and down (queue depth, active count)
+   - Histogram for measuring distributions (latency, durations) using `defaultBuckets` or custom buckets
+
+#### Example Metric File
+
+```go
+package metrics
+
+import "github.com/prometheus/client_golang/prometheus"
+
+var myFeatureRequests = makeCollector(prometheus.NewCounterVec(prometheus.CounterOpts{
+    Name: metricPrefix + "my_feature_requests_count",
+    Help: "Total number of my feature requests",
+}, []string{"status"}))
+
+func RecordMyFeatureRequest(success bool) {
+    status := "success"
+    if !success {
+        status = "failure"
+    }
+    myFeatureRequests.WithLabelValues(status).Inc()
+}
+```
+
 ### React/TypeScript Code
 
 1. **Component structure** - Functional components with TypeScript

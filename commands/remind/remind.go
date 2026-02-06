@@ -9,6 +9,7 @@ import (
 	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/matrix"
+	"github.com/Scrin/siikabot/metrics"
 	"github.com/rs/zerolog/log"
 )
 
@@ -32,6 +33,7 @@ func Init(ctx context.Context) {
 		log.Error().Err(err).Msg("Failed to get reminders during init")
 		return
 	}
+	metrics.SetRemindersActive(len(reminders))
 	for _, r := range reminders {
 		StartReminder(ctx, r)
 	}
@@ -50,6 +52,7 @@ func StartReminder(ctx context.Context, rem db.Reminder) {
 		if err := db.RemoveReminder(ctx, rem.ID); err != nil {
 			log.Error().Err(err).Int64("id", rem.ID).Msg("Failed to remove triggered reminder")
 		}
+		metrics.RecordReminderTriggered()
 		log.Debug().
 			Str("user_id", rem.UserID).
 			Str("room_id", rem.RoomID).
@@ -105,6 +108,7 @@ func Handle(ctx context.Context, roomID, sender, msg, msgType, formattedBody str
 	rem.ID = id
 
 	StartReminder(ctx, rem)
+	metrics.RecordReminderCreated()
 	duration := reminderTime.Sub(t).Truncate(time.Second)
 	loc, _ := time.LoadLocation(config.Timezone)
 

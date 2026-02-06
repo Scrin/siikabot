@@ -1,6 +1,8 @@
 package metrics
 
 import (
+	"strconv"
+
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -68,4 +70,36 @@ func InitializeTool(tool string) {
 	toolCalls.WithLabelValues(tool, "failure")
 	toolLatency.WithLabelValues(tool)
 	toolLatencyHistogram.WithLabelValues(tool)
+}
+
+var chatRequestDuration = makeCollector(prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	Name:    metricPrefix + "chat_request_duration_seconds",
+	Help:    "End-to-end duration of chat requests in seconds",
+	Buckets: []float64{0.5, 1, 2, 5, 10, 30, 60, 120},
+}, []string{"model", "has_image"}))
+
+var chatToolIterations = makeCollector(prometheus.NewHistogram(prometheus.HistogramOpts{
+	Name:    metricPrefix + "chat_tool_iterations",
+	Help:    "Number of tool iterations per chat request",
+	Buckets: []float64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+}))
+
+var chatImagesProcessed = makeCollector(prometheus.NewCounter(prometheus.CounterOpts{
+	Name: metricPrefix + "chat_images_processed_count",
+	Help: "Total number of images processed in chat requests",
+}))
+
+// RecordChatRequestDuration records the end-to-end duration of a chat request
+func RecordChatRequestDuration(model string, hasImage bool, durationSec float64) {
+	chatRequestDuration.WithLabelValues(model, strconv.FormatBool(hasImage)).Observe(durationSec)
+}
+
+// RecordChatToolIterations records the number of tool iterations in a chat request
+func RecordChatToolIterations(count int) {
+	chatToolIterations.Observe(float64(count))
+}
+
+// RecordChatImageProcessed records an image being processed in a chat request
+func RecordChatImageProcessed() {
+	chatImagesProcessed.Inc()
 }

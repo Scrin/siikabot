@@ -18,6 +18,7 @@ import (
 	"github.com/Scrin/siikabot/commands/stats"
 	"github.com/Scrin/siikabot/commands/traceroute"
 	"github.com/Scrin/siikabot/config"
+	"github.com/Scrin/siikabot/constants"
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/logging"
 	"github.com/Scrin/siikabot/matrix"
@@ -28,11 +29,11 @@ import (
 
 // isCommandEnabled checks if a command is enabled for a room
 // Most commands are enabled by default, except for specific commands that need to be explicitly enabled in the database
-func isCommandEnabled(ctx context.Context, roomID string, command string) bool {
+func isCommandEnabled(ctx context.Context, roomID string, command constants.Command) bool {
 	// These commands are disabled by default and need to be explicitly enabled
-	restrictedCommands := map[string]bool{
-		"!ruuvi":   true,
-		"!grafana": true,
+	restrictedCommands := map[constants.Command]bool{
+		constants.CommandRuuvi:   true,
+		constants.CommandGrafana: true,
 	}
 
 	// If the command is not restricted, it's always enabled
@@ -41,9 +42,9 @@ func isCommandEnabled(ctx context.Context, roomID string, command string) bool {
 	}
 
 	// For restricted commands, check if they're explicitly enabled in the database
-	enabled, err := db.IsCommandEnabled(ctx, roomID, command)
+	enabled, err := db.IsCommandEnabled(ctx, roomID, string(command))
 	if err != nil {
-		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("command", command).Msg("Failed to query enabled commands")
+		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("command", string(command)).Msg("Failed to query enabled commands")
 		return false
 	}
 	return enabled
@@ -72,34 +73,34 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 
 		format, _ := evt.Content.Raw["format"].(string)
 		formattedBody, _ := evt.Content.Raw["formatted_body"].(string)
-		msgCommand := strings.Split(msg, " ")[0]
+		cmd := constants.Command(strings.Split(msg, " ")[0])
 		isCommand := true
 
-		if !isCommandEnabled(ctx, evt.RoomID.String(), msgCommand) {
+		if !isCommandEnabled(ctx, evt.RoomID.String(), cmd) {
 			return
 		}
 
-		switch msgCommand {
-		case "!ping":
+		switch cmd {
+		case constants.CommandPing:
 			go ping.Handle(ctx, evt.RoomID.String(), msg)
-		case "!traceroute":
+		case constants.CommandTraceroute:
 			go traceroute.Handle(ctx, evt.RoomID.String(), msg)
-		case "!ruuvi":
+		case constants.CommandRuuvi:
 			go ruuvi.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
-		case "!grafana":
+		case constants.CommandGrafana:
 			go grafana.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
-		case "!remind":
+		case constants.CommandRemind:
 			go remind.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg, format, formattedBody)
-		case "!chat":
+		case constants.CommandChat:
 			go chat.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
-		case "!servers":
+		case constants.CommandServers:
 			go federation.Handle(ctx, evt.RoomID.String(), msg)
-		case "!config":
+		case constants.CommandConfig:
 			mentionedUsers := extractMentionedUsers(evt)
 			go configcmd.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg, mentionedUsers)
-		case "!auth":
+		case constants.CommandAuth:
 			go authcmd.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
-		case "!stats":
+		case constants.CommandStats:
 			go stats.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
 		default:
 			isCommand = false
@@ -134,20 +135,20 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 
 				go chat.HandleMention(ctx, evt.RoomID.String(), evt.Sender.String(), chatMsg, evt.ID.String(), relatesTo)
 				isCommand = true
-				msgCommand = "mention"
+				cmd = constants.CommandMention
 				if isReplyToBot {
-					msgCommand = "reply"
+					cmd = constants.CommandReply
 				}
 			}
 		}
 		if isCommand {
 			matrix.MarkRead(ctx, evt.RoomID.String(), evt.ID.String())
 			log.Debug().
-				Str("command", msgCommand).
+				Str("command", string(cmd)).
 				Str("room_id", evt.RoomID.String()).
 				Str("sender", evt.Sender.String()).
 				Msg("Handled command")
-			metrics.RecordCommandHandled(msgCommand)
+			metrics.RecordCommandHandled(cmd)
 		}
 	}
 }

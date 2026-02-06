@@ -6,6 +6,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/Scrin/siikabot/constants"
 	"github.com/Scrin/siikabot/matrix"
 	"github.com/Scrin/siikabot/metrics"
 	"github.com/gin-gonic/gin"
@@ -45,6 +46,7 @@ func sendAlertmanagerMsg(payload AlertmanagerPayload, roomID string) {
 		Msg("Processing Alertmanager webhook")
 
 	for _, alert := range payload.Alerts {
+		metrics.RecordWebhookEventHandled(constants.WebhookAlertmanager, constants.WebhookEventType(alert.Status))
 		var buf bytes.Buffer
 		err := alertTemplate.Execute(&buf, alert)
 		if err != nil {
@@ -77,7 +79,7 @@ func AlertmanagerBasicAuthMiddleware(expectedUser, expectedPassword string) gin.
 
 // AlertmanagerWebhookHandler handles Alertmanager webhook requests
 func AlertmanagerWebhookHandler(c *gin.Context) {
-	metrics.RecordWebhookHandled("alertmanager")
+	metrics.RecordWebhookHandled(constants.WebhookAlertmanager)
 
 	roomID := c.Query("room_id")
 	if roomID == "" {

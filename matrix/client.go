@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/Scrin/siikabot/config"
+	"github.com/Scrin/siikabot/constants"
 	"github.com/Scrin/siikabot/logging"
+	"github.com/Scrin/siikabot/metrics"
 	"github.com/rs/zerolog/log"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/crypto"
@@ -80,6 +82,9 @@ func GetRoomName(ctx context.Context, roomID string) string {
 func processOutboundEvents(ctx context.Context) {
 outboundProcessingLoop:
 	for evt := range outboundEvents {
+		startTime := time.Now()
+		metrics.SetMatrixOutboundQueueDepth(len(outboundEvents))
+
 		roomId := id.RoomID(evt.RoomID)
 		evtType := event.NewEventType(evt.EventType)
 		evtContent := evt.Content
@@ -91,6 +96,7 @@ outboundProcessingLoop:
 			if err != nil {
 				log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to check if room is encrypted")
 				if !evt.RetryOnFailure {
+					metrics.RecordMatrixMessageSent(constants.MatrixSendFailedEncryption)
 					continue outboundProcessingLoop
 				}
 				time.Sleep(100 * time.Millisecond)
@@ -105,6 +111,7 @@ outboundProcessingLoop:
 					if err != nil {
 						log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to get room members")
 						if !evt.RetryOnFailure {
+							metrics.RecordMatrixMessageSent(constants.MatrixSendFailedEncryption)
 							continue outboundProcessingLoop
 						}
 						time.Sleep(100 * time.Millisecond)
@@ -114,6 +121,7 @@ outboundProcessingLoop:
 					if err != nil {
 						log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to share group session")
 						if !evt.RetryOnFailure {
+							metrics.RecordMatrixMessageSent(constants.MatrixSendFailedEncryption)
 							continue outboundProcessingLoop
 						}
 						time.Sleep(100 * time.Millisecond)
@@ -125,6 +133,7 @@ outboundProcessingLoop:
 				if err != nil {
 					log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to encrypt message")
 					if !evt.RetryOnFailure {
+						metrics.RecordMatrixMessageSent(constants.MatrixSendFailedEncryption)
 						continue outboundProcessingLoop
 					}
 					time.Sleep(100 * time.Millisecond)
@@ -145,12 +154,15 @@ outboundProcessingLoop:
 				if evt.done != nil {
 					evt.done <- string(resp.EventID)
 				}
+				metrics.RecordMatrixMessageSent(constants.MatrixSendSuccess)
+				metrics.RecordMatrixMessageLatency(time.Since(startTime).Seconds())
 				break // Success, break the retry loop
 			}
 			var httpErr httpError
 			httpError, isHttpError := err.(mautrix.HTTPError)
 			if !isHttpError {
 				log.Error().Ctx(ctx).Err(err).Msg("Failed to parse error response of unexpected type")
+				metrics.RecordMatrixMessageSent(constants.MatrixSendFailedSend)
 				evt.done <- ""
 				break
 			}
@@ -160,6 +172,7 @@ outboundProcessingLoop:
 
 			switch e := httpErr.Errcode; e {
 			case "M_LIMIT_EXCEEDED":
+				metrics.RecordMatrixRateLimitRetry()
 				time.Sleep(time.Duration(httpErr.RetryAfterMs) * time.Millisecond)
 			case "M_FORBIDDEN":
 				log.Error().
@@ -168,6 +181,7 @@ outboundProcessingLoop:
 					Str("room_id", evt.RoomID).
 					Str("error_code", e).
 					Msg("Failed to send message due to permissions")
+				metrics.RecordMatrixMessageSent(constants.MatrixSendFailedForbidden)
 				evt.done <- ""
 				break retry
 			default:
@@ -179,6 +193,7 @@ outboundProcessingLoop:
 					Msg("Failed to send message")
 			}
 			if !evt.RetryOnFailure {
+				metrics.RecordMatrixMessageSent(constants.MatrixSendFailedSend)
 				evt.done <- ""
 				break
 			}

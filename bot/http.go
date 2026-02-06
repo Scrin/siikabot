@@ -5,6 +5,7 @@ import (
 
 	"github.com/Scrin/siikabot/api"
 	"github.com/Scrin/siikabot/config"
+	"github.com/Scrin/siikabot/metrics"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
@@ -90,11 +91,11 @@ func initHTTP() {
 	}()
 }
 
-// requestLoggingMiddleware logs HTTP requests using zerolog
+// requestLoggingMiddleware logs HTTP requests and records metrics using zerolog
 func requestLoggingMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
-		path := c.Request.URL.Path
+		rawPath := c.Request.URL.Path
 		query := c.Request.URL.RawQuery
 
 		c.Next()
@@ -105,10 +106,17 @@ func requestLoggingMiddleware() gin.HandlerFunc {
 		log.Debug().
 			Int("status", status).
 			Str("method", c.Request.Method).
-			Str("path", path).
+			Str("path", rawPath).
 			Str("query", query).
 			Dur("latency", latency).
 			Str("client_ip", c.ClientIP()).
 			Msg("HTTP request")
+
+		// Use route template for metrics to avoid high-cardinality labels
+		metricsPath := c.FullPath()
+		if metricsPath == "" {
+			metricsPath = "unmatched"
+		}
+		metrics.RecordHTTPRequest(c.Request.Method, metricsPath, status, latency.Seconds())
 	}
 }

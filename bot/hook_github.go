@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Scrin/siikabot/constants"
 	"github.com/Scrin/siikabot/matrix"
 	"github.com/Scrin/siikabot/metrics"
 	"github.com/gin-gonic/gin"
@@ -59,12 +60,16 @@ func sendGithubMsg(payload GithubPayload, roomID string) {
 		Msg("Processing GitHub webhook")
 
 	if payload.Hook.Type == "Repository" {
+		metrics.RecordWebhookEventHandled(constants.WebhookGitHub, constants.WebhookEventGitHubConfig)
 		sendGithubHookConfig(payload, roomID)
 	} else if payload.Pusher.Name != "" {
+		metrics.RecordWebhookEventHandled(constants.WebhookGitHub, constants.WebhookEventGitHubPush)
 		sendGithubPush(payload, roomID)
 	} else if payload.PullRequest.HtmlUrl != "" {
+		metrics.RecordWebhookEventHandled(constants.WebhookGitHub, constants.WebhookEventGitHubPullRequest)
 		sendGithubPullrequest(payload, roomID)
 	} else {
+		metrics.RecordWebhookEventHandled(constants.WebhookGitHub, constants.WebhookEventGitHubUnknown)
 		log.Warn().
 			Str("room_id", roomID).
 			Str("repository", payload.Repository.FullName).
@@ -165,7 +170,7 @@ func GithubSignatureMiddleware(hookSecret string) gin.HandlerFunc {
 
 // GithubWebhookHandler handles GitHub webhook requests
 func GithubWebhookHandler(c *gin.Context) {
-	metrics.RecordWebhookHandled("github")
+	metrics.RecordWebhookHandled(constants.WebhookGitHub)
 
 	roomID := c.Query("room_id")
 	if roomID == "" {

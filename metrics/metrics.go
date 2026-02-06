@@ -3,6 +3,7 @@ package metrics
 import (
 	"strconv"
 
+	"github.com/Scrin/siikabot/constants"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -32,9 +33,33 @@ var commandsHandled = makeCollector(prometheus.NewCounterVec(prometheus.CounterO
 	Help: "Total number of chat commands handled",
 }, []string{"command"}))
 
+var webhookEventsHandled = makeCollector(prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: metricPrefix + "webhook_events_handled_count",
+	Help: "Total number of webhook events handled by type",
+}, []string{"hook", "event_type"}))
+
+func init() {
+	for _, hook := range constants.AllWebhookTypes {
+		webhooksHandled.WithLabelValues(string(hook))
+	}
+	for hook, events := range constants.WebhookEventTypes {
+		for _, eventType := range events {
+			webhookEventsHandled.WithLabelValues(string(hook), string(eventType))
+		}
+	}
+	for _, cmd := range constants.AllCommands {
+		commandsHandled.WithLabelValues(string(cmd))
+	}
+}
+
 // RecordWebhookHandled records a webhook being handled
-func RecordWebhookHandled(hook string) {
-	webhooksHandled.WithLabelValues(hook).Inc()
+func RecordWebhookHandled(hook constants.WebhookType) {
+	webhooksHandled.WithLabelValues(string(hook)).Inc()
+}
+
+// RecordWebhookEventHandled records a webhook event of a specific type being handled
+func RecordWebhookEventHandled(hook constants.WebhookType, eventType constants.WebhookEventType) {
+	webhookEventsHandled.WithLabelValues(string(hook), string(eventType)).Inc()
 }
 
 // RecordEventHandled records a Matrix event being handled
@@ -43,6 +68,6 @@ func RecordEventHandled(eventType, subType string, encrypted bool) {
 }
 
 // RecordCommandHandled records a chat command being handled
-func RecordCommandHandled(command string) {
-	commandsHandled.WithLabelValues(command).Inc()
+func RecordCommandHandled(command constants.Command) {
+	commandsHandled.WithLabelValues(string(command)).Inc()
 }
