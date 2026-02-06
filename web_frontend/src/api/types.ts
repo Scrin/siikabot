@@ -41,8 +41,8 @@ export interface MeResponse {
 }
 
 export interface Authorizations {
-  grafana: boolean
   admin: boolean
+  grafana: boolean
 }
 
 export interface AuthErrorResponse {
@@ -70,6 +70,15 @@ export interface RoomResponse {
 
 export interface RoomsResponse {
   rooms: RoomResponse[]
+}
+
+// Room member types
+export interface RoomMemberResponse {
+  user_id: string
+}
+
+export interface RoomMembersResponse {
+  members: RoomMemberResponse[]
 }
 
 // Memory types

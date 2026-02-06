@@ -33,8 +33,8 @@ type MeResponse struct {
 
 // Authorizations represents user permission flags
 type Authorizations struct {
-	Grafana bool `json:"grafana"`
 	Admin   bool `json:"admin"`
+	Grafana bool `json:"grafana"`
 }
 
 // ErrorResponse is a generic error response
@@ -131,8 +131,8 @@ func MeHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, MeResponse{
 		UserID: user.UserID,
 		Authorizations: Authorizations{
-			Grafana: user.Authorizations.Grafana,
 			Admin:   isAdmin,
+			Grafana: user.Authorizations.Grafana,
 		},
 	})
 }

@@ -7,6 +7,8 @@ import {
   fetchReminders,
   fetchRooms,
   fetchAdminRooms,
+  fetchRoomMembers,
+  fetchAdminRoomMembers,
   fetchMemories,
   deleteMemory,
   deleteAllMemories,
@@ -29,6 +31,8 @@ export const queryKeys = {
   reminders: ['reminders'] as const,
   rooms: ['rooms'] as const,
   adminRooms: ['adminRooms'] as const,
+  roomMembers: (roomId: string) => ['roomMembers', roomId] as const,
+  adminRoomMembers: (roomId: string) => ['adminRoomMembers', roomId] as const,
   memories: ['memories'] as const,
   grafanaTemplates: ['grafanaTemplates'] as const,
 }
@@ -263,5 +267,35 @@ export function useRenderGrafanaTemplate(templateName: string, enabled: boolean)
     queryFn: () => renderGrafanaTemplate(token!, templateName),
     enabled: enabled && isAuthenticated && !!token && authorizations?.grafana === true,
     staleTime: 0, // Always refetch when requested
+  })
+}
+
+/**
+ * Hook to fetch members of a specific room
+ * Only fetches when enabled (room is expanded)
+ */
+export function useRoomMembers(roomId: string, enabled: boolean) {
+  const { token, isAuthenticated } = useAuth()
+
+  return useQuery({
+    queryKey: queryKeys.roomMembers(roomId),
+    queryFn: () => fetchRoomMembers(token!, roomId),
+    enabled: enabled && isAuthenticated && !!token,
+    staleTime: 30000,
+  })
+}
+
+/**
+ * Hook to fetch members of any room (admin only)
+ * Only fetches when enabled (room is expanded)
+ */
+export function useAdminRoomMembers(roomId: string, enabled: boolean) {
+  const { token, isAuthenticated, authorizations } = useAuth()
+
+  return useQuery({
+    queryKey: queryKeys.adminRoomMembers(roomId),
+    queryFn: () => fetchAdminRoomMembers(token!, roomId),
+    enabled: enabled && isAuthenticated && !!token && authorizations?.admin === true,
+    staleTime: 30000,
   })
 }

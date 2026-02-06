@@ -43,6 +43,7 @@ func initHTTP() {
 		{
 			protectedGroup.GET("/reminders", api.RemindersHandler)
 			protectedGroup.GET("/rooms", api.RoomsHandler)
+			protectedGroup.GET("/rooms/:roomId/members", api.RoomMembersHandler)
 			protectedGroup.GET("/memories", api.MemoriesHandler)
 			protectedGroup.DELETE("/memories", api.DeleteAllMemoriesHandler)
 			protectedGroup.DELETE("/memories/:id", api.DeleteMemoryHandler)
@@ -65,6 +66,7 @@ func initHTTP() {
 			adminGroup.Use(api.AdminAuthMiddleware())
 			{
 				adminGroup.GET("/rooms", api.AdminRoomsHandler)
+				adminGroup.GET("/rooms/:roomId/members", api.AdminRoomMembersHandler)
 			}
 		}
 	}

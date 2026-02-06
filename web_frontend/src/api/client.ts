@@ -8,6 +8,7 @@ import type {
   MeResponse,
   RemindersResponse,
   RoomsResponse,
+  RoomMembersResponse,
   MemoriesResponse,
   DeleteAllMemoriesResponse,
   GrafanaTemplatesResponse,
@@ -188,6 +189,63 @@ export async function fetchAdminRooms(token: string): Promise<RoomsResponse> {
     }
     const error = await response.json().catch(() => ({ error: response.statusText }))
     throw new Error(error.error || 'Failed to fetch admin rooms')
+  }
+
+  return response.json()
+}
+
+/**
+ * Fetch members of a specific room
+ */
+export async function fetchRoomMembers(
+  token: string,
+  roomId: string
+): Promise<RoomMembersResponse> {
+  const response = await fetch(`${API_BASE}/rooms/${encodeURIComponent(roomId)}/members`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    if (response.status === 403) {
+      throw new Error('Access denied to this room')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to fetch room members')
+  }
+
+  return response.json()
+}
+
+/**
+ * Fetch members of any room (admin only)
+ */
+export async function fetchAdminRoomMembers(
+  token: string,
+  roomId: string
+): Promise<RoomMembersResponse> {
+  const response = await fetch(
+    `${API_BASE}/admin/rooms/${encodeURIComponent(roomId)}/members`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }
+  )
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    if (response.status === 403) {
+      throw new Error('Admin access required')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to fetch admin room members')
   }
 
   return response.json()

@@ -6,10 +6,10 @@ export function UserInfo() {
 
   if (!userId) return null
 
-  // Define all available permissions
+  // Define all available permissions (alphabetically ordered)
   const allPermissions: Array<{ key: keyof Authorizations; label: string }> = [
-    { key: 'grafana', label: 'Grafana' },
     { key: 'admin', label: 'Admin' },
+    { key: 'grafana', label: 'Grafana' },
   ]
 
   return (
