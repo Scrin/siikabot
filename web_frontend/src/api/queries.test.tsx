@@ -50,7 +50,7 @@ describe('React Query Hooks', () => {
 
   describe('queryKeys', () => {
     it('should have unique keys for each query', () => {
-      const keys = Object.values(queryKeys)
+      const keys = Object.values(queryKeys).filter((k) => typeof k !== 'function')
       const uniqueKeys = new Set(keys.map((k) => JSON.stringify(k)))
       expect(uniqueKeys.size).toBe(keys.length)
     })
@@ -60,7 +60,12 @@ describe('React Query Hooks', () => {
       expect(queryKeys.metrics).toEqual(['metrics'])
       expect(queryKeys.reminders).toEqual(['reminders'])
       expect(queryKeys.rooms).toEqual(['rooms'])
+      expect(queryKeys.adminRooms).toEqual(['adminRooms'])
       expect(queryKeys.grafanaTemplates).toEqual(['grafanaTemplates'])
+
+      // Test function-based keys
+      expect(queryKeys.roomMembers('room1')).toEqual(['roomMembers', 'room1'])
+      expect(queryKeys.adminRoomMembers('room2')).toEqual(['adminRoomMembers', 'room2'])
     })
   })
 

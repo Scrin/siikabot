@@ -383,6 +383,49 @@ Use the `matrix` package for all Matrix operations:
 
 ## Development Workflow
 
+### Testing
+
+**CRITICAL: Always run tests after making code changes**
+
+When modifying code, you MUST run the relevant tests to ensure nothing is broken:
+
+#### Go Backend Tests
+```bash
+# Run all tests
+go test ./...
+
+# Run tests for a specific package
+go test ./db
+go test ./api
+go test ./commands/...
+
+# Run with verbose output
+go test -v ./...
+
+# Run with coverage
+go test -cover ./...
+```
+
+#### Frontend Tests
+```bash
+# Run all frontend tests
+cd web_frontend
+npm test
+
+# Run tests in watch mode during development
+npm test -- --watch
+
+# Run with coverage
+npm test -- --coverage
+```
+
+**When to run tests:**
+- After modifying any Go code → Run `go test ./...`
+- After modifying any TypeScript/React code → Run `cd web_frontend && npm test`
+- After modifying API types or interfaces → Run both Go and frontend tests
+- Before creating a commit → Always run relevant tests
+- After updating dependencies → Run all tests
+
 ### Building
 
 ```bash

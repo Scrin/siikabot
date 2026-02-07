@@ -62,7 +62,7 @@ describe('AuthContext', () => {
       expect(result.current.isAuthenticated).toBe(true)
       expect(result.current.userId).toBe('@user:example.com')
       expect(result.current.token).toBe('stored-token')
-      expect(result.current.authorizations).toEqual({ grafana: true })
+      expect(result.current.authorizations).toEqual({ admin: false, grafana: true })
     })
 
     it('should clear token on AuthError', async () => {
@@ -137,7 +137,7 @@ describe('AuthContext', () => {
       })
 
       await waitFor(() => {
-        expect(result.current.authorizations).toEqual({ grafana: true })
+        expect(result.current.authorizations).toEqual({ admin: false, grafana: true })
       })
     })
   })
