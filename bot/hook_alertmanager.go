@@ -57,7 +57,7 @@ func sendAlertmanagerMsg(payload AlertmanagerPayload, roomID string) {
 				Msg("Failed to execute alert template")
 			continue
 		}
-		matrix.SendFormattedNotice(roomID, buf.String())
+		matrix.SendFormattedMessage(roomID, buf.String())
 	}
 }
 
