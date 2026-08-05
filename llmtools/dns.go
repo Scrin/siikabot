@@ -8,14 +8,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Scrin/siikabot/openrouter"
+	"github.com/Scrin/siikabot/aigateway"
 	"github.com/rs/zerolog/log"
 )
 
 // DNSToolDefinition returns the tool definition for the DNS lookup tool
-var DNSToolDefinition = openrouter.ToolDefinition{
+var DNSToolDefinition = aigateway.ToolDefinition{
 	Type: "function",
-	Function: openrouter.FunctionSchema{
+	Function: aigateway.FunctionSchema{
 		Name:        "dns_lookup",
 		Description: "Look up DNS records for a domain name. Returns A (IPv4), AAAA (IPv6), MX (mail servers), TXT, CNAME, and NS (nameserver) records.",
 		Parameters: json.RawMessage(`{

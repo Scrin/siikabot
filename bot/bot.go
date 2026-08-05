@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/api"
 	"github.com/Scrin/siikabot/auth"
 	authcmd "github.com/Scrin/siikabot/commands/auth"
@@ -294,6 +295,7 @@ func Init(ctx context.Context) error {
 
 	remind.Init(ctx)
 	chat.Init(ctx)
+	aigateway.StartLogPoller(ctx)
 	auth.Init()
 	api.Init()
 	initHTTP()

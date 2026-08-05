@@ -6,11 +6,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/llmtools"
 	"github.com/Scrin/siikabot/matrix"
-	"github.com/Scrin/siikabot/openrouter"
 	"github.com/rs/zerolog/log"
 )
 
@@ -24,12 +24,12 @@ const defaultMaxToolIterations = 5
 const chatHistoryRetention = 7 * 24 * time.Hour // 7 days
 
 // toolRegistry holds all available tools
-var toolRegistry *openrouter.ToolRegistry
+var toolRegistry *aigateway.ToolRegistry
 
 // Init initializes the chat module
 func Init(ctx context.Context) {
 	// Initialize the tool registry
-	toolRegistry = openrouter.NewToolRegistry()
+	toolRegistry = aigateway.NewToolRegistry()
 
 	// Register the tool implementations from the chat package
 	toolRegistry.RegisterTool(llmtools.ElectricityPricesToolDefinition)

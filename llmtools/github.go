@@ -10,14 +10,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Scrin/siikabot/openrouter"
+	"github.com/Scrin/siikabot/aigateway"
 	"github.com/rs/zerolog/log"
 )
 
 // GitHubIssueToolDefinition returns the tool definition for the GitHub issue retrieval tool
-var GitHubIssueToolDefinition = openrouter.ToolDefinition{
+var GitHubIssueToolDefinition = aigateway.ToolDefinition{
 	Type: "function",
-	Function: openrouter.FunctionSchema{
+	Function: aigateway.FunctionSchema{
 		Name:        "get_github_issue",
 		Description: "Retrieve details about a GitHub issue or pull request",
 		Parameters: json.RawMessage(`{

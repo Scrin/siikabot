@@ -10,15 +10,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/config"
-	"github.com/Scrin/siikabot/openrouter"
 	"github.com/rs/zerolog/log"
 )
 
 // WebSearchToolDefinition returns the tool definition for the web search tool
-var WebSearchToolDefinition = openrouter.ToolDefinition{
+var WebSearchToolDefinition = aigateway.ToolDefinition{
 	Type: "function",
-	Function: openrouter.FunctionSchema{
+	Function: aigateway.FunctionSchema{
 		Name:        "web_search",
 		Description: "Search the web for information using Google. Use this tool to find up-to-date information about topics, definitions, or facts that you might not know about.",
 		Parameters: json.RawMessage(`{

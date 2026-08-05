@@ -9,14 +9,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Scrin/siikabot/openrouter"
+	"github.com/Scrin/siikabot/aigateway"
 	"github.com/rs/zerolog/log"
 )
 
 // GitHubStatusToolDefinition returns the tool definition for the GitHub status tool
-var GitHubStatusToolDefinition = openrouter.ToolDefinition{
+var GitHubStatusToolDefinition = aigateway.ToolDefinition{
 	Type: "function",
-	Function: openrouter.FunctionSchema{
+	Function: aigateway.FunctionSchema{
 		Name:        "github_status",
 		Description: "Query GitHub's current operational status and recent incidents. Use this to check if GitHub is experiencing any issues or outages.",
 		Parameters: json.RawMessage(`{

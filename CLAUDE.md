@@ -22,7 +22,7 @@ This document provides context for working with SiikaBot using Claude Code CLI.
 - **Logging**: `rs/zerolog`
 - **HTTP**: Standard library `net/http`
 - **Monitoring**: Prometheus client
-- **LLM**: OpenRouter API integration
+- **LLM**: Cloudflare AI Gateway (REST API) integration
 
 ### Frontend (React + TypeScript)
 - **Framework**: Vite
@@ -76,8 +76,9 @@ In general, each command or webhook is considered a **self-contained feature** a
   - `send.go`, `servers.go`, `media.go` - Protocol operations
   - State stores for crypto, sync, and state management
 
-- **`./openrouter/`** - OpenRouter API communication for LLM integration
-  - `openrouter.go` - HTTP client
+- **`./aigateway/`** - Cloudflare AI Gateway communication for LLM integration
+  - `aigateway.go` - HTTP client. All requests go through the `/ai/run` REST endpoint
+  - `logs.go` - Background poller that records cost/token/latency metrics from gateway logs
   - `tools.go` - Tool definition framework for function calling
 
 - **`./api/`** - HTTP API endpoints
@@ -231,7 +232,7 @@ For restricted commands (disabled by default), add to the `restrictedCommands` m
 LLM tools allow the AI chatbot to call functions. Follow this pattern:
 
 1. **One file per tool** in `./llmtools/`
-2. **Export a ToolDefinition** variable with OpenRouter schema
+2. **Export a ToolDefinition** variable with the OpenAI function-calling schema
 3. **Implement a handler function** that takes `(ctx context.Context, arguments string) (string, error)`
 4. **Parse JSON arguments** into a struct
 5. **Fetch data** from external APIs or database
@@ -246,13 +247,13 @@ package llmtools
 import (
     "context"
     "encoding/json"
-    "github.com/Scrin/siikabot/openrouter"
+    "github.com/Scrin/siikabot/aigateway"
     "github.com/rs/zerolog/log"
 )
 
-var MyToolDefinition = openrouter.ToolDefinition{
+var MyToolDefinition = aigateway.ToolDefinition{
     Type: "function",
-    Function: openrouter.FunctionSchema{
+    Function: aigateway.FunctionSchema{
         Name:        "my_tool_name",
         Description: "What this tool does",
         Parameters: json.RawMessage(`{

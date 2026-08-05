@@ -7,14 +7,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Scrin/siikabot/openrouter"
+	"github.com/Scrin/siikabot/aigateway"
 	"github.com/rs/zerolog/log"
 )
 
 // TimezoneToolDefinition returns the tool definition for the timezone tool
-var TimezoneToolDefinition = openrouter.ToolDefinition{
+var TimezoneToolDefinition = aigateway.ToolDefinition{
 	Type: "function",
-	Function: openrouter.FunctionSchema{
+	Function: aigateway.FunctionSchema{
 		Name:        "get_time",
 		Description: "Get current time in a timezone or city, or convert a time between timezones. Supports IANA timezone names (e.g., Europe/Helsinki) or common city names (e.g., Tokyo, London).",
 		Parameters: json.RawMessage(`{

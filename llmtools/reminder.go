@@ -8,18 +8,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/commands/remind"
 	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/matrix"
-	"github.com/Scrin/siikabot/openrouter"
 	"github.com/rs/zerolog/log"
 )
 
 // ReminderToolDefinition returns the tool definition for the reminder tool
-var ReminderToolDefinition = openrouter.ToolDefinition{
+var ReminderToolDefinition = aigateway.ToolDefinition{
 	Type: "function",
-	Function: openrouter.FunctionSchema{
+	Function: aigateway.FunctionSchema{
 		Name:        "create_reminder",
 		Description: "Create a reminder that will trigger at a specified time or after a specified duration",
 		Parameters: json.RawMessage(`{

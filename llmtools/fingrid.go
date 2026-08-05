@@ -9,15 +9,15 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/config"
-	"github.com/Scrin/siikabot/openrouter"
 	"github.com/rs/zerolog/log"
 )
 
 // FingridToolDefinition returns the tool definition for the Fingrid power production tool
-var FingridToolDefinition = openrouter.ToolDefinition{
+var FingridToolDefinition = aigateway.ToolDefinition{
 	Type: "function",
-	Function: openrouter.FunctionSchema{
+	Function: aigateway.FunctionSchema{
 		Name:        "get_fingrid_power_stats",
 		Description: "Get power production statistics from Fingrid for Finland's power system at a specific time",
 		Parameters: json.RawMessage(`{

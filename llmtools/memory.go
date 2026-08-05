@@ -6,17 +6,17 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/db"
-	"github.com/Scrin/siikabot/openrouter"
 	"github.com/rs/zerolog/log"
 )
 
 const maxMemoryLength = 500
 
 // MemoryToolDefinition returns the tool definition for the memory tool
-var MemoryToolDefinition = openrouter.ToolDefinition{
+var MemoryToolDefinition = aigateway.ToolDefinition{
 	Type: "function",
-	Function: openrouter.FunctionSchema{
+	Function: aigateway.FunctionSchema{
 		Name:        "memory",
 		Description: "Manage memories about the user. Use this to save things the user asks you to remember, delete specific memories, or clear all memories. Memories persist across conversations and rooms.",
 		Parameters: json.RawMessage(`{

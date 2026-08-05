@@ -7,15 +7,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Scrin/siikabot/openrouter"
+	"github.com/Scrin/siikabot/aigateway"
 	"github.com/likexian/whois"
 	"github.com/rs/zerolog/log"
 )
 
 // WhoisToolDefinition returns the tool definition for the whois tool
-var WhoisToolDefinition = openrouter.ToolDefinition{
+var WhoisToolDefinition = aigateway.ToolDefinition{
 	Type: "function",
-	Function: openrouter.FunctionSchema{
+	Function: aigateway.FunctionSchema{
 		Name:        "whois_lookup",
 		Description: "Look up WHOIS information for a domain name or IP address. Returns registration details, nameservers, and other public registration data.",
 		Parameters: json.RawMessage(`{

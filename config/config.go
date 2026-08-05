@@ -18,7 +18,9 @@ var (
 	Password                 = ""
 	HookSecret               = ""
 	Admin                    = ""
-	OpenrouterAPIKey         = ""
+	CloudflareAccountID      = ""
+	CloudflareAPIToken       = ""
+	CloudflareAIGatewayID    = ""
 	PostgresConnectionString = ""
 	PickleKey                = ""
 	ConsoleOutput            = false
@@ -35,7 +37,9 @@ func loadConfig() error {
 	Password = os.Getenv("SIIKABOT_PASSWORD")
 	HookSecret = os.Getenv("SIIKABOT_HOOK_SECRET")
 	Admin = os.Getenv("SIIKABOT_ADMIN")
-	OpenrouterAPIKey = os.Getenv("SIIKABOT_OPENROUTER_API_KEY")
+	CloudflareAccountID = os.Getenv("SIIKABOT_CLOUDFLARE_ACCOUNT_ID")
+	CloudflareAPIToken = os.Getenv("SIIKABOT_CLOUDFLARE_API_TOKEN")
+	CloudflareAIGatewayID = os.Getenv("SIIKABOT_CLOUDFLARE_AI_GATEWAY_ID")
 	PostgresConnectionString = os.Getenv("SIIKABOT_POSTGRES_CONNECTION_STRING")
 	PickleKey = os.Getenv("SIIKABOT_PICKLE_KEY")
 	ConsoleOutput = os.Getenv("SIIKABOT_CONSOLE_OUTPUT") == "true"
@@ -60,8 +64,16 @@ func loadConfig() error {
 	if Admin == "" {
 		return fmt.Errorf("SIIKABOT_ADMIN is not set")
 	}
-	if OpenrouterAPIKey == "" {
-		return fmt.Errorf("SIIKABOT_OPENROUTER_API_KEY is not set")
+	if CloudflareAccountID == "" {
+		return fmt.Errorf("SIIKABOT_CLOUDFLARE_ACCOUNT_ID is not set")
+	}
+	// The token needs both inference access and the AI Gateway Read permission, the latter
+	// for the gateway log polling that produces the cost and token metrics
+	if CloudflareAPIToken == "" {
+		return fmt.Errorf("SIIKABOT_CLOUDFLARE_API_TOKEN is not set")
+	}
+	if CloudflareAIGatewayID == "" {
+		CloudflareAIGatewayID = "default"
 	}
 	if PostgresConnectionString == "" {
 		return fmt.Errorf("SIIKABOT_POSTGRES_CONNECTION_STRING is not set")

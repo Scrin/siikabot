@@ -1,4 +1,4 @@
-package openrouter
+package aigateway
 
 import (
 	"context"

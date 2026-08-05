@@ -10,14 +10,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Scrin/siikabot/openrouter"
+	"github.com/Scrin/siikabot/aigateway"
 	"github.com/rs/zerolog/log"
 )
 
 // NewsToolDefinition returns the tool definition for the news headlines tool
-var NewsToolDefinition = openrouter.ToolDefinition{
+var NewsToolDefinition = aigateway.ToolDefinition{
 	Type: "function",
-	Function: openrouter.FunctionSchema{
+	Function: aigateway.FunctionSchema{
 		Name:        "get_news_headlines",
 		Description: "Get the latest news headlines from Yle (Finnish Broadcasting Company)",
 		Parameters: json.RawMessage(`{

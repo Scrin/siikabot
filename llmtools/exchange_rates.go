@@ -12,14 +12,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Scrin/siikabot/openrouter"
+	"github.com/Scrin/siikabot/aigateway"
 	"github.com/rs/zerolog/log"
 )
 
 // ExchangeRatesToolDefinition returns the tool definition for the exchange rates tool
-var ExchangeRatesToolDefinition = openrouter.ToolDefinition{
+var ExchangeRatesToolDefinition = aigateway.ToolDefinition{
 	Type: "function",
-	Function: openrouter.FunctionSchema{
+	Function: aigateway.FunctionSchema{
 		Name:        "get_exchange_rates",
 		Description: "Get current EUR exchange rates from the European Central Bank. Returns how much of a target currency you get for 1 EUR. Rates are updated daily around 16:00 CET.",
 		Parameters: json.RawMessage(`{

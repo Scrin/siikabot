@@ -16,16 +16,16 @@ import (
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/table"
+	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/db"
-	"github.com/Scrin/siikabot/openrouter"
 	strip "github.com/grokify/html-strip-tags-go"
 	"github.com/rs/zerolog/log"
 )
 
 // WebToolDefinition returns the tool definition for the web content fetching tool
-var WebToolDefinition = openrouter.ToolDefinition{
+var WebToolDefinition = aigateway.ToolDefinition{
 	Type: "function",
-	Function: openrouter.FunctionSchema{
+	Function: aigateway.FunctionSchema{
 		Name:        "get_web_content",
 		Description: "Fetch the content of a web page. HTML is converted to markdown for readability. (max 10kB output by default)",
 		Parameters: json.RawMessage(`{

@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/matrix"
 	"github.com/Scrin/siikabot/metrics"
-	"github.com/Scrin/siikabot/openrouter"
 	"github.com/rs/zerolog/log"
 )
 
@@ -45,22 +45,22 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 	tools := getToolsForUser(ctx, sender)
 
 	// Create the initial request
-	req := openrouter.ChatRequest{
+	req := aigateway.ChatRequest{
 		Model:    model,
 		Messages: messages,
 		Tools:    tools,
 	}
 
-	// Send the request to OpenRouter
+	// Send the request to the AI Gateway
 	log.Debug().Ctx(ctx).
 		Str("room_id", roomID).
 		Str("sender", sender).
 		Str("model", model).
 		Bool("has_image", hasImage).
 		Int("message_count", len(messages)).
-		Msg("Sending chat request to OpenRouter")
+		Msg("Sending chat request to the AI Gateway")
 
-	chatResp, err := openrouter.SendChatRequest(ctx, req)
+	chatResp, err := aigateway.SendChatRequest(ctx, req)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).
 			Str("room_id", roomID).
@@ -137,7 +137,7 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 }
 
 // buildInitialMessages creates the initial messages array with system prompt, history, and user message
-func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relatesTo map[string]any) ([]openrouter.Message, bool, string) {
+func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relatesTo map[string]any) ([]aigateway.Message, bool, string) {
 	// Create a system prompt with bot identity and current time
 	loc, _ := time.LoadLocation(config.Timezone)
 	currentTime := time.Now().In(loc).Format("Monday, January 2, 2006 15:04:05 MST")
@@ -193,7 +193,7 @@ func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relat
 	}
 
 	// Build messages array with system prompt, history, and current message
-	messages := []openrouter.Message{{Role: "system", Content: systemPrompt}}
+	messages := []aigateway.Message{{Role: "system", Content: systemPrompt}}
 
 	// Process history to include tool calls and tool responses
 	processHistoryMessages(ctx, history, &messages)
@@ -231,16 +231,16 @@ func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relat
 		hasImage, messages = processImageMessage(ctx, roomID, msg, base64ImageURL, &messages)
 	} else {
 		// Regular text message
-		messages = append(messages, openrouter.Message{Role: "user", Content: msg})
+		messages = append(messages, aigateway.Message{Role: "user", Content: msg})
 	}
 
 	return messages, hasImage, model
 }
 
 // processHistoryMessages processes the chat history and adds it to the messages array
-func processHistoryMessages(ctx context.Context, history []db.ChatMessage, messages *[]openrouter.Message) {
+func processHistoryMessages(ctx context.Context, history []db.ChatMessage, messages *[]aigateway.Message) {
 	// Group tool calls and their responses
-	toolCallMap := make(map[string]openrouter.ToolCall)
+	toolCallMap := make(map[string]aigateway.ToolCall)
 	toolResponseMap := make(map[string]string)
 
 	// First pass: collect tool calls and tool responses
@@ -250,10 +250,10 @@ func processHistoryMessages(ctx context.Context, history []db.ChatMessage, messa
 
 		if messageType == "tool_call" && historyMsg.ToolCallID != nil && historyMsg.ToolName != nil {
 			// Create a tool call object
-			toolCallMap[*historyMsg.ToolCallID] = openrouter.ToolCall{
+			toolCallMap[*historyMsg.ToolCallID] = aigateway.ToolCall{
 				ID:   *historyMsg.ToolCallID,
 				Type: "function",
-				Function: openrouter.ToolFunction{
+				Function: aigateway.ToolFunction{
 					Name:      *historyMsg.ToolName,
 					Arguments: historyMsg.Message,
 				},
@@ -263,7 +263,7 @@ func processHistoryMessages(ctx context.Context, history []db.ChatMessage, messa
 			toolResponseMap[*historyMsg.ToolCallID] = historyMsg.Message
 		} else if messageType == "text" || messageType == "" {
 			// Regular text message
-			*messages = append(*messages, openrouter.Message{
+			*messages = append(*messages, aigateway.Message{
 				Role:    historyMsg.Role,
 				Content: historyMsg.Message,
 			})
@@ -276,7 +276,7 @@ func processHistoryMessages(ctx context.Context, history []db.ChatMessage, messa
 	}
 
 	// Second pass: add messages in order, grouping tool calls and responses
-	var currentToolCalls []openrouter.ToolCall
+	var currentToolCalls []aigateway.ToolCall
 	var pendingToolCallIDs []string
 
 	for i, historyMsg := range history {
@@ -298,7 +298,7 @@ func processHistoryMessages(ctx context.Context, history []db.ChatMessage, messa
 			if isLastMessage || isNextMessageNotToolCall {
 				// Add the assistant message with all collected tool calls
 				if len(currentToolCalls) > 0 {
-					*messages = append(*messages, openrouter.Message{
+					*messages = append(*messages, aigateway.Message{
 						Role:      "assistant",
 						Content:   "",
 						ToolCalls: currentToolCalls,
@@ -307,7 +307,7 @@ func processHistoryMessages(ctx context.Context, history []db.ChatMessage, messa
 					// Add tool responses for these tool calls
 					for _, toolCallID := range pendingToolCallIDs {
 						if response, ok := toolResponseMap[toolCallID]; ok {
-							*messages = append(*messages, openrouter.Message{
+							*messages = append(*messages, aigateway.Message{
 								Role:       "tool",
 								Content:    response,
 								ToolCallID: toolCallID,
@@ -328,7 +328,7 @@ func processHistoryMessages(ctx context.Context, history []db.ChatMessage, messa
 
 // processRelatedMessage handles messages that are replies to other messages
 // Returns base64ImageURL if the message is a reply to an image
-func processRelatedMessage(ctx context.Context, roomID string, relatesTo map[string]any, messages *[]openrouter.Message) string {
+func processRelatedMessage(ctx context.Context, roomID string, relatesTo map[string]any, messages *[]aigateway.Message) string {
 	log.Debug().Ctx(ctx).
 		Str("room_id", roomID).
 		Interface("relates_to", relatesTo).
@@ -364,7 +364,7 @@ func processRelatedMessage(ctx context.Context, roomID string, relatesTo map[str
 
 // processRepliedImage handles replies to image messages
 // Returns the base64 encoded image URL if successful
-func processRepliedImage(ctx context.Context, roomID, replyEventID string, messages *[]openrouter.Message) string {
+func processRepliedImage(ctx context.Context, roomID, replyEventID string, messages *[]aigateway.Message) string {
 	// Get the image URL, encryption info, and full content
 	imageURL, encryptionInfo, fullContent, err := matrix.GetEventImageURL(ctx, roomID, replyEventID)
 	if err != nil {
@@ -387,7 +387,7 @@ func processRepliedImage(ctx context.Context, roomID, replyEventID string, messa
 		// Add a note about the failed attempt to process the image
 		errorMsg := "Note: The user replied to an image, but I couldn't process it. Please make sure the image is accessible and try again."
 
-		*messages = append(*messages, openrouter.Message{
+		*messages = append(*messages, aigateway.Message{
 			Role:    "system",
 			Content: errorMsg,
 		})
@@ -405,7 +405,7 @@ func processRepliedImage(ctx context.Context, roomID, replyEventID string, messa
 }
 
 // processRepliedText handles replies to text messages
-func processRepliedText(ctx context.Context, roomID, replyEventID string, messages *[]openrouter.Message) {
+func processRepliedText(ctx context.Context, roomID, replyEventID string, messages *[]aigateway.Message) {
 	// Get the content of the replied-to message (text)
 	repliedToContent, err := matrix.GetEventContent(ctx, roomID, replyEventID)
 	if err != nil {
@@ -415,7 +415,7 @@ func processRepliedText(ctx context.Context, roomID, replyEventID string, messag
 			Msg("Failed to get replied-to message content")
 
 		// Add a note about the failed attempt to get the replied-to message
-		*messages = append(*messages, openrouter.Message{
+		*messages = append(*messages, aigateway.Message{
 			Role:    "system",
 			Content: "Note: This message is a reply to another message, but I couldn't retrieve the content of that message.",
 		})
@@ -432,7 +432,7 @@ func processRepliedText(ctx context.Context, roomID, replyEventID string, messag
 
 		// Add a note about the reply context
 		replyContextMsg := fmt.Sprintf("This message is a reply to: \"%s\"", repliedToContent)
-		*messages = append(*messages, openrouter.Message{
+		*messages = append(*messages, aigateway.Message{
 			Role:    "system",
 			Content: replyContextMsg,
 		})
@@ -441,7 +441,7 @@ func processRepliedText(ctx context.Context, roomID, replyEventID string, messag
 
 // processImageMessage handles messages that include an image
 // Returns updated hasImage flag and messages
-func processImageMessage(ctx context.Context, roomID, msg, base64ImageURL string, messages *[]openrouter.Message) (bool, []openrouter.Message) {
+func processImageMessage(ctx context.Context, roomID, msg, base64ImageURL string, messages *[]aigateway.Message) (bool, []aigateway.Message) {
 	hasImage := true
 
 	// Ensure the base64ImageURL is properly formatted
@@ -504,16 +504,16 @@ func processImageMessage(ctx context.Context, roomID, msg, base64ImageURL string
 				Msg("Image is too large, skipping image attachment")
 
 			// Add a note about the image being too large
-			*messages = append(*messages, openrouter.Message{
+			*messages = append(*messages, aigateway.Message{
 				Role:    "system",
 				Content: "Note: An image was attached to this message, but it was too large to process (>5MB).",
 			})
 
 			// Fall back to text-only message
-			*messages = append(*messages, openrouter.Message{Role: "user", Content: msg})
+			*messages = append(*messages, aigateway.Message{Role: "user", Content: msg})
 			hasImage = false
 		} else {
-			contentParts := []openrouter.ContentPart{
+			contentParts := []aigateway.ContentPart{
 				{
 					Type: "text",
 					Text: msg,
@@ -528,7 +528,7 @@ func processImageMessage(ctx context.Context, roomID, msg, base64ImageURL string
 				},
 			}
 
-			*messages = append(*messages, openrouter.Message{
+			*messages = append(*messages, aigateway.Message{
 				Role:    "user",
 				Content: contentParts,
 			})
@@ -540,7 +540,7 @@ func processImageMessage(ctx context.Context, roomID, msg, base64ImageURL string
 			Msg("Image URL does not contain valid base64 data, skipping image")
 
 		// Fall back to text-only message
-		*messages = append(*messages, openrouter.Message{Role: "user", Content: msg})
+		*messages = append(*messages, aigateway.Message{Role: "user", Content: msg})
 		hasImage = false
 	}
 
@@ -548,7 +548,7 @@ func processImageMessage(ctx context.Context, roomID, msg, base64ImageURL string
 }
 
 // extractAssistantResponse extracts the assistant's response from the API response
-func extractAssistantResponse(ctx context.Context, roomID, sender, model string, hasImage bool, chatResp *openrouter.ChatResponse) string {
+func extractAssistantResponse(ctx context.Context, roomID, sender, model string, hasImage bool, chatResp *aigateway.ChatResponse) string {
 	var assistantResponse string
 
 	if content, ok := chatResp.Choices[0].Message.Content.(string); ok {
@@ -559,7 +559,7 @@ func extractAssistantResponse(ctx context.Context, roomID, sender, model string,
 			Str("model", model).
 			Bool("has_image", hasImage).
 			Int("response_length", len(assistantResponse)).
-			Msg("Received string response from OpenRouter")
+			Msg("Received string response from the AI Gateway")
 	} else if contentMap, ok := chatResp.Choices[0].Message.Content.(map[string]any); ok {
 		log.Debug().Ctx(ctx).
 			Str("room_id", roomID).
@@ -567,7 +567,7 @@ func extractAssistantResponse(ctx context.Context, roomID, sender, model string,
 			Str("model", model).
 			Bool("has_image", hasImage).
 			Interface("content_map", contentMap).
-			Msg("Received map response from OpenRouter")
+			Msg("Received map response from the AI Gateway")
 
 		if text, ok := contentMap["text"].(string); ok {
 			assistantResponse = text
@@ -601,10 +601,10 @@ func processToolCalls(
 	ctx context.Context,
 	roomID, sender, model string,
 	hasImage bool,
-	chatResp *openrouter.ChatResponse,
-	messages []openrouter.Message,
-	tools []openrouter.ToolDefinition,
-) (int, []openrouter.Message, string) {
+	chatResp *aigateway.ChatResponse,
+	messages []aigateway.Message,
+	tools []aigateway.ToolDefinition,
+) (int, []aigateway.Message, string) {
 	// Implement iterative tool calling with a maximum of 5 iterations
 	currentResp := chatResp
 	iterationCount := 1 // by the time we're here, we've already made one request
@@ -621,7 +621,7 @@ func processToolCalls(
 		iterationCount++
 
 		// Add the assistant's message with tool calls
-		messages = append(messages, openrouter.Message{
+		messages = append(messages, aigateway.Message{
 			Role:      "assistant",
 			Content:   "", // Content should be empty when there are tool calls
 			ToolCalls: currentResp.Choices[0].Message.ToolCalls,
@@ -669,7 +669,7 @@ func processToolCalls(
 
 		// Add each tool response as a separate message
 		for _, toolResp := range toolResponses {
-			messages = append(messages, openrouter.Message{
+			messages = append(messages, aigateway.Message{
 				Role:       "tool",
 				Content:    toolResp.Response,
 				ToolCallID: toolResp.ToolCallID,
@@ -699,7 +699,7 @@ func processToolCalls(
 		}
 
 		// Update the request with the new messages
-		req := openrouter.ChatRequest{
+		req := aigateway.ChatRequest{
 			Model:    model,
 			Messages: messages,
 			Tools:    tools,
@@ -718,8 +718,8 @@ func processToolCalls(
 			Int("iteration", iterationCount).
 			Msg("Sending chat request for tool iteration")
 
-		// Send the next request to OpenRouter
-		nextResp, err := openrouter.SendChatRequest(ctx, req)
+		// Send the next request to the AI Gateway
+		nextResp, err := aigateway.SendChatRequest(ctx, req)
 		if err != nil {
 			log.Error().Ctx(ctx).Err(err).
 				Str("room_id", roomID).
@@ -771,7 +771,7 @@ func processToolCalls(
 			Msg("Reached maximum tool iterations, making final request without tools")
 
 		// Add the last assistant message with tool calls
-		messages = append(messages, openrouter.Message{
+		messages = append(messages, aigateway.Message{
 			Role:      "assistant",
 			Content:   "", // Content should be empty when there are tool calls
 			ToolCalls: currentResp.Choices[0].Message.ToolCalls,
@@ -810,7 +810,7 @@ func processToolCalls(
 		if err == nil {
 			// Add each tool response as a separate message
 			for _, toolResp := range toolResponses {
-				messages = append(messages, openrouter.Message{
+				messages = append(messages, aigateway.Message{
 					Role:       "tool",
 					Content:    toolResp.Response,
 					ToolCallID: toolResp.ToolCallID,
@@ -841,7 +841,7 @@ func processToolCalls(
 		}
 
 		// Final request without tools
-		req := openrouter.ChatRequest{
+		req := aigateway.ChatRequest{
 			Model:    model,
 			Messages: messages,
 		}
@@ -858,8 +858,8 @@ func processToolCalls(
 			Int("message_count", len(messages)).
 			Msg("Sending final request without tools")
 
-		// Send the final request to OpenRouter
-		finalResp, err := openrouter.SendChatRequest(ctx, req)
+		// Send the final request to the AI Gateway
+		finalResp, err := aigateway.SendChatRequest(ctx, req)
 		if err != nil {
 			log.Error().Ctx(ctx).Err(err).
 				Str("room_id", roomID).
@@ -886,7 +886,7 @@ func processToolCalls(
 }
 
 // buildDebugData creates debug data for the response
-func buildDebugData(model string, messages []openrouter.Message, iterationCount int) map[string]any {
+func buildDebugData(model string, messages []aigateway.Message, iterationCount int) map[string]any {
 	debugData := map[string]any{
 		"model":                model,
 		"prompt_message_count": len(messages),
@@ -951,7 +951,7 @@ func buildDebugData(model string, messages []openrouter.Message, iterationCount 
 }
 
 // getToolsForUser returns tool definitions filtered based on user permissions
-func getToolsForUser(ctx context.Context, userID string) []openrouter.ToolDefinition {
+func getToolsForUser(ctx context.Context, userID string) []aigateway.ToolDefinition {
 	allTools := toolRegistry.GetToolDefinitions()
 
 	// Check if user has Grafana authorization
@@ -963,7 +963,7 @@ func getToolsForUser(ctx context.Context, userID string) []openrouter.ToolDefini
 	}
 
 	// Filter out tools that require permissions the user doesn't have
-	filtered := make([]openrouter.ToolDefinition, 0, len(allTools))
+	filtered := make([]aigateway.ToolDefinition, 0, len(allTools))
 	for _, tool := range allTools {
 		// Skip user_grafana tool if user doesn't have Grafana permission
 		if tool.Function.Name == "user_grafana" && !hasGrafana {

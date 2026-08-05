@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/db"
-	"github.com/Scrin/siikabot/openrouter"
 	"github.com/rs/zerolog/log"
 )
 
@@ -19,9 +19,9 @@ const maxDatasourceNameLength = 50
 const maxDatasourceDescriptionLength = 200
 
 // UserGrafanaToolDefinition defines the user Grafana datasource tool
-var UserGrafanaToolDefinition = openrouter.ToolDefinition{
+var UserGrafanaToolDefinition = aigateway.ToolDefinition{
 	Type: "function",
-	Function: openrouter.FunctionSchema{
+	Function: aigateway.FunctionSchema{
 		Name:        "user_grafana",
 		Description: "Manage and query user-defined Grafana datasources. Users can add custom metrics they want the AI to be able to query (like temperature sensors, system stats, etc). Only available to users with Grafana authorization.",
 		Parameters: json.RawMessage(`{

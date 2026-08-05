@@ -10,14 +10,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Scrin/siikabot/openrouter"
+	"github.com/Scrin/siikabot/aigateway"
 	"github.com/rs/zerolog/log"
 )
 
 // WikipediaToolDefinition returns the tool definition for the Wikipedia tool
-var WikipediaToolDefinition = openrouter.ToolDefinition{
+var WikipediaToolDefinition = aigateway.ToolDefinition{
 	Type: "function",
-	Function: openrouter.FunctionSchema{
+	Function: aigateway.FunctionSchema{
 		Name:        "wikipedia_summary",
 		Description: "Get a summary of a Wikipedia article. Returns the article title, a brief summary, and the URL. Useful for quick factual lookups.",
 		Parameters: json.RawMessage(`{
