@@ -1,0 +1,31 @@
+{
+  // Isolated sandbox for running Claude Code against this Ansible submodule.
+  // See .devcontainer/README.md for the isolation model (what is and isn't contained).
+  "name": "claude-isolated",
+  "build": { "dockerfile": "Dockerfile" },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+  // Keep this as "/workspace" (depth 1): the submodule's .git pointer resolves
+  // the real gitdir relative to it (see the second bind mount below).
+  "workspaceFolder": "/workspace",
+  "remoteUser": "node",
+  "containerEnv": {
+    // /workspace/.git is a submodule *pointer* whose stored core.worktree refers
+    // to the host layout. Override it here so git in the container uses
+    // /workspace, without mutating the (host-shared) gitdir config.
+    "GIT_WORK_TREE": "/workspace",
+    "CLAUDE_CONFIG_DIR": "/home/node/.claude"
+  },
+  "mounts": [
+    // Persist Claude Code auth/history/config across rebuilds (per-user, never committed).
+    "source=claude-config,target=/home/node/.claude,type=volume"
+  ],
+  "customizations": {
+    "vscode": {
+      "extensions": ["anthropic.claude-code"]
+    }
+  },
+  // Installs the latest Claude Code CLI each time the container is created,
+  // with verify + retry to survive truncated native-binary downloads — a plain
+  // `npm install -g` can exit 0 while leaving claude broken. See install-claude.sh.
+  "postCreateCommand": "bash .devcontainer/install-claude.sh"
+}
