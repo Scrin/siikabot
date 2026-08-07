@@ -34,6 +34,10 @@ const imageDetailAuto = "auto"
 // How long to keep chat history before cleaning it up
 const chatHistoryRetention = 7 * 24 * time.Hour // 7 days
 
+// How long to keep usage accounting records. Longer than the history itself: the conversations are
+// transient, but the point of the accounting is to show cost trends over weeks.
+const chatUsageRetention = 90 * 24 * time.Hour // 90 days
+
 // toolRegistry holds all available tools
 var toolRegistry *aigateway.ToolRegistry
 
@@ -72,6 +76,7 @@ func Init(ctx context.Context) {
 				return
 			case <-ticker.C:
 				cleanupChatHistory(ctx)
+				cleanupChatUsage(ctx)
 			}
 		}
 	}()
@@ -86,6 +91,19 @@ func cleanupChatHistory(ctx context.Context) {
 	}
 	if count > 0 {
 		log.Info().Ctx(ctx).Int64("removed_count", count).Msg("Cleaned up old chat history")
+	}
+}
+
+// cleanupChatUsage removes old usage accounting records. Kept far longer than the chat history
+// itself, since the point of the accounting is to show trends over weeks.
+func cleanupChatUsage(ctx context.Context) {
+	count, err := db.CleanupOldChatUsage(ctx, chatUsageRetention)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Msg("Failed to clean up old chat usage")
+		return
+	}
+	if count > 0 {
+		log.Info().Ctx(ctx).Int64("removed_count", count).Msg("Cleaned up old chat usage")
 	}
 }
 

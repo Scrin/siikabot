@@ -59,11 +59,17 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 	// Make sure we stop the typing indicator when we're done
 	defer matrix.SendTyping(ctx, roomID, false, 0)
 
+	// Accumulates everything that happens during this turn, for the summary logged at the end
+	stats := &turnStats{outcome: "ok"}
+
 	// Build the initial messages with system prompt, history, and handle image if present
-	messages, hasImage, model := buildInitialMessages(ctx, roomID, sender, msg, relatesTo)
+	messages, hasImage, model, composition := buildInitialMessages(ctx, roomID, sender, msg, relatesTo)
 
 	// Get tool definitions from the registry, filtering based on user permissions
 	tools := getToolsForUser(ctx, sender)
+
+	composition.tools = estimateToolDefinitionTokens(tools)
+	composition.record(ctx)
 
 	// Cap the response length. Read once and threaded through the turn so a multi-iteration turn
 	// does not re-query it per request.
@@ -92,7 +98,9 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 		Int("estimated_prompt_tokens", estimatedPromptTokens).
 		Msg("Sending chat request to the AI Gateway")
 
+	callStart := time.Now()
 	chatResp, err := aigateway.SendChatRequest(ctx, req)
+	stats.recordModelCall(chatResp, time.Since(callStart))
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).
 			Str("room_id", roomID).
@@ -100,6 +108,8 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 			Str("model", model).
 			Bool("has_image", hasImage).
 			Msg("Failed to send chat request")
+		stats.outcome = "request_failed"
+		stats.finish(ctx, roomID, sender, model, hasImage, time.Since(startTime))
 		metrics.RecordChatRequestDuration(model, hasImage, time.Since(startTime).Seconds())
 		matrix.SendTyping(ctx, roomID, false, 0) // Stop typing indicator on error
 		matrix.SendMessage(roomID, "Failed to process chat request")
@@ -113,6 +123,8 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 			Str("model", model).
 			Bool("has_image", hasImage).
 			Msg("Chat API returned no choices")
+		stats.outcome = "no_choices"
+		stats.finish(ctx, roomID, sender, model, hasImage, time.Since(startTime))
 		metrics.RecordChatRequestDuration(model, hasImage, time.Since(startTime).Seconds())
 		matrix.SendTyping(ctx, roomID, false, 0) // Stop typing indicator on error
 		matrix.SendMessage(roomID, "No response from chat API")
@@ -145,9 +157,10 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 		// Process tool calls iteratively
 		iterationCount, messages, assistantResponse = processToolCalls(
 			ctx, roomID, sender, model, hasImage, maxTokens,
-			chatResp, messages, tools,
+			chatResp, messages, tools, stats,
 		)
 	}
+	stats.iterations = iterationCount
 
 	// Save the assistant response to history
 	if err := db.SaveChatMessage(ctx, roomID, config.UserID, assistantResponse, "assistant"); err != nil {
@@ -155,13 +168,7 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 		// Continue even if saving fails
 	}
 
-	log.Debug().Ctx(ctx).
-		Str("room_id", roomID).
-		Str("sender", sender).
-		Str("model", model).
-		Bool("has_image", hasImage).
-		Int("response_length", len(assistantResponse)).
-		Msg("Chat command completed")
+	stats.finish(ctx, roomID, sender, model, hasImage, time.Since(startTime))
 
 	metrics.RecordChatRequestDuration(model, hasImage, time.Since(startTime).Seconds())
 	metrics.RecordChatToolIterations(iterationCount)
@@ -172,8 +179,9 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 	matrix.SendMarkdownFormattedNoticeWithDebugData(roomID, assistantResponse, debugData)
 }
 
-// buildInitialMessages creates the initial messages array with system prompt, history, and user message
-func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relatesTo map[string]any) ([]aigateway.Message, bool, string) {
+// buildInitialMessages creates the initial messages array with system prompt, history, and user
+// message, along with the estimated token cost of each part of it
+func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relatesTo map[string]any) ([]aigateway.Message, bool, string, promptComposition) {
 	// Get the bot's actual display name from the Matrix server
 	botDisplayName := matrix.GetDisplayName(ctx, config.UserID)
 	if botDisplayName == "" {
@@ -224,9 +232,12 @@ func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relat
 
 	// Build messages array with system prompt, history, and current message
 	messages := []aigateway.Message{{Role: "system", Content: systemPrompt}}
+	composition := promptComposition{system: estimateTokens(systemPrompt)}
 
 	// Process history to include tool calls and tool responses
+	historyStart := len(messages)
 	processHistoryMessages(ctx, history, &messages)
+	composition.history = estimateMessageTokens(messages[historyStart:])
 
 	// The current time goes after the history, not in the system prompt, so that everything before
 	// it stays byte-identical between requests and can be served from the provider's prompt cache
@@ -265,14 +276,16 @@ func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relat
 	}
 
 	// Add the current message, handling image if present
+	currentStart := len(messages)
 	if hasImage {
 		hasImage, messages = processImageMessage(ctx, roomID, msg, base64ImageURL, &messages)
 	} else {
 		// Regular text message
 		messages = append(messages, aigateway.Message{Role: "user", Content: msg})
 	}
+	composition.current = estimateMessageTokens(messages[currentStart:])
 
-	return messages, hasImage, model
+	return messages, hasImage, model, composition
 }
 
 // processHistoryMessages processes the chat history and adds it to the messages array.
@@ -699,6 +712,7 @@ func processToolCalls(
 	chatResp *aigateway.ChatResponse,
 	messages []aigateway.Message,
 	tools []aigateway.ToolDefinition,
+	stats *turnStats,
 ) (int, []aigateway.Message, string) {
 	// Implement iterative tool calling with a maximum of 5 iterations
 	currentResp := chatResp
@@ -720,7 +734,9 @@ func processToolCalls(
 		})
 
 		// Process tool calls
+		toolStart := time.Now()
 		toolResponses, err := toolRegistry.HandleToolCallsIndividually(toolCtx, currentResp.Choices[0].Message.ToolCalls)
+		stats.recordToolExecution(currentResp.Choices[0].Message.ToolCalls, time.Since(toolStart))
 		if err != nil {
 			log.Error().Ctx(ctx).Err(err).
 				Str("room_id", roomID).
@@ -766,7 +782,9 @@ func processToolCalls(
 			Msg("Sending chat request for tool iteration")
 
 		// Send the next request to the AI Gateway
+		callStart := time.Now()
 		nextResp, err := aigateway.SendChatRequest(ctx, req)
+		stats.recordModelCall(nextResp, time.Since(callStart))
 		if err != nil {
 			log.Error().Ctx(ctx).Err(err).
 				Str("room_id", roomID).
@@ -825,7 +843,9 @@ func processToolCalls(
 		})
 
 		// Process the final tool calls
+		toolStart := time.Now()
 		toolResponses, err := toolRegistry.HandleToolCallsIndividually(toolCtx, currentResp.Choices[0].Message.ToolCalls)
+		stats.recordToolExecution(currentResp.Choices[0].Message.ToolCalls, time.Since(toolStart))
 		if err == nil {
 			// Persist the calls together with their responses, after execution, so a call is never
 			// stored without the response that answers it
@@ -861,7 +881,9 @@ func processToolCalls(
 			Msg("Sending final request without tools")
 
 		// Send the final request to the AI Gateway
+		callStart := time.Now()
 		finalResp, err := aigateway.SendChatRequest(ctx, req)
+		stats.recordModelCall(finalResp, time.Since(callStart))
 		if err != nil {
 			log.Error().Ctx(ctx).Err(err).
 				Str("room_id", roomID).

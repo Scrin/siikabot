@@ -81,11 +81,29 @@ type Choice struct {
 	LogProbs           any     `json:"logprobs"`
 }
 
+// PromptTokensDetails breaks down the prompt tokens of a response.
+//
+// CachedTokens is how much of the prompt the provider served from its cache. It is the only direct
+// evidence that the stable-prefix work is doing anything, so it is worth reading even though nothing
+// else in the response needs it.
+type PromptTokensDetails struct {
+	CachedTokens int `json:"cached_tokens"`
+}
+
 // Usage represents token usage information in the chat API response
 type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens        int                  `json:"prompt_tokens"`
+	CompletionTokens    int                  `json:"completion_tokens"`
+	TotalTokens         int                  `json:"total_tokens"`
+	PromptTokensDetails *PromptTokensDetails `json:"prompt_tokens_details,omitempty"`
+}
+
+// CachedPromptTokens returns how many prompt tokens were served from the provider's cache
+func (u *Usage) CachedPromptTokens() int {
+	if u == nil || u.PromptTokensDetails == nil {
+		return 0
+	}
+	return u.PromptTokensDetails.CachedTokens
 }
 
 // ChatResponse represents a response from the chat API
@@ -157,43 +175,48 @@ func SendChatRequest(ctx context.Context, req ChatRequest) (*ChatResponse, error
 	httpReq.Header.Set("Content-Type", "application/json")
 	setAuthHeaders(httpReq)
 
+	// Measured around the call itself, so a slow turn can be attributed to the model rather than to
+	// tool execution without reading logs
+	startTime := time.Now()
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
+		recordFailure(ctx, req.Model, classifyTransportError(err), startTime)
 		log.Error().Ctx(ctx).Err(err).Str("model", req.Model).Msg("Failed to send chat request")
-		metrics.RecordChatAPICall(req.Model, false)
 		return nil, fmt.Errorf("failed to send chat request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		recordFailure(ctx, req.Model, classifyTransportError(err), startTime)
 		log.Error().Ctx(ctx).Err(err).Str("model", req.Model).Msg("Failed to read chat response")
-		metrics.RecordChatAPICall(req.Model, false)
 		return nil, fmt.Errorf("failed to read chat response: %w", err)
 	}
 
 	var runResp runResponse
 	if err := json.Unmarshal(body, &runResp); err != nil {
+		recordFailure(ctx, req.Model, ErrorKindParseError, startTime)
 		log.Error().Ctx(ctx).Err(err).
 			Str("model", req.Model).
 			Int("status_code", resp.StatusCode).
 			Str("response", string(body)).
 			Msg("Failed to parse chat response")
-		metrics.RecordChatAPICall(req.Model, false)
 		return nil, fmt.Errorf("failed to parse chat response: %w", err)
 	}
 
 	// Failures are reported both by the HTTP status and by the envelope's success field
 	if resp.StatusCode >= 400 || !runResp.Success || len(runResp.Errors) > 0 {
 		errorCode, errorMessage := firstError(runResp.Errors)
+		errorKind := classifyResponseError(resp.StatusCode, runResp.Errors)
+		recordFailure(ctx, req.Model, errorKind, startTime)
 		log.Error().Ctx(ctx).
 			Str("model", req.Model).
 			Int("status_code", resp.StatusCode).
 			Int("error_code", errorCode).
+			Str("error_kind", string(errorKind)).
 			Str("error_message", errorMessage).
 			Str("response", string(body)).
 			Msg("Chat API returned error")
-		metrics.RecordChatAPICall(req.Model, false)
 		if errorMessage == "" {
 			return nil, fmt.Errorf("chat API error: HTTP %d", resp.StatusCode)
 		}
@@ -208,16 +231,31 @@ func SendChatRequest(ctx context.Context, req ChatRequest) (*ChatResponse, error
 		Msg("Chat API response")
 
 	metrics.RecordChatAPICall(req.Model, true)
+	metrics.RecordChatAPICallDuration(req.Model, time.Since(startTime).Seconds())
 
 	if chatResp.Usage != nil {
+		cachedTokens := chatResp.Usage.CachedPromptTokens()
 		log.Debug().Ctx(ctx).
 			Str("model", req.Model).
 			Int("prompt_tokens", chatResp.Usage.PromptTokens).
 			Int("completion_tokens", chatResp.Usage.CompletionTokens).
+			Int("cached_prompt_tokens", cachedTokens).
 			Int("total_tokens", chatResp.Usage.TotalTokens).
 			Msg("Chat API token usage")
 		metrics.RecordChatTokens(req.Model, chatResp.Usage.PromptTokens, chatResp.Usage.CompletionTokens)
+		metrics.RecordChatCachedTokens(req.Model, cachedTokens, chatResp.Usage.PromptTokens)
 	}
 
 	return &chatResp, nil
+}
+
+// recordFailure records the metrics for a failed chat request
+func recordFailure(ctx context.Context, model string, kind ErrorKind, startTime time.Time) {
+	metrics.RecordChatAPICall(model, false)
+	metrics.RecordChatAPIError(model, string(kind))
+	metrics.RecordChatAPICallDuration(model, time.Since(startTime).Seconds())
+	log.Debug().Ctx(ctx).
+		Str("model", model).
+		Str("error_kind", string(kind)).
+		Msg("Chat request failed")
 }

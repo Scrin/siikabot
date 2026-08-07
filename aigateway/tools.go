@@ -129,12 +129,15 @@ func (r *ToolRegistry) HandleToolCallsIndividually(ctx context.Context, toolCall
 			defer mu.Unlock()
 
 			if err != nil {
+				errorKind := ClassifyToolError(err)
 				log.Error().Ctx(ctx).Err(err).
 					Str("tool", currentCall.Function.Name).
 					Str("arguments", currentCall.Function.Arguments).
+					Str("error_kind", string(errorKind)).
 					Float64("execution_time_sec", executionTime).
 					Msg("Tool call failed")
 				metrics.RecordToolCall(currentCall.Function.Name, false)
+				metrics.RecordToolError(currentCall.Function.Name, string(errorKind))
 				responses = append(responses, ToolResponse{
 					ToolCallID: currentCall.ID,
 					Response:   fmt.Sprintf("Error executing %s: %s", currentCall.Function.Name, err.Error()),

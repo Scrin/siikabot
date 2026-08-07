@@ -16,10 +16,41 @@ var chatTokens = makeCollector(prometheus.NewCounterVec(prometheus.CounterOpts{
 	Help: "Total number of tokens used in chat API calls",
 }, []string{"model", "type"}))
 
+// Failures are counted separately from chatAPICalls rather than by adding a label to it, so the
+// existing success/failure counter keeps its meaning and cardinality. error_kind is a closed set
+// defined in the aigateway package; nothing derived from a message body may be used as a label,
+// since the metrics endpoint is public.
+var chatAPIErrors = makeCollector(prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: metricPrefix + "chat_api_errors_count",
+	Help: "Total number of failed chat API calls by error kind",
+}, []string{"model", "error_kind"}))
+
+var chatAPICallDuration = makeCollector(prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	Name:    metricPrefix + "chat_api_call_duration_seconds",
+	Help:    "Duration of individual chat API calls in seconds",
+	Buckets: []float64{0.25, 0.5, 1, 2, 4, 8, 15, 30, 60},
+}, []string{"model"}))
+
+// Cached prompt tokens are the only direct evidence that the stable-prefix work is paying off
+var chatCachedTokens = makeCollector(prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: metricPrefix + "chat_cached_tokens_count",
+	Help: "Total number of prompt tokens served from the provider's cache",
+}, []string{"model"}))
+
+var chatUncachedPromptTokens = makeCollector(prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: metricPrefix + "chat_uncached_prompt_tokens_count",
+	Help: "Total number of prompt tokens not served from the provider's cache",
+}, []string{"model"}))
+
 var toolCalls = makeCollector(prometheus.NewCounterVec(prometheus.CounterOpts{
 	Name: metricPrefix + "tool_calls_count",
 	Help: "Total number of tool calls made",
 }, []string{"tool", "status"}))
+
+var toolErrors = makeCollector(prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: metricPrefix + "tool_errors_count",
+	Help: "Total number of failed tool calls by error kind",
+}, []string{"tool", "error_kind"}))
 
 var toolLatency = makeCollector(prometheus.NewGaugeVec(prometheus.GaugeOpts{
 	Name: metricPrefix + "tool_latest_latency_seconds",
@@ -109,6 +140,21 @@ var chatContextAnchorAdvances = makeCollector(prometheus.NewCounter(prometheus.C
 	Help: "Number of times a room's context window was trimmed back to the low mark",
 }))
 
+// Splits a turn into waiting on the model versus waiting on tools, so "slow when many tool calls
+// are involved" can be attributed rather than guessed at
+var chatTurnPhaseDuration = makeCollector(prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	Name:    metricPrefix + "chat_turn_phase_duration_seconds",
+	Help:    "Time spent in each phase of a chat turn in seconds",
+	Buckets: []float64{0.25, 0.5, 1, 2, 4, 8, 15, 30, 60, 120},
+}, []string{"model", "phase"}))
+
+// Shows which part of the prompt the tokens are actually going to, so trimming can be aimed
+var chatPromptComponentTokens = makeCollector(prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	Name:    metricPrefix + "chat_prompt_component_tokens",
+	Help:    "Estimated token cost of each component of a prompt",
+	Buckets: []float64{64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384},
+}, []string{"component"}))
+
 // RecordChatRequestDuration records the end-to-end duration of a chat request
 func RecordChatRequestDuration(model string, hasImage bool, durationSec float64) {
 	chatRequestDuration.WithLabelValues(model, strconv.FormatBool(hasImage)).Observe(durationSec)
@@ -137,4 +183,40 @@ func RecordChatContextWindowTokens(model string, tokens int) {
 // RecordChatContextAnchorAdvance records a context window being trimmed back to the low mark
 func RecordChatContextAnchorAdvance() {
 	chatContextAnchorAdvances.Inc()
+}
+
+// RecordChatAPIError records a failed chat API call under a specific error kind
+func RecordChatAPIError(model, errorKind string) {
+	chatAPIErrors.WithLabelValues(model, errorKind).Inc()
+}
+
+// RecordChatAPICallDuration records how long a single chat API call took
+func RecordChatAPICallDuration(model string, durationSec float64) {
+	chatAPICallDuration.WithLabelValues(model).Observe(durationSec)
+}
+
+// RecordChatCachedTokens records how much of a prompt was served from the provider's cache.
+// Splitting the prompt into cached and uncached makes the hit rate a ratio of two counters.
+func RecordChatCachedTokens(model string, cachedTokens, promptTokens int) {
+	if cachedTokens > 0 {
+		chatCachedTokens.WithLabelValues(model).Add(float64(cachedTokens))
+	}
+	if uncached := promptTokens - cachedTokens; uncached > 0 {
+		chatUncachedPromptTokens.WithLabelValues(model).Add(float64(uncached))
+	}
+}
+
+// RecordToolError records a failed tool call under a specific error kind
+func RecordToolError(tool, errorKind string) {
+	toolErrors.WithLabelValues(tool, errorKind).Inc()
+}
+
+// RecordChatTurnPhase records how long a turn spent waiting on the model versus on tools
+func RecordChatTurnPhase(model, phase string, durationSec float64) {
+	chatTurnPhaseDuration.WithLabelValues(model, phase).Observe(durationSec)
+}
+
+// RecordChatPromptComponent records the estimated token cost of one part of a prompt
+func RecordChatPromptComponent(component string, tokens int) {
+	chatPromptComponentTokens.WithLabelValues(component).Observe(float64(tokens))
 }
