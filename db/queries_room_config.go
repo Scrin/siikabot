@@ -11,11 +11,13 @@ import (
 
 // RoomConfig represents a room configuration
 type RoomConfig struct {
-	RoomID                 string  `db:"room_id"`
-	ChatLLMModelText       *string `db:"chat_llm_model_text"`
-	ChatLLMModelImage      *string `db:"chat_llm_model_image"`
-	ChatMaxHistoryMessages *int    `db:"chat_max_history_messages"`
-	ChatMaxToolIterations  *int    `db:"chat_max_tool_iterations"`
+	RoomID                string  `db:"room_id"`
+	ChatLLMModelText      *string `db:"chat_llm_model_text"`
+	ChatLLMModelImage     *string `db:"chat_llm_model_image"`
+	ChatContextHighTokens *int    `db:"chat_context_high_tokens"`
+	ChatContextLowTokens  *int    `db:"chat_context_low_tokens"`
+	ChatContextAnchorID   *int64  `db:"chat_context_anchor_id"`
+	ChatMaxToolIterations *int    `db:"chat_max_tool_iterations"`
 }
 
 // GetRoomChatLLMModelText retrieves the chat LLM model for text messages in a room
@@ -90,24 +92,42 @@ func SetRoomChatLLMModelImage(ctx context.Context, roomID, model string) error {
 	return nil
 }
 
-// GetRoomChatMaxHistoryMessages retrieves the max history messages for a room
-// Returns 0 if not set (which means use the default)
-func GetRoomChatMaxHistoryMessages(ctx context.Context, roomID string) (*int, error) {
-	var maxMessages *int
-	err := pool.QueryRow(ctx,
-		"SELECT chat_max_history_messages FROM room_config WHERE room_id = $1",
-		roomID).Scan(&maxMessages)
+// GetRoomChatContextTokens retrieves the context window token budget for a room
+// Returns nil values if not set (which means use the defaults)
+func GetRoomChatContextTokens(ctx context.Context, roomID string) (high, low *int, err error) {
+	err = pool.QueryRow(ctx,
+		"SELECT chat_context_high_tokens, chat_context_low_tokens FROM room_config WHERE room_id = $1",
+		roomID).Scan(&high, &low)
 	if err != nil {
-		// If no rows found, return 0 (no custom value set)
+		// If no rows found, no custom values are set
+		if err.Error() == "no rows in result set" {
+			return nil, nil, nil
+		}
+		log.Error().Ctx(ctx).Err(err).
+			Str("room_id", roomID).
+			Msg("Failed to get room chat context token budget")
+		return nil, nil, err
+	}
+	return high, low, nil
+}
+
+// GetRoomChatContextAnchor retrieves the id of the chat history row the context window starts at
+// Returns nil if no anchor is set, meaning the window starts at the oldest available history
+func GetRoomChatContextAnchor(ctx context.Context, roomID string) (*int64, error) {
+	var anchorID *int64
+	err := pool.QueryRow(ctx,
+		"SELECT chat_context_anchor_id FROM room_config WHERE room_id = $1",
+		roomID).Scan(&anchorID)
+	if err != nil {
 		if err.Error() == "no rows in result set" {
 			return nil, nil
 		}
 		log.Error().Ctx(ctx).Err(err).
 			Str("room_id", roomID).
-			Msg("Failed to get room chat max history messages")
+			Msg("Failed to get room chat context anchor")
 		return nil, err
 	}
-	return maxMessages, nil
+	return anchorID, nil
 }
 
 // GetRoomChatMaxToolIterations retrieves the max tool iterations for a room
@@ -130,17 +150,49 @@ func GetRoomChatMaxToolIterations(ctx context.Context, roomID string) (*int, err
 	return maxIterations, nil
 }
 
-// SetRoomChatMaxHistoryMessages sets the max history messages for a room
-func SetRoomChatMaxHistoryMessages(ctx context.Context, roomID string, maxMessages int) error {
+// SetRoomChatContextTokens sets the context window token budget for a room
+func SetRoomChatContextTokens(ctx context.Context, roomID string, high, low int) error {
 	_, err := pool.Exec(ctx,
-		"INSERT INTO room_config (room_id, chat_max_history_messages) VALUES ($1, $2) "+
-			"ON CONFLICT (room_id) DO UPDATE SET chat_max_history_messages = $2",
-		roomID, maxMessages)
+		"INSERT INTO room_config (room_id, chat_context_high_tokens, chat_context_low_tokens) VALUES ($1, $2, $3) "+
+			"ON CONFLICT (room_id) DO UPDATE SET chat_context_high_tokens = $2, chat_context_low_tokens = $3",
+		roomID, high, low)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).
 			Str("room_id", roomID).
-			Int("max_messages", maxMessages).
-			Msg("Failed to set room chat max history messages")
+			Int("high_tokens", high).
+			Int("low_tokens", low).
+			Msg("Failed to set room chat context token budget")
+		return err
+	}
+	return nil
+}
+
+// SetRoomChatContextAnchor sets the id of the chat history row the context window starts at
+func SetRoomChatContextAnchor(ctx context.Context, roomID string, anchorID int64) error {
+	_, err := pool.Exec(ctx,
+		"INSERT INTO room_config (room_id, chat_context_anchor_id) VALUES ($1, $2) "+
+			"ON CONFLICT (room_id) DO UPDATE SET chat_context_anchor_id = $2",
+		roomID, anchorID)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).
+			Str("room_id", roomID).
+			Int64("anchor_id", anchorID).
+			Msg("Failed to set room chat context anchor")
+		return err
+	}
+	return nil
+}
+
+// ClearRoomChatContextAnchor removes the context window anchor for a room, so the window starts
+// again at the oldest available history
+func ClearRoomChatContextAnchor(ctx context.Context, roomID string) error {
+	_, err := pool.Exec(ctx,
+		"UPDATE room_config SET chat_context_anchor_id = NULL WHERE room_id = $1",
+		roomID)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).
+			Str("room_id", roomID).
+			Msg("Failed to clear room chat context anchor")
 		return err
 	}
 	return nil

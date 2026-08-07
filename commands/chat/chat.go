@@ -17,7 +17,6 @@ import (
 const defaultModel = "openai/gpt-4o-mini"
 
 // Default values for configurable parameters
-const defaultMaxHistoryMessages = 20
 const defaultMaxToolIterations = 5
 
 // How long to keep chat history before cleaning it up
@@ -98,14 +97,16 @@ func getImageModelForRoom(ctx context.Context, roomID string) string {
 	return *model
 }
 
-// getMaxHistoryMessagesForRoom returns the max history messages to use for a specific room
-// If no room-specific value is set, returns the default value
-func getMaxHistoryMessagesForRoom(ctx context.Context, roomID string) int {
-	maxMessages, err := db.GetRoomChatMaxHistoryMessages(ctx, roomID)
-	if err != nil || maxMessages == nil {
-		return defaultMaxHistoryMessages
-	}
-	return *maxMessages
+// describeContextWindow renders the room's context window settings and the size of the window as it
+// currently stands, since a token budget on its own is hard to picture.
+//
+// Deliberately reads the window without maintaining it: showing the configuration should not move
+// the anchor as a side effect.
+func describeContextWindow(ctx context.Context, roomID string) string {
+	high, low := getContextBudgetForRoom(ctx, roomID)
+	window := currentContextWindow(ctx, roomID)
+	return fmt.Sprintf("%d / %d tokens (currently ~%d tokens over %d messages)",
+		high, low, estimateHistoryTokens(window), len(window))
 }
 
 // getMaxToolIterationsForRoom returns the max tool iterations to use for a specific room
@@ -142,23 +143,28 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 			matrix.SendMessage(roomID, "Failed to reset chat history")
 			return
 		}
+		// The anchor points at a row that no longer exists, so clear it along with the history
+		if err := db.ClearRoomChatContextAnchor(ctx, roomID); err != nil {
+			log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Msg("Failed to clear context anchor on reset")
+			// Continue: a stale anchor degrades to starting from the oldest available row
+		}
 		log.Info().Ctx(ctx).Str("room_id", roomID).Int64("deleted_count", count).Msg("Chat history reset")
 		matrix.SendMessage(roomID, fmt.Sprintf("Chat history reset (%d messages deleted)", count))
 	case "config":
 		// Show current configuration for the room
 		textModel := getTextModelForRoom(ctx, roomID)
 		imageModel := getImageModelForRoom(ctx, roomID)
-		maxHistoryMessages := getMaxHistoryMessagesForRoom(ctx, roomID)
+		contextWindow := describeContextWindow(ctx, roomID)
 		maxToolIterations := getMaxToolIterationsForRoom(ctx, roomID)
 		maxWebContentSize := getMaxWebContentSizeForRoom(ctx, roomID)
 
 		matrix.SendMessage(roomID, fmt.Sprintf("Current chat configuration for this room:\n"+
 			"Text model: %s\n"+
 			"Image model: %s\n"+
-			"Max history messages: %d\n"+
+			"Context window: %s\n"+
 			"Max tool iterations: %d\n"+
 			"Max web content size: %d bytes",
-			textModel, imageModel, maxHistoryMessages, maxToolIterations, maxWebContentSize))
+			textModel, imageModel, contextWindow, maxToolIterations, maxWebContentSize))
 	case "model":
 		if len(split) < 4 {
 			matrix.SendMessage(roomID, "Usage: !chat model [text|image] <model_name>")
@@ -207,38 +213,48 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 		default:
 			matrix.SendMessage(roomID, "Usage: !chat model [text|image] <model_name>")
 		}
-	case "history":
-		if len(split) < 3 {
-			matrix.SendMessage(roomID, "Usage: !chat history <max_messages>")
+	case "context":
+		if len(split) < 4 {
+			matrix.SendMessage(roomID, "Usage: !chat context <high_tokens> <low_tokens>")
 			return
 		}
 
 		if sender != config.Admin {
-			matrix.SendMessage(roomID, "Only admins can change the max history messages")
+			matrix.SendMessage(roomID, "Only admins can change the context window")
 			return
 		}
 
-		var maxMessages int
-		_, err := fmt.Sscanf(split[2], "%d", &maxMessages)
-		if err != nil || maxMessages <= 0 {
-			matrix.SendMessage(roomID, "Max messages must be a positive integer")
+		var highTokens, lowTokens int
+		if _, err := fmt.Sscanf(split[2], "%d", &highTokens); err != nil || highTokens <= 0 {
+			matrix.SendMessage(roomID, "High mark must be a positive integer")
+			return
+		}
+		if _, err := fmt.Sscanf(split[3], "%d", &lowTokens); err != nil || lowTokens <= 0 {
+			matrix.SendMessage(roomID, "Low mark must be a positive integer")
+			return
+		}
+		// The window grows to the high mark then drops back to the low mark, so the marks have to
+		// straddle a usable range or the window would be trimmed on every single turn
+		if lowTokens >= highTokens {
+			matrix.SendMessage(roomID, "Low mark must be below the high mark")
 			return
 		}
 
-		err = db.SetRoomChatMaxHistoryMessages(ctx, roomID, maxMessages)
-		if err != nil {
+		if err := db.SetRoomChatContextTokens(ctx, roomID, highTokens, lowTokens); err != nil {
 			log.Error().Ctx(ctx).Err(err).
 				Str("room_id", roomID).
-				Int("max_messages", maxMessages).
-				Msg("Failed to set room max history messages")
-			matrix.SendMessage(roomID, "Failed to set max history messages")
+				Int("high_tokens", highTokens).
+				Int("low_tokens", lowTokens).
+				Msg("Failed to set room context window")
+			matrix.SendMessage(roomID, "Failed to set context window")
 			return
 		}
 		log.Info().Ctx(ctx).
 			Str("room_id", roomID).
-			Int("max_messages", maxMessages).
-			Msg("Max history messages changed")
-		matrix.SendMessage(roomID, fmt.Sprintf("Max history messages changed to: %d", maxMessages))
+			Int("high_tokens", highTokens).
+			Int("low_tokens", lowTokens).
+			Msg("Context window changed")
+		matrix.SendMessage(roomID, fmt.Sprintf("Context window changed to: %d / %d tokens", highTokens, lowTokens))
 	case "tools":
 		if len(split) < 3 {
 			matrix.SendMessage(roomID, "Usage: !chat tools <max_iterations>")

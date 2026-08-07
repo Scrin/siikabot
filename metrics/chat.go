@@ -89,6 +89,26 @@ var chatImagesProcessed = makeCollector(prometheus.NewCounter(prometheus.Counter
 	Help: "Total number of images processed in chat requests",
 }))
 
+// The context window is sized with a cheap heuristic rather than a real tokeniser. This tracks the
+// ratio of the token count the API reported to the count that was estimated, so the error stays
+// visible: 1.0 is exact, above 1.0 means the estimate runs low and the window is bigger than intended.
+var chatTokenEstimateDrift = makeCollector(prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	Name:    metricPrefix + "chat_token_estimate_drift_ratio",
+	Help:    "Ratio of reported prompt tokens to estimated prompt tokens",
+	Buckets: []float64{0.5, 0.7, 0.85, 0.95, 1.05, 1.15, 1.3, 1.5, 2},
+}, []string{"model"}))
+
+var chatContextWindowTokens = makeCollector(prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	Name:    metricPrefix + "chat_context_window_tokens",
+	Help:    "Estimated token size of the replayed context window",
+	Buckets: []float64{256, 512, 1024, 2048, 4096, 8192, 16384, 32768},
+}, []string{"model"}))
+
+var chatContextAnchorAdvances = makeCollector(prometheus.NewCounter(prometheus.CounterOpts{
+	Name: metricPrefix + "chat_context_anchor_advances_count",
+	Help: "Number of times a room's context window was trimmed back to the low mark",
+}))
+
 // RecordChatRequestDuration records the end-to-end duration of a chat request
 func RecordChatRequestDuration(model string, hasImage bool, durationSec float64) {
 	chatRequestDuration.WithLabelValues(model, strconv.FormatBool(hasImage)).Observe(durationSec)
@@ -102,4 +122,19 @@ func RecordChatToolIterations(count int) {
 // RecordChatImageProcessed records an image being processed in a chat request
 func RecordChatImageProcessed() {
 	chatImagesProcessed.Inc()
+}
+
+// RecordTokenEstimateDrift records how far the prompt token estimate was from the reported count
+func RecordTokenEstimateDrift(model string, ratio float64) {
+	chatTokenEstimateDrift.WithLabelValues(model).Observe(ratio)
+}
+
+// RecordChatContextWindowTokens records the estimated size of the replayed context window
+func RecordChatContextWindowTokens(model string, tokens int) {
+	chatContextWindowTokens.WithLabelValues(model).Observe(float64(tokens))
+}
+
+// RecordChatContextAnchorAdvance records a context window being trimmed back to the low mark
+func RecordChatContextAnchorAdvance() {
+	chatContextAnchorAdvances.Inc()
 }

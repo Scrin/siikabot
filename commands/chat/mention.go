@@ -71,6 +71,11 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 		Tools:    tools,
 	}
 
+	// Estimated size of what is about to be sent, compared against the reported usage below so the
+	// accuracy of the heuristic driving the context window stays visible
+	estimatedPromptTokens := estimateMessageTokens(messages)
+	metrics.RecordChatContextWindowTokens(model, estimatedPromptTokens)
+
 	// Send the request to the AI Gateway
 	log.Debug().Ctx(ctx).
 		Str("room_id", roomID).
@@ -78,6 +83,7 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 		Str("model", model).
 		Bool("has_image", hasImage).
 		Int("message_count", len(messages)).
+		Int("estimated_prompt_tokens", estimatedPromptTokens).
 		Msg("Sending chat request to the AI Gateway")
 
 	chatResp, err := aigateway.SendChatRequest(ctx, req)
@@ -105,6 +111,10 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 		matrix.SendTyping(ctx, roomID, false, 0) // Stop typing indicator on error
 		matrix.SendMessage(roomID, "No response from chat API")
 		return
+	}
+
+	if chatResp.Usage != nil {
+		recordTokenEstimateDrift(ctx, model, estimatedPromptTokens, chatResp.Usage.PromptTokens)
 	}
 
 	// Save the user message to history
@@ -204,13 +214,8 @@ func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relat
 		}
 	}
 
-	// Get conversation history
-	maxHistory := getMaxHistoryMessagesForRoom(ctx, roomID)
-	history, err := db.GetChatHistory(ctx, roomID, maxHistory)
-	if err != nil {
-		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Msg("Failed to get chat history")
-		// Continue without history if there's an error
-	}
+	// Get the conversation history making up the current context window
+	history := buildContextWindow(ctx, roomID)
 
 	// Build messages array with system prompt, history, and current message
 	messages := []aigateway.Message{{Role: "system", Content: systemPrompt}}
@@ -343,17 +348,37 @@ func collectToolCalls(history []db.ChatMessage, start int) ([]aigateway.ToolCall
 }
 
 // collectToolResponses reads the run of consecutive tool_response rows starting at start, returning
-// them keyed by tool call id and the index of the first row that follows
+// them keyed by tool call id and the index of the first row that follows.
+//
+// An expired result is replaced by a marker rather than dropped. Removing it would delete the reply
+// to a tool call that is still in the history, and reshape the conversation behind the model's back
+// mid-thread; the marker keeps the structure intact while making it plain that the data is stale.
 func collectToolResponses(history []db.ChatMessage, start int) (map[string]string, int) {
 	responses := make(map[string]string)
+	now := time.Now()
 	i := start
 	for ; i < len(history) && history[i].MessageType == "tool_response"; i++ {
 		if history[i].ToolCallID == nil {
 			continue
 		}
-		responses[*history[i].ToolCallID] = history[i].Message
+		responses[*history[i].ToolCallID] = replayableToolResponse(history[i], now)
 	}
 	return responses, i
+}
+
+// replayableToolResponse returns the content to replay for a stored tool response, substituting a
+// marker once the result has expired
+func replayableToolResponse(msg db.ChatMessage, now time.Time) string {
+	if msg.Expiry == nil || msg.Expiry.After(now) {
+		return msg.Message
+	}
+
+	toolName := "tool"
+	if msg.ToolName != nil {
+		toolName = *msg.ToolName
+	}
+	return fmt.Sprintf("[expired: the %s result from this point in the conversation is no longer "+
+		"current, call the tool again if you need this information]", toolName)
 }
 
 // processRelatedMessage handles messages that are replies to other messages

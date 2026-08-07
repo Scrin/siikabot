@@ -138,18 +138,22 @@ func saveChatMessageTx(ctx context.Context, executor chatMessageExecutor, roomID
 	return nil
 }
 
-// GetChatHistory retrieves recent chat history for a room
-// maxMessages is the maximum number of messages to retrieve
+// GetChatHistory retrieves recent chat history for a room, oldest first.
+// maxMessages is a safety cap on how many rows to read, not the context window size — the window is
+// decided by the caller from the room's anchor and token budget.
+//
+// Expired rows are returned rather than filtered out. Deleting them would silently reshape the
+// conversation mid-thread, so the caller replaces expired tool results with a marker instead,
+// keeping the structure intact. Check ChatMessage.Expiry to tell them apart.
 //
 // Ordering is by timestamp with the id as a tiebreaker. The tiebreaker is required, not cosmetic:
 // rows written inside one transaction all take the transaction start time from NOW(), so ordering
 // by timestamp alone would return a tool call and its response in an arbitrary order.
 func GetChatHistory(ctx context.Context, roomID string, maxMessages int) ([]ChatMessage, error) {
 	rows, err := pool.Query(ctx,
-		`SELECT id, room_id, user_id, message, role, timestamp, message_type, tool_call_id, tool_name, expiry 
+		`SELECT id, room_id, user_id, message, role, timestamp, message_type, tool_call_id, tool_name, expiry
 		FROM chat_history
 		WHERE room_id = $1
-		AND (expiry IS NULL OR expiry > NOW())
 		ORDER BY timestamp DESC, id DESC LIMIT $2`,
 		roomID, maxMessages)
 	if err != nil {
