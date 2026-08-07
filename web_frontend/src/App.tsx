@@ -18,6 +18,7 @@ import { RemindersCard } from './components/RemindersCard'
 import { MemoriesCard } from './components/MemoriesCard'
 import { RoomsCard } from './components/RoomsCard'
 import { AdminRoomsCard } from './components/AdminRoomsCard'
+import { ChatUsageCard } from './components/ChatUsageCard'
 import { GrafanaCard } from './components/GrafanaCard'
 import { ScanlineOverlay } from './components/ui/ScanlineOverlay'
 import { TiltCard } from './components/ui/TiltCard'
@@ -335,6 +336,23 @@ function AppContent() {
                             All Known Rooms (Admin)
                           </motion.h3>
                           <AdminRoomsCard />
+                        </div>
+                      </FadeInSection>
+
+                      {/* AI Chat Usage Section */}
+                      <FadeInSection delay={0.5}>
+                        <div className="mt-6 border-t border-slate-700/50 pt-6">
+                          <motion.h3
+                            className="mb-4 font-mono text-sm tracking-wider text-purple-400 uppercase"
+                            initial={
+                              prefersReducedMotion ? {} : { opacity: 0, x: -10 }
+                            }
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: 0.6 }}
+                          >
+                            AI Chat Usage (Admin)
+                          </motion.h3>
+                          <ChatUsageCard />
                         </div>
                       </FadeInSection>
 

@@ -13,6 +13,7 @@ import type {
   DeleteAllMemoriesResponse,
   GrafanaTemplatesResponse,
   GrafanaRenderResponse,
+  ChatUsageResponse,
 } from './types'
 
 const API_BASE = '/api'
@@ -510,6 +511,33 @@ export async function renderGrafanaTemplate(
     }
     const error = await response.json().catch(() => ({ error: response.statusText }))
     throw new Error(error.error || 'Failed to render template')
+  }
+
+  return response.json()
+}
+
+/**
+ * Fetch per-room chat usage (admin only)
+ *
+ * Room-keyed usage is deliberately absent from the Prometheus metrics, which are served without
+ * authentication, so this endpoint is the only place it is available.
+ */
+export async function fetchChatUsage(token: string, days: number): Promise<ChatUsageResponse> {
+  const response = await fetch(`${API_BASE}/admin/chat-usage?days=${days}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    if (response.status === 403) {
+      throw new Error('Admin access required')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to fetch chat usage')
   }
 
   return response.json()

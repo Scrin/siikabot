@@ -69,7 +69,7 @@ func GetChatUsageSummary(ctx context.Context, since time.Time) ([]ChatUsageSumma
 		FROM chat_usage
 		WHERE timestamp >= $1
 		GROUP BY room_id, model
-		ORDER BY prompt_tokens + completion_tokens DESC`,
+		ORDER BY SUM(prompt_tokens + completion_tokens) DESC`,
 		since)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).

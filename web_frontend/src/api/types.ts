@@ -115,3 +115,24 @@ export interface GrafanaTemplatesResponse {
 export interface GrafanaRenderResponse {
   rendered: string
 }
+
+// Chat usage types
+export interface ChatUsageEntry {
+  room_id: string
+  room_name: string
+  model: string
+  turns: number
+  prompt_tokens: number
+  completion_tokens: number
+  cached_prompt_tokens: number
+  cache_hit_rate: number
+  tool_iterations: number
+  failures: number
+}
+
+export interface ChatUsageResponse {
+  since: string
+  days: number
+  entries: ChatUsageEntry[]
+  totals: ChatUsageEntry
+}

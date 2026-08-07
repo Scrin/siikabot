@@ -19,6 +19,7 @@ import {
   setGrafanaDatasource,
   deleteGrafanaDatasource,
   renderGrafanaTemplate,
+  fetchChatUsage,
 } from './client'
 import { useAuth } from '../context/AuthContext'
 
@@ -35,6 +36,7 @@ export const queryKeys = {
   adminRoomMembers: (roomId: string) => ['adminRoomMembers', roomId] as const,
   memories: ['memories'] as const,
   grafanaTemplates: ['grafanaTemplates'] as const,
+  chatUsage: (days: number) => ['chatUsage', days] as const,
 }
 
 /**
@@ -297,5 +299,19 @@ export function useAdminRoomMembers(roomId: string, enabled: boolean) {
     queryFn: () => fetchAdminRoomMembers(token!, roomId),
     enabled: enabled && isAuthenticated && !!token && authorizations?.admin === true,
     staleTime: 30000,
+  })
+}
+
+/**
+ * Per-room chat usage over the given number of days (admin only)
+ */
+export function useChatUsage(days: number) {
+  const { token, isAuthenticated, authorizations } = useAuth()
+
+  return useQuery({
+    queryKey: queryKeys.chatUsage(days),
+    queryFn: () => fetchChatUsage(token!, days),
+    enabled: isAuthenticated && !!token && authorizations?.admin === true,
+    refetchInterval: 60000,
   })
 }
