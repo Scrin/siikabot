@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Scrin/siikabot/aigateway"
@@ -15,11 +16,30 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// roomLocks serialises chat turns per room. Each message is handled in its own goroutine, and two
+// turns running concurrently in one room would interleave their history writes and fight over the
+// typing indicator: matrix.SendTyping is a stateless call with no reference counting, so whichever
+// turn finishes first switches the indicator off while the other is still working.
+var roomLocks sync.Map
+
+// lockRoom blocks until this room has no other chat turn in flight, returning the unlock function
+func lockRoom(roomID string) func() {
+	value, _ := roomLocks.LoadOrStore(roomID, &sync.Mutex{})
+	mutex := value.(*sync.Mutex)
+	mutex.Lock()
+	return mutex.Unlock
+}
+
 // HandleMention handles the chat command
 func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, relatesTo map[string]any) {
 	if strings.TrimSpace(msg) == "" {
 		return
 	}
+
+	// Serialise turns per room. A queued message waits here, so its own timer starts once it is
+	// actually being worked on rather than while it waits.
+	unlockRoom := lockRoom(roomID)
+	defer unlockRoom()
 
 	startTime := time.Now()
 
@@ -237,93 +257,103 @@ func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relat
 	return messages, hasImage, model
 }
 
-// processHistoryMessages processes the chat history and adds it to the messages array
+// processHistoryMessages processes the chat history and adds it to the messages array.
+//
+// History arrives in chronological order and is replayed in that order: a batch of tool calls is
+// emitted as one assistant message followed by the tool responses answering it, in the position
+// where it actually happened. Interleaving matters — replaying text and tool calls in separate
+// groups presents the model with a conversation that never took place.
+//
+// Tool calls with no matching response are dropped. Such a pair should never be written now that
+// they are persisted atomically, but history predating that change can contain them, and the chat
+// API rejects an assistant message whose tool_calls are not all answered — which would otherwise
+// break every request in the room until the rows expired.
 func processHistoryMessages(ctx context.Context, history []db.ChatMessage, messages *[]aigateway.Message) {
-	// Group tool calls and their responses
-	toolCallMap := make(map[string]aigateway.ToolCall)
-	toolResponseMap := make(map[string]string)
+	for i := 0; i < len(history); {
+		historyMsg := history[i]
 
-	// First pass: collect tool calls and tool responses
-	for _, historyMsg := range history {
+		switch historyMsg.MessageType {
+		case "tool_call":
+			// Collect the consecutive run of calls making up this batch, then the responses
+			// answering them, which the writer always stores immediately afterwards
+			calls, next := collectToolCalls(history, i)
+			responses, next := collectToolResponses(history, next)
 
-		messageType := historyMsg.MessageType
-
-		if messageType == "tool_call" && historyMsg.ToolCallID != nil && historyMsg.ToolName != nil {
-			// Create a tool call object
-			toolCallMap[*historyMsg.ToolCallID] = aigateway.ToolCall{
-				ID:   *historyMsg.ToolCallID,
-				Type: "function",
-				Function: aigateway.ToolFunction{
-					Name:      *historyMsg.ToolName,
-					Arguments: historyMsg.Message,
-				},
+			answered := make([]aigateway.ToolCall, 0, len(calls))
+			for _, call := range calls {
+				if _, ok := responses[call.ID]; ok {
+					answered = append(answered, call)
+					continue
+				}
+				log.Warn().Ctx(ctx).
+					Str("room_id", historyMsg.RoomID).
+					Str("tool_call_id", call.ID).
+					Str("tool_name", call.Function.Name).
+					Msg("Dropping orphaned tool call from chat history")
 			}
-		} else if messageType == "tool_response" && historyMsg.ToolCallID != nil {
-			// Store the tool response
-			toolResponseMap[*historyMsg.ToolCallID] = historyMsg.Message
-		} else if messageType == "text" || messageType == "" {
-			// Regular text message
+
+			if len(answered) > 0 {
+				*messages = append(*messages, aigateway.Message{
+					Role:      "assistant",
+					Content:   "", // Content must be empty when there are tool calls
+					ToolCalls: answered,
+				})
+				for _, call := range answered {
+					*messages = append(*messages, aigateway.Message{
+						Role:       "tool",
+						Content:    responses[call.ID],
+						ToolCallID: call.ID,
+					})
+				}
+			}
+
+			i = next
+		case "tool_response":
+			// A response whose call is not in the window, so there is nothing to attach it to
+			i++
+		default: // "text", or empty for rows predating the message_type column
 			*messages = append(*messages, aigateway.Message{
 				Role:    historyMsg.Role,
 				Content: historyMsg.Message,
 			})
+			i++
 		}
 	}
+}
 
-	// If no tool calls were found, we're done
-	if len(toolCallMap) == 0 {
-		return
-	}
-
-	// Second pass: add messages in order, grouping tool calls and responses
-	var currentToolCalls []aigateway.ToolCall
-	var pendingToolCallIDs []string
-
-	for i, historyMsg := range history {
-
-		messageType := historyMsg.MessageType
-
-		if messageType == "tool_call" && historyMsg.ToolCallID != nil {
-			// Add to current batch of tool calls
-			toolCallID := *historyMsg.ToolCallID
-			if toolCall, ok := toolCallMap[toolCallID]; ok {
-				currentToolCalls = append(currentToolCalls, toolCall)
-				pendingToolCallIDs = append(pendingToolCallIDs, toolCallID)
-			}
-
-			// Check if this is the last message or if the next message is not a tool call
-			isLastMessage := i == len(history)-1
-			isNextMessageNotToolCall := !isLastMessage && (history[i+1].MessageType != "tool_call")
-
-			if isLastMessage || isNextMessageNotToolCall {
-				// Add the assistant message with all collected tool calls
-				if len(currentToolCalls) > 0 {
-					*messages = append(*messages, aigateway.Message{
-						Role:      "assistant",
-						Content:   "",
-						ToolCalls: currentToolCalls,
-					})
-
-					// Add tool responses for these tool calls
-					for _, toolCallID := range pendingToolCallIDs {
-						if response, ok := toolResponseMap[toolCallID]; ok {
-							*messages = append(*messages, aigateway.Message{
-								Role:       "tool",
-								Content:    response,
-								ToolCallID: toolCallID,
-							})
-						}
-					}
-
-					// Reset for next batch
-					currentToolCalls = nil
-					pendingToolCallIDs = nil
-				}
-			}
+// collectToolCalls reads the run of consecutive tool_call rows starting at start, returning them
+// and the index of the first row that follows
+func collectToolCalls(history []db.ChatMessage, start int) ([]aigateway.ToolCall, int) {
+	var calls []aigateway.ToolCall
+	i := start
+	for ; i < len(history) && history[i].MessageType == "tool_call"; i++ {
+		if history[i].ToolCallID == nil || history[i].ToolName == nil {
+			continue
 		}
-		// Skip tool_response messages as they're handled with their corresponding tool calls
-		// Skip text messages as they're handled in the first pass
+		calls = append(calls, aigateway.ToolCall{
+			ID:   *history[i].ToolCallID,
+			Type: "function",
+			Function: aigateway.ToolFunction{
+				Name:      *history[i].ToolName,
+				Arguments: history[i].Message,
+			},
+		})
 	}
+	return calls, i
+}
+
+// collectToolResponses reads the run of consecutive tool_response rows starting at start, returning
+// them keyed by tool call id and the index of the first row that follows
+func collectToolResponses(history []db.ChatMessage, start int) (map[string]string, int) {
+	responses := make(map[string]string)
+	i := start
+	for ; i < len(history) && history[i].MessageType == "tool_response"; i++ {
+		if history[i].ToolCallID == nil {
+			continue
+		}
+		responses[*history[i].ToolCallID] = history[i].Message
+	}
+	return responses, i
 }
 
 // processRelatedMessage handles messages that are replies to other messages
@@ -613,9 +643,6 @@ func processToolCalls(
 	toolCtx := context.WithValue(ctx, "room_id", roomID)
 	toolCtx = context.WithValue(toolCtx, "sender", sender)
 
-	// Map to store expiry timestamps for tool calls
-	toolCallExpiries := make(map[string]*time.Time)
-
 	maxIterations := getMaxToolIterationsForRoom(ctx, roomID)
 	for iterationCount < maxIterations {
 		iterationCount++
@@ -626,34 +653,6 @@ func processToolCalls(
 			Content:   "", // Content should be empty when there are tool calls
 			ToolCalls: currentResp.Choices[0].Message.ToolCalls,
 		})
-
-		// Save each tool call to the database
-		for _, toolCall := range currentResp.Choices[0].Message.ToolCalls {
-			// Find the tool definition to get the validity duration
-			var validityDuration time.Duration
-			for _, tool := range tools {
-				if tool.Function.Name == toolCall.Function.Name {
-					validityDuration = tool.ValidityDuration
-					break
-				}
-			}
-
-			// Save the tool call to the database with validity duration
-			expiry, err := db.SaveToolCall(ctx, roomID, config.UserID, toolCall.ID, toolCall.Function.Name, toolCall.Function.Arguments, validityDuration)
-			if err != nil {
-				log.Error().Ctx(ctx).Err(err).
-					Str("room_id", roomID).
-					Str("tool_call_id", toolCall.ID).
-					Str("tool_name", toolCall.Function.Name).
-					Msg("Failed to save tool call to history")
-				// Continue even if saving fails
-			}
-
-			// Store the expiry timestamp for later use with the response
-			if expiry != nil {
-				toolCallExpiries[toolCall.ID] = expiry
-			}
-		}
 
 		// Process tool calls
 		toolResponses, err := toolRegistry.HandleToolCallsIndividually(toolCtx, currentResp.Choices[0].Message.ToolCalls)
@@ -667,6 +666,10 @@ func processToolCalls(
 			return iterationCount, messages, "Failed to process tool calls"
 		}
 
+		// Persist the calls together with their responses, after execution, so a call is never
+		// stored without the response that answers it
+		saveToolCallHistory(ctx, roomID, currentResp.Choices[0].Message.ToolCalls, toolResponses, tools)
+
 		// Add each tool response as a separate message
 		for _, toolResp := range toolResponses {
 			messages = append(messages, aigateway.Message{
@@ -674,28 +677,6 @@ func processToolCalls(
 				Content:    toolResp.Response,
 				ToolCallID: toolResp.ToolCallID,
 			})
-
-			// Save the tool response to the database
-			// Find the tool name from the tool calls
-			var toolName string
-			for _, toolCall := range currentResp.Choices[0].Message.ToolCalls {
-				if toolCall.ID == toolResp.ToolCallID {
-					toolName = toolCall.Function.Name
-					break
-				}
-			}
-
-			// Use the same expiry timestamp as the tool call
-			expiry := toolCallExpiries[toolResp.ToolCallID]
-			err := db.SaveToolResponse(ctx, roomID, config.UserID, toolResp.ToolCallID, toolName, toolResp.Response, expiry)
-			if err != nil {
-				log.Error().Ctx(ctx).Err(err).
-					Str("room_id", roomID).
-					Str("tool_call_id", toolResp.ToolCallID).
-					Str("tool_name", toolName).
-					Msg("Failed to save tool response to history")
-				// Continue even if saving fails
-			}
 		}
 
 		// Update the request with the new messages
@@ -777,37 +758,13 @@ func processToolCalls(
 			ToolCalls: currentResp.Choices[0].Message.ToolCalls,
 		})
 
-		// Save each tool call to the database
-		for _, toolCall := range currentResp.Choices[0].Message.ToolCalls {
-			// Find the tool definition to get the validity duration
-			var validityDuration time.Duration
-			for _, tool := range tools {
-				if tool.Function.Name == toolCall.Function.Name {
-					validityDuration = tool.ValidityDuration
-					break
-				}
-			}
-
-			// Save the tool call to the database with validity duration
-			expiry, err := db.SaveToolCall(ctx, roomID, config.UserID, toolCall.ID, toolCall.Function.Name, toolCall.Function.Arguments, validityDuration)
-			if err != nil {
-				log.Error().Ctx(ctx).Err(err).
-					Str("room_id", roomID).
-					Str("tool_call_id", toolCall.ID).
-					Str("tool_name", toolCall.Function.Name).
-					Msg("Failed to save tool call to history")
-				// Continue even if saving fails
-			}
-
-			// Store the expiry timestamp for later use with the response
-			if expiry != nil {
-				toolCallExpiries[toolCall.ID] = expiry
-			}
-		}
-
 		// Process the final tool calls
 		toolResponses, err := toolRegistry.HandleToolCallsIndividually(toolCtx, currentResp.Choices[0].Message.ToolCalls)
 		if err == nil {
+			// Persist the calls together with their responses, after execution, so a call is never
+			// stored without the response that answers it
+			saveToolCallHistory(ctx, roomID, currentResp.Choices[0].Message.ToolCalls, toolResponses, tools)
+
 			// Add each tool response as a separate message
 			for _, toolResp := range toolResponses {
 				messages = append(messages, aigateway.Message{
@@ -815,28 +772,6 @@ func processToolCalls(
 					Content:    toolResp.Response,
 					ToolCallID: toolResp.ToolCallID,
 				})
-
-				// Save the tool response to the database
-				// Find the tool name from the tool calls
-				var toolName string
-				for _, toolCall := range currentResp.Choices[0].Message.ToolCalls {
-					if toolCall.ID == toolResp.ToolCallID {
-						toolName = toolCall.Function.Name
-						break
-					}
-				}
-
-				// Use the same expiry timestamp as the tool call
-				expiry := toolCallExpiries[toolResp.ToolCallID]
-				err := db.SaveToolResponse(ctx, roomID, config.UserID, toolResp.ToolCallID, toolName, toolResp.Response, expiry)
-				if err != nil {
-					log.Error().Ctx(ctx).Err(err).
-						Str("room_id", roomID).
-						Str("tool_call_id", toolResp.ToolCallID).
-						Str("tool_name", toolName).
-						Msg("Failed to save tool response to history")
-					// Continue even if saving fails
-				}
 			}
 		}
 
@@ -883,6 +818,59 @@ func processToolCalls(
 	assistantResponse := extractAssistantResponse(ctx, roomID, sender, model, hasImage, currentResp)
 
 	return iterationCount, messages, assistantResponse
+}
+
+// saveToolCallHistory persists a batch of tool calls together with the responses they produced.
+//
+// Both halves are written in one transaction after the tools have run. Writing the calls first and
+// the responses later leaves a window — a failed write, a cancelled context, a restart — in which
+// history holds a call with no response, which the chat API then rejects on every later request in
+// the room.
+func saveToolCallHistory(ctx context.Context, roomID string, toolCalls []aigateway.ToolCall, toolResponses []aigateway.ToolResponse, tools []aigateway.ToolDefinition) {
+	if len(toolCalls) == 0 {
+		return
+	}
+
+	responsesByID := make(map[string]string, len(toolResponses))
+	for _, toolResp := range toolResponses {
+		responsesByID[toolResp.ToolCallID] = toolResp.Response
+	}
+
+	validityByName := make(map[string]time.Duration, len(tools))
+	for _, tool := range tools {
+		validityByName[tool.Function.Name] = tool.ValidityDuration
+	}
+
+	records := make([]db.ToolCallRecord, 0, len(toolCalls))
+	for _, toolCall := range toolCalls {
+		response, ok := responsesByID[toolCall.ID]
+		if !ok {
+			// No response means nothing to pair the call with, so storing it would recreate the
+			// orphan this function exists to prevent
+			log.Warn().Ctx(ctx).
+				Str("room_id", roomID).
+				Str("tool_call_id", toolCall.ID).
+				Str("tool_name", toolCall.Function.Name).
+				Msg("Skipping tool call with no response when saving history")
+			continue
+		}
+
+		records = append(records, db.ToolCallRecord{
+			ToolCallID:       toolCall.ID,
+			ToolName:         toolCall.Function.Name,
+			Arguments:        toolCall.Function.Arguments,
+			Response:         response,
+			ValidityDuration: validityByName[toolCall.Function.Name],
+		})
+	}
+
+	if err := db.SaveToolCallsWithResponses(ctx, roomID, config.UserID, records); err != nil {
+		log.Error().Ctx(ctx).Err(err).
+			Str("room_id", roomID).
+			Int("record_count", len(records)).
+			Msg("Failed to save tool call history")
+		// Continue even if saving fails: the transaction is atomic, so history is left consistent
+	}
 }
 
 // buildDebugData creates debug data for the response

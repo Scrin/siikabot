@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	pgx "github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/rs/zerolog/log"
 )
 
@@ -29,24 +30,78 @@ func SaveChatMessage(ctx context.Context, roomID, userID, message, role string) 
 	return saveChatMessageWithDetails(ctx, roomID, userID, message, role, "text", nil, nil, nil)
 }
 
-// SaveToolCall saves a tool call to the database with an optional expiry time
-func SaveToolCall(ctx context.Context, roomID, userID, toolCallID, toolName, arguments string, validityDuration time.Duration) (*time.Time, error) {
-	var expiry *time.Time
-	if validityDuration > 0 {
-		expiryTime := time.Now().Add(validityDuration)
-		expiry = &expiryTime
-	}
-	err := saveChatMessageWithDetails(ctx, roomID, userID, arguments, "assistant", "tool_call", &toolCallID, &toolName, expiry)
-	return expiry, err
+// ToolCallRecord holds a tool call together with the response it produced, so the pair can be
+// persisted atomically
+type ToolCallRecord struct {
+	ToolCallID       string
+	ToolName         string
+	Arguments        string
+	Response         string
+	ValidityDuration time.Duration
 }
 
-// SaveToolResponse saves a tool response to the database with an optional expiry time
-func SaveToolResponse(ctx context.Context, roomID, userID, toolCallID, toolName, response string, expiry *time.Time) error {
-	return saveChatMessageWithDetails(ctx, roomID, userID, response, "tool", "tool_response", &toolCallID, &toolName, expiry)
+// SaveToolCallsWithResponses saves tool calls and their responses in a single transaction.
+//
+// The pairing must be atomic: a tool call persisted without its response leaves history that
+// rebuilds into an assistant message carrying tool_calls with no tool reply, which the chat API
+// rejects outright, breaking every later request in the room.
+func SaveToolCallsWithResponses(ctx context.Context, roomID, userID string, records []ToolCallRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).
+			Str("room_id", roomID).
+			Int("record_count", len(records)).
+			Msg("Failed to begin transaction for tool call history")
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	for _, record := range records {
+		// The call and its response share an expiry so they always drop out of history together
+		var expiry *time.Time
+		if record.ValidityDuration > 0 {
+			expiryTime := time.Now().Add(record.ValidityDuration)
+			expiry = &expiryTime
+		}
+
+		if err := saveChatMessageTx(ctx, tx, roomID, userID, record.Arguments, "assistant", "tool_call",
+			&record.ToolCallID, &record.ToolName, expiry); err != nil {
+			return err
+		}
+		if err := saveChatMessageTx(ctx, tx, roomID, userID, record.Response, "tool", "tool_response",
+			&record.ToolCallID, &record.ToolName, expiry); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		log.Error().Ctx(ctx).Err(err).
+			Str("room_id", roomID).
+			Int("record_count", len(records)).
+			Msg("Failed to commit tool call history")
+		return err
+	}
+
+	return nil
+}
+
+// chatMessageExecutor is satisfied by both the connection pool and a transaction, so chat history
+// rows can be written either standalone or as part of an atomic group
+type chatMessageExecutor interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 }
 
 // saveChatMessageWithDetails saves a chat message to the database with additional details
 func saveChatMessageWithDetails(ctx context.Context, roomID, userID, message, role, messageType string, toolCallID, toolName *string, expiry *time.Time) error {
+	return saveChatMessageTx(ctx, pool, roomID, userID, message, role, messageType, toolCallID, toolName, expiry)
+}
+
+// saveChatMessageTx saves a chat message using the given executor
+func saveChatMessageTx(ctx context.Context, executor chatMessageExecutor, roomID, userID, message, role, messageType string, toolCallID, toolName *string, expiry *time.Time) error {
 	// Ensure the message is valid UTF-8 and replace invalid sequences with a replacement character
 	if !utf8.ValidString(message) {
 		log.Warn().Ctx(ctx).
@@ -58,7 +113,7 @@ func saveChatMessageWithDetails(ctx context.Context, roomID, userID, message, ro
 		message = strings.ToValidUTF8(message, "")
 	}
 
-	_, err := pool.Exec(ctx,
+	_, err := executor.Exec(ctx,
 		"INSERT INTO chat_history (room_id, user_id, message, role, message_type, tool_call_id, tool_name, expiry) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
 		roomID, userID, message, role, messageType, toolCallID, toolName, expiry)
 	if err != nil {
@@ -85,13 +140,17 @@ func saveChatMessageWithDetails(ctx context.Context, roomID, userID, message, ro
 
 // GetChatHistory retrieves recent chat history for a room
 // maxMessages is the maximum number of messages to retrieve
+//
+// Ordering is by timestamp with the id as a tiebreaker. The tiebreaker is required, not cosmetic:
+// rows written inside one transaction all take the transaction start time from NOW(), so ordering
+// by timestamp alone would return a tool call and its response in an arbitrary order.
 func GetChatHistory(ctx context.Context, roomID string, maxMessages int) ([]ChatMessage, error) {
 	rows, err := pool.Query(ctx,
 		`SELECT id, room_id, user_id, message, role, timestamp, message_type, tool_call_id, tool_name, expiry 
-		FROM chat_history 
-		WHERE room_id = $1 
+		FROM chat_history
+		WHERE room_id = $1
 		AND (expiry IS NULL OR expiry > NOW())
-		ORDER BY timestamp DESC LIMIT $2`,
+		ORDER BY timestamp DESC, id DESC LIMIT $2`,
 		roomID, maxMessages)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).
