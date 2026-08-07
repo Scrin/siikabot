@@ -151,10 +151,13 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 		MaxTokens: &maxTokens,
 	}
 
-	// Estimated size of what is about to be sent, compared against the reported usage below so the
-	// accuracy of the heuristic driving the context window stays visible
-	estimatedPromptTokens := estimateMessageTokens(messages)
-	metrics.RecordChatContextWindowTokens(model, estimatedPromptTokens)
+	// Estimated size of the whole prompt, compared against the reported usage below so the accuracy
+	// of the heuristic driving the context window stays visible
+	estimatedPromptTokens := composition.total()
+
+	// The window metric records the replayed history alone, which is the part the token budget
+	// actually governs — the rest of the prompt is fixed overhead the budget has no say over
+	metrics.RecordChatContextWindowTokens(model, composition.history)
 
 	// Send the request to the AI Gateway
 	log.Debug().Ctx(ctx).
@@ -164,6 +167,7 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 		Bool("has_image", hasImage).
 		Int("message_count", len(messages)).
 		Int("estimated_prompt_tokens", estimatedPromptTokens).
+		Int("context_window_tokens", composition.history).
 		Msg("Sending chat request to the AI Gateway")
 
 	callStart := time.Now()
@@ -204,7 +208,9 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 		return
 	}
 
-	if chatResp.Usage != nil {
+	// Skipped for image turns: an image costs a number of tokens that bears no relation to the length
+	// of its data URI, so comparing them would only measure something the estimator never modelled
+	if chatResp.Usage != nil && !hasImage {
 		recordTokenEstimateDrift(ctx, model, estimatedPromptTokens, chatResp.Usage.PromptTokens)
 	}
 
@@ -320,6 +326,10 @@ func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relat
 	processHistoryMessages(ctx, history, &messages)
 	composition.history = estimateMessageTokens(messages[historyStart:])
 
+	// Everything from here on belongs to this specific turn rather than to the replayed history, so
+	// it is all accounted for as "current": the timestamp, any reply context, and the user's message
+	currentStart := len(messages)
+
 	// The current time goes after the history, not in the system prompt, so that everything before
 	// it stays byte-identical between requests and can be served from the provider's prompt cache
 	loc, _ := time.LoadLocation(config.Timezone)
@@ -357,7 +367,6 @@ func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relat
 	}
 
 	// Add the current message, handling image if present
-	currentStart := len(messages)
 	if hasImage {
 		hasImage, messages = processImageMessage(ctx, roomID, msg, base64ImageURL, &messages)
 	} else {

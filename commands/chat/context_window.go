@@ -233,7 +233,10 @@ func isTurnBoundary(msg db.ChatMessage) bool {
 }
 
 // recordTokenEstimateDrift compares the estimated prompt size against the count the API reported,
-// so the accuracy of estimateTokens stays observable rather than assumed
+// so the accuracy of estimateTokens stays observable rather than assumed.
+//
+// The estimate must cover the whole prompt, tool definitions included, or the two sides are not
+// measuring the same thing and the ratio says nothing about the estimator.
 func recordTokenEstimateDrift(ctx context.Context, model string, estimated, actual int) {
 	if estimated <= 0 || actual <= 0 {
 		return

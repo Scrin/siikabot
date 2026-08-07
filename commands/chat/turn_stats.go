@@ -115,12 +115,26 @@ func (s *turnStats) finish(ctx context.Context, roomID, sender, model string, ha
 		Msg("Chat turn completed")
 }
 
-// promptComposition is the estimated token cost of each part of a built prompt
+// promptComposition is the estimated token cost of each part of a built prompt.
+//
+// The parts are exhaustive by construction: system covers the system prompt, history the replayed
+// window, current everything added for this turn (the timestamp, any reply context, the user's
+// message), and tools the definitions sent alongside. They therefore sum to the whole prompt, which
+// is what makes total comparable against the token count the API reports.
 type promptComposition struct {
 	system  int
 	tools   int
 	history int
 	current int
+}
+
+// total is the estimated size of the entire prompt.
+//
+// Tool definitions have to be included: they are a field of the request rather than a message, but
+// the provider counts them in prompt_tokens all the same. Leaving them out was what made the drift
+// ratio read as though the estimate were three times too low.
+func (c promptComposition) total() int {
+	return c.system + c.tools + c.history + c.current
 }
 
 // record reports the composition, so trimming effort can be aimed at whichever part actually
