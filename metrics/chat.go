@@ -25,6 +25,11 @@ var chatAPIErrors = makeCollector(prometheus.NewCounterVec(prometheus.CounterOpt
 	Help: "Total number of failed chat API calls by error kind",
 }, []string{"model", "error_kind"}))
 
+var chatAPIRetries = makeCollector(prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: metricPrefix + "chat_api_retries_count",
+	Help: "Total number of chat API calls retried after a transient failure",
+}, []string{"model", "error_kind"}))
+
 var chatAPICallDuration = makeCollector(prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	Name:    metricPrefix + "chat_api_call_duration_seconds",
 	Help:    "Duration of individual chat API calls in seconds",
@@ -188,6 +193,11 @@ func RecordChatContextAnchorAdvance() {
 // RecordChatAPIError records a failed chat API call under a specific error kind
 func RecordChatAPIError(model, errorKind string) {
 	chatAPIErrors.WithLabelValues(model, errorKind).Inc()
+}
+
+// RecordChatAPIRetry records a chat API call being retried after a transient failure
+func RecordChatAPIRetry(model, errorKind string) {
+	chatAPIRetries.WithLabelValues(model, errorKind).Inc()
 }
 
 // RecordChatAPICallDuration records how long a single chat API call took

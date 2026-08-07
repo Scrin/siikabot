@@ -76,7 +76,12 @@ func (s *turnStats) finish(ctx context.Context, roomID, sender, model string, ha
 	metrics.RecordChatTurnPhase(model, phaseModel, s.modelDuration.Seconds())
 	metrics.RecordChatTurnPhase(model, phaseTools, s.toolDuration.Seconds())
 
-	if err := db.SaveChatUsage(ctx, db.ChatUsage{
+	// Written on a context that outlives a cancelled turn: a turn that timed out is precisely the
+	// one whose cost is worth recording
+	persistCtx, cancel := persistContext(ctx)
+	defer cancel()
+
+	if err := db.SaveChatUsage(persistCtx, db.ChatUsage{
 		RoomID:             roomID,
 		UserID:             sender,
 		Model:              model,

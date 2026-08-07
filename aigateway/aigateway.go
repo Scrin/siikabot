@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/Scrin/siikabot/config"
@@ -14,8 +16,33 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// requestTimeout is the maximum time to wait for a single inference request
-const requestTimeout = 5 * time.Minute
+// callTimeout bounds a single attempt. A chat bot that has not heard back within this is not going
+// to produce something the user still wants, and leaving the call open only delays the retry.
+//
+// Chosen so that a fully retried call still fits inside the caller's turn budget: three attempts
+// plus backoff has to leave room for the turn to do something with the answer. TestRetryBudget
+// FitsInsideTurn checks that relationship holds.
+const callTimeout = 45 * time.Second
+
+// httpTimeout is a backstop slightly above callTimeout, for the case where the per-attempt context
+// somehow does not fire
+const httpTimeout = 60 * time.Second
+
+// gatewayTimeoutMS asks the gateway to give up at the same point the client does, so a stalled
+// upstream is abandoned on both sides rather than only locally
+const gatewayTimeoutMS = int(callTimeout / time.Millisecond)
+
+// Retry settings for transient failures. Kept small deliberately: a user is waiting, and a request
+// that has already failed twice is unlikely to succeed on a third attempt soon enough to matter.
+const maxAttempts = 3
+const retryBaseDelay = 500 * time.Millisecond
+const retryMaxDelay = 4 * time.Second
+
+// Gateway-side retry settings, applied by AI Gateway before the response ever reaches us. These
+// cover a transient upstream blip without costing a client round trip.
+const gatewayMaxAttempts = "2"
+const gatewayRetryDelayMS = "500"
+const gatewayBackoff = "exponential"
 
 // All requests go through the /ai/run endpoint. It accepts the OpenAI chat completions
 // body nested under "input" and returns the response wrapped in "result". The
@@ -23,7 +50,7 @@ const requestTimeout = 5 * time.Minute
 // forwards image content parts to OpenAI models in a shape they reject.
 const runPath = "/ai/run"
 
-var httpClient = &http.Client{Timeout: requestTimeout}
+var httpClient = &http.Client{Timeout: httpTimeout}
 
 // ImageURL is the image payload of a content part.
 //
@@ -143,6 +170,16 @@ func setAuthHeaders(req *http.Request) {
 	req.Header.Set("cf-aig-gateway-id", config.CloudflareAIGatewayID)
 }
 
+// setInferenceHeaders sets the per-request gateway behaviour for an inference call: a timeout
+// matching the client's own, and a small number of gateway-side retries that absorb a transient
+// upstream failure without a client round trip
+func setInferenceHeaders(req *http.Request) {
+	req.Header.Set("cf-aig-request-timeout", strconv.Itoa(gatewayTimeoutMS))
+	req.Header.Set("cf-aig-max-attempts", gatewayMaxAttempts)
+	req.Header.Set("cf-aig-retry-delay", gatewayRetryDelayMS)
+	req.Header.Set("cf-aig-backoff", gatewayBackoff)
+}
+
 // firstError returns the code and message of the first error in an API response envelope
 func firstError(errs []apiError) (int, string) {
 	if len(errs) == 0 {
@@ -166,51 +203,121 @@ func SendChatRequest(ctx context.Context, req ChatRequest) (*ChatResponse, error
 		return nil, fmt.Errorf("failed to marshal chat request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint(runPath), bytes.NewBuffer(jsonData))
+	// Retry transient failures. Only the HTTP call is retried, never anything around it: by the
+	// time a caller is in a tool loop the tools have already run, and some of them write.
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		chatResp, kind, err := sendOnce(ctx, req.Model, jsonData)
+		if err == nil {
+			return chatResp, nil
+		}
+		lastErr = err
+
+		if !isRetryable(kind) || attempt == maxAttempts {
+			break
+		}
+		if !waitBeforeRetry(ctx, attempt) {
+			// The turn's deadline passed or it was cancelled, so there is nobody left to answer
+			break
+		}
+
+		metrics.RecordChatAPIRetry(req.Model, string(kind))
+		log.Warn().Ctx(ctx).
+			Str("model", req.Model).
+			Str("error_kind", string(kind)).
+			Int("attempt", attempt).
+			Int("max_attempts", maxAttempts).
+			Msg("Retrying chat request after a transient failure")
+	}
+
+	return nil, lastErr
+}
+
+// isRetryable reports whether a failure is worth another attempt. Anything caused by the request
+// itself will fail identically the second time, so only transient conditions qualify.
+func isRetryable(kind ErrorKind) bool {
+	switch kind {
+	case ErrorKindNetwork, ErrorKindTimeout, ErrorKindRateLimited, ErrorKindProviderError:
+		return true
+	default:
+		return false
+	}
+}
+
+// retryDelay returns the backoff for an attempt: exponential growth up to a ceiling, jittered
+// between half and one and a half of the nominal delay so concurrent turns do not retry in lockstep
+func retryDelay(attempt int) time.Duration {
+	delay := min(retryBaseDelay<<(attempt-1), retryMaxDelay)
+	return time.Duration(float64(delay) * (0.5 + rand.Float64()))
+}
+
+// waitBeforeRetry sleeps for the backoff delay, returning false if the context finished first
+func waitBeforeRetry(ctx context.Context, attempt int) bool {
+	timer := time.NewTimer(retryDelay(attempt))
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// sendOnce performs a single attempt, returning the response or the failure with its classification
+func sendOnce(ctx context.Context, model string, jsonData []byte) (*ChatResponse, ErrorKind, error) {
+	// Each attempt gets its own timeout, bounded by the caller's deadline for the whole turn
+	callCtx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(callCtx, "POST", endpoint(runPath), bytes.NewBuffer(jsonData))
 	if err != nil {
-		log.Error().Ctx(ctx).Err(err).Str("model", req.Model).Msg("Failed to create HTTP request")
-		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+		log.Error().Ctx(ctx).Err(err).Str("model", model).Msg("Failed to create HTTP request")
+		return nil, ErrorKindUnknown, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	setAuthHeaders(httpReq)
+	setInferenceHeaders(httpReq)
 
 	// Measured around the call itself, so a slow turn can be attributed to the model rather than to
 	// tool execution without reading logs
 	startTime := time.Now()
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
-		recordFailure(ctx, req.Model, classifyTransportError(err), startTime)
-		log.Error().Ctx(ctx).Err(err).Str("model", req.Model).Msg("Failed to send chat request")
-		return nil, fmt.Errorf("failed to send chat request: %w", err)
+		kind := classifyTransportError(err)
+		recordFailure(ctx, model, kind, startTime)
+		log.Error().Ctx(ctx).Err(err).Str("model", model).Msg("Failed to send chat request")
+		return nil, kind, fmt.Errorf("failed to send chat request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		recordFailure(ctx, req.Model, classifyTransportError(err), startTime)
-		log.Error().Ctx(ctx).Err(err).Str("model", req.Model).Msg("Failed to read chat response")
-		return nil, fmt.Errorf("failed to read chat response: %w", err)
+		kind := classifyTransportError(err)
+		recordFailure(ctx, model, kind, startTime)
+		log.Error().Ctx(ctx).Err(err).Str("model", model).Msg("Failed to read chat response")
+		return nil, kind, fmt.Errorf("failed to read chat response: %w", err)
 	}
 
 	var runResp runResponse
 	if err := json.Unmarshal(body, &runResp); err != nil {
-		recordFailure(ctx, req.Model, ErrorKindParseError, startTime)
+		recordFailure(ctx, model, ErrorKindParseError, startTime)
 		log.Error().Ctx(ctx).Err(err).
-			Str("model", req.Model).
+			Str("model", model).
 			Int("status_code", resp.StatusCode).
 			Str("response", string(body)).
 			Msg("Failed to parse chat response")
-		return nil, fmt.Errorf("failed to parse chat response: %w", err)
+		return nil, ErrorKindParseError, fmt.Errorf("failed to parse chat response: %w", err)
 	}
 
 	// Failures are reported both by the HTTP status and by the envelope's success field
 	if resp.StatusCode >= 400 || !runResp.Success || len(runResp.Errors) > 0 {
 		errorCode, errorMessage := firstError(runResp.Errors)
 		errorKind := classifyResponseError(resp.StatusCode, runResp.Errors)
-		recordFailure(ctx, req.Model, errorKind, startTime)
+		recordFailure(ctx, model, errorKind, startTime)
 		log.Error().Ctx(ctx).
-			Str("model", req.Model).
+			Str("model", model).
 			Int("status_code", resp.StatusCode).
 			Int("error_code", errorCode).
 			Str("error_kind", string(errorKind)).
@@ -218,35 +325,35 @@ func SendChatRequest(ctx context.Context, req ChatRequest) (*ChatResponse, error
 			Str("response", string(body)).
 			Msg("Chat API returned error")
 		if errorMessage == "" {
-			return nil, fmt.Errorf("chat API error: HTTP %d", resp.StatusCode)
+			return nil, errorKind, fmt.Errorf("chat API error: HTTP %d", resp.StatusCode)
 		}
-		return nil, fmt.Errorf("chat API error: %s", errorMessage)
+		return nil, errorKind, fmt.Errorf("chat API error: %s", errorMessage)
 	}
 
 	chatResp := runResp.Result
 
 	log.Trace().Ctx(ctx).
-		Str("model", req.Model).
+		Str("model", model).
 		Str("response", string(body)).
 		Msg("Chat API response")
 
-	metrics.RecordChatAPICall(req.Model, true)
-	metrics.RecordChatAPICallDuration(req.Model, time.Since(startTime).Seconds())
+	metrics.RecordChatAPICall(model, true)
+	metrics.RecordChatAPICallDuration(model, time.Since(startTime).Seconds())
 
 	if chatResp.Usage != nil {
 		cachedTokens := chatResp.Usage.CachedPromptTokens()
 		log.Debug().Ctx(ctx).
-			Str("model", req.Model).
+			Str("model", model).
 			Int("prompt_tokens", chatResp.Usage.PromptTokens).
 			Int("completion_tokens", chatResp.Usage.CompletionTokens).
 			Int("cached_prompt_tokens", cachedTokens).
 			Int("total_tokens", chatResp.Usage.TotalTokens).
 			Msg("Chat API token usage")
-		metrics.RecordChatTokens(req.Model, chatResp.Usage.PromptTokens, chatResp.Usage.CompletionTokens)
-		metrics.RecordChatCachedTokens(req.Model, cachedTokens, chatResp.Usage.PromptTokens)
+		metrics.RecordChatTokens(model, chatResp.Usage.PromptTokens, chatResp.Usage.CompletionTokens)
+		metrics.RecordChatCachedTokens(model, cachedTokens, chatResp.Usage.PromptTokens)
 	}
 
-	return &chatResp, nil
+	return &chatResp, "", nil
 }
 
 // recordFailure records the metrics for a failed chat request

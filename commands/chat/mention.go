@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -31,6 +32,70 @@ func lockRoom(roomID string) func() {
 	return mutex.Unlock
 }
 
+// turnTimeout bounds a whole turn, tools and all. Without it a turn can run for the product of the
+// per-call timeout and the iteration limit, during which the user has no idea anything is wrong.
+const turnTimeout = 3 * time.Minute
+
+// persistTimeout bounds the writes that record what a turn did
+const persistTimeout = 5 * time.Second
+
+// persistContext returns a context for writes that have to complete even when the turn itself was
+// cancelled or ran out of time. A turn that overruns its deadline would otherwise also lose the
+// record of what it had already done, which is exactly when that record is most worth having.
+func persistContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), persistTimeout)
+}
+
+// The typing indicator has to be re-sent periodically, since the server expires it. The refresh runs
+// comfortably inside the timeout so the indicator never lapses mid-turn: previously it was set once
+// per iteration, so an iteration that ran long left the bot looking idle while it was still working.
+const typingIndicatorTimeout = 30 * time.Second
+const typingIndicatorRefresh = 20 * time.Second
+
+// startTypingIndicator shows the typing indicator and keeps it alive until the returned stop
+// function is called. Safe to stop more than once.
+func startTypingIndicator(ctx context.Context, roomID string) func() {
+	matrix.SendTyping(ctx, roomID, true, typingIndicatorTimeout)
+
+	return keepAlive(ctx, typingIndicatorRefresh,
+		func() { matrix.SendTyping(ctx, roomID, true, typingIndicatorTimeout) },
+		func() {
+			// Deliberately not the turn context, which may already be cancelled or timed out by the
+			// time we get here, and would take the "stop typing" call down with it
+			matrix.SendTyping(context.Background(), roomID, false, 0)
+		})
+}
+
+// keepAlive calls refresh on an interval until the returned stop function is called or the context
+// ends, then calls onStop exactly once. Stopping more than once is safe: the stop runs from a defer
+// while the error paths return early, so a double stop is easy to reach.
+func keepAlive(ctx context.Context, interval time.Duration, refresh, onStop func()) func() {
+	done := make(chan struct{})
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				refresh()
+			}
+		}
+	}()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			close(done)
+			onStop()
+		})
+	}
+}
+
 // HandleMention handles the chat command
 func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, relatesTo map[string]any) {
 	if strings.TrimSpace(msg) == "" {
@@ -41,6 +106,11 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 	// actually being worked on rather than while it waits.
 	unlockRoom := lockRoom(roomID)
 	defer unlockRoom()
+
+	// Bound the whole turn, so a stuck model or a long tool loop fails in a knowable time instead
+	// of grinding on invisibly. Applied after the lock so queueing does not eat into the budget.
+	ctx, cancelTurn := context.WithTimeout(ctx, turnTimeout)
+	defer cancelTurn()
 
 	startTime := time.Now()
 
@@ -53,11 +123,9 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 	// Variable to track tool iterations
 	iterationCount := 0
 
-	// Send typing indicator to let the user know we're processing their request
-	// Set a timeout that's long enough to cover the expected processing time
-	matrix.SendTyping(ctx, roomID, true, 60*time.Second)
-	// Make sure we stop the typing indicator when we're done
-	defer matrix.SendTyping(ctx, roomID, false, 0)
+	// Keep the typing indicator alive for as long as the turn actually runs
+	stopTyping := startTypingIndicator(ctx, roomID)
+	defer stopTyping()
 
 	// Accumulates everything that happens during this turn, for the summary logged at the end
 	stats := &turnStats{outcome: "ok"}
@@ -108,10 +176,16 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 			Str("model", model).
 			Bool("has_image", hasImage).
 			Msg("Failed to send chat request")
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			stats.outcome = "turn_timeout"
+			stats.finish(ctx, roomID, sender, model, hasImage, time.Since(startTime))
+			metrics.RecordChatRequestDuration(model, hasImage, time.Since(startTime).Seconds())
+			matrix.SendMessage(roomID, "That took too long to answer, so I gave up. Try again, or ask something narrower.")
+			return
+		}
 		stats.outcome = "request_failed"
 		stats.finish(ctx, roomID, sender, model, hasImage, time.Since(startTime))
 		metrics.RecordChatRequestDuration(model, hasImage, time.Since(startTime).Seconds())
-		matrix.SendTyping(ctx, roomID, false, 0) // Stop typing indicator on error
 		matrix.SendMessage(roomID, "Failed to process chat request")
 		return
 	}
@@ -126,7 +200,6 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 		stats.outcome = "no_choices"
 		stats.finish(ctx, roomID, sender, model, hasImage, time.Since(startTime))
 		metrics.RecordChatRequestDuration(model, hasImage, time.Since(startTime).Seconds())
-		matrix.SendTyping(ctx, roomID, false, 0) // Stop typing indicator on error
 		matrix.SendMessage(roomID, "No response from chat API")
 		return
 	}
@@ -162,8 +235,10 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 	}
 	stats.iterations = iterationCount
 
-	// Save the assistant response to history
-	if err := db.SaveChatMessage(ctx, roomID, config.UserID, assistantResponse, "assistant"); err != nil {
+	// Save the assistant response to history, on a context that outlives a cancelled turn
+	persistCtx, cancelPersist := persistContext(ctx)
+	defer cancelPersist()
+	if err := db.SaveChatMessage(persistCtx, roomID, config.UserID, assistantResponse, "assistant"); err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Msg("Failed to save assistant message to history")
 		// Continue even if saving fails
 	}
@@ -193,9 +268,15 @@ func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relat
 	// of a request, so anything that varies between requests has to come after everything that does
 	// not: the current time in particular used to sit in the second sentence, which changed the
 	// prefix every second and made caching impossible. It is now appended after the history instead.
+	// The instruction to batch tool calls is the cheapest latency win available: each tool iteration
+	// is a separate round trip carrying the whole conversation, so three facts fetched one at a time
+	// cost three of them where one would do. Both supported providers can emit several tool calls in
+	// a single turn, and they are executed in parallel.
 	systemPrompt := fmt.Sprintf(
 		"You are %s, a helpful Matrix bot. "+
-			"Keep your responses concise and helpful. Use markdown formatting in your responses.",
+			"Keep your responses concise and helpful. Use markdown formatting in your responses. "+
+			"When you need several independent pieces of information, request all of the tool calls "+
+			"together in one turn rather than one at a time.",
 		botDisplayName,
 	)
 
@@ -768,9 +849,6 @@ func processToolCalls(
 			MaxTokens: &maxTokens,
 		}
 
-		// Send typing indicator for the next request
-		matrix.SendTyping(ctx, roomID, true, 30*time.Second)
-
 		// Log the request for debugging
 		log.Debug().Ctx(ctx).
 			Str("room_id", roomID).
@@ -868,9 +946,6 @@ func processToolCalls(
 			MaxTokens: &maxTokens,
 		}
 
-		// Send typing indicator for the final request
-		matrix.SendTyping(ctx, roomID, true, 30*time.Second)
-
 		// Log the final request
 		log.Debug().Ctx(ctx).
 			Str("room_id", roomID).
@@ -953,7 +1028,10 @@ func saveToolCallHistory(ctx context.Context, roomID string, toolCalls []aigatew
 		})
 	}
 
-	if err := db.SaveToolCallsWithResponses(ctx, roomID, config.UserID, records); err != nil {
+	persistCtx, cancel := persistContext(ctx)
+	defer cancel()
+
+	if err := db.SaveToolCallsWithResponses(persistCtx, roomID, config.UserID, records); err != nil {
 		log.Error().Ctx(ctx).Err(err).
 			Str("room_id", roomID).
 			Int("record_count", len(records)).
