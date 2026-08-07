@@ -224,9 +224,7 @@ func TestImageContentPartMarshalling(t *testing.T) {
 
 	data, err := json.Marshal(Message{Role: "user", Content: []ContentPart{
 		{Type: "text", Text: "What is this?"},
-		{Type: "image_url", ImageURL: &struct {
-			URL string `json:"url"`
-		}{URL: dataURI}},
+		{Type: "image_url", ImageURL: &ImageURL{URL: dataURI, Detail: "low"}},
 	}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -251,5 +249,31 @@ func TestImageContentPartMarshalling(t *testing.T) {
 	}
 	if imageURL["url"] != dataURI {
 		t.Errorf("expected the data URI to be preserved, got %v", imageURL["url"])
+	}
+	if imageURL["detail"] != "low" {
+		t.Errorf("expected the detail level to be sent, got %v", imageURL["detail"])
+	}
+}
+
+// TestImageDetailOmittedWhenEmpty verifies an unset detail level is left out of the request rather
+// than sent as an empty string, so the provider applies its own default
+func TestImageDetailOmittedWhenEmpty(t *testing.T) {
+	data, err := json.Marshal(ContentPart{
+		Type:     "image_url",
+		ImageURL: &ImageURL{URL: "data:image/png;base64,iVBORw0KGgo="},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var got struct {
+		ImageURL map[string]any `json:"image_url"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, ok := got.ImageURL["detail"]; ok {
+		t.Error("detail should be omitted when empty")
 	}
 }

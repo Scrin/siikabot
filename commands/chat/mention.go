@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/config"
@@ -64,11 +65,16 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 	// Get tool definitions from the registry, filtering based on user permissions
 	tools := getToolsForUser(ctx, sender)
 
+	// Cap the response length. Read once and threaded through the turn so a multi-iteration turn
+	// does not re-query it per request.
+	maxTokens := getMaxTokensForRoom(ctx, roomID)
+
 	// Create the initial request
 	req := aigateway.ChatRequest{
-		Model:    model,
-		Messages: messages,
-		Tools:    tools,
+		Model:     model,
+		Messages:  messages,
+		Tools:     tools,
+		MaxTokens: &maxTokens,
 	}
 
 	// Estimated size of what is about to be sent, compared against the reported usage below so the
@@ -138,7 +144,7 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 
 		// Process tool calls iteratively
 		iterationCount, messages, assistantResponse = processToolCalls(
-			ctx, roomID, sender, model, hasImage,
+			ctx, roomID, sender, model, hasImage, maxTokens,
 			chatResp, messages, tools,
 		)
 	}
@@ -168,10 +174,6 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 
 // buildInitialMessages creates the initial messages array with system prompt, history, and user message
 func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relatesTo map[string]any) ([]aigateway.Message, bool, string) {
-	// Create a system prompt with bot identity and current time
-	loc, _ := time.LoadLocation(config.Timezone)
-	currentTime := time.Now().In(loc).Format("Monday, January 2, 2006 15:04:05 MST")
-
 	// Get the bot's actual display name from the Matrix server
 	botDisplayName := matrix.GetDisplayName(ctx, config.UserID)
 	if botDisplayName == "" {
@@ -179,11 +181,14 @@ func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relat
 		botDisplayName = strings.Split(config.UserID, ":")[0][1:] // Remove @ and domain part
 	}
 
+	// The system prompt is ordered most stable first. Providers cache the longest unchanging prefix
+	// of a request, so anything that varies between requests has to come after everything that does
+	// not: the current time in particular used to sit in the second sentence, which changed the
+	// prefix every second and made caching impossible. It is now appended after the history instead.
 	systemPrompt := fmt.Sprintf(
-		"You are %s, a helpful Matrix bot. The current date and time is %s. "+
+		"You are %s, a helpful Matrix bot. "+
 			"Keep your responses concise and helpful. Use markdown formatting in your responses.",
 		botDisplayName,
-		currentTime,
 	)
 
 	// Fetch and append user memories to system prompt
@@ -222,6 +227,14 @@ func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relat
 
 	// Process history to include tool calls and tool responses
 	processHistoryMessages(ctx, history, &messages)
+
+	// The current time goes after the history, not in the system prompt, so that everything before
+	// it stays byte-identical between requests and can be served from the provider's prompt cache
+	loc, _ := time.LoadLocation(config.Timezone)
+	messages = append(messages, aigateway.Message{
+		Role:    "system",
+		Content: "The current date and time is " + time.Now().In(loc).Format("Monday, January 2, 2006 15:04:05 MST"),
+	})
 
 	// Flag to track if we're handling an image
 	hasImage := false
@@ -366,19 +379,41 @@ func collectToolResponses(history []db.ChatMessage, start int) (map[string]strin
 	return responses, i
 }
 
-// replayableToolResponse returns the content to replay for a stored tool response, substituting a
-// marker once the result has expired
-func replayableToolResponse(msg db.ChatMessage, now time.Time) string {
-	if msg.Expiry == nil || msg.Expiry.After(now) {
-		return msg.Message
-	}
+// maxReplayedToolResponseBytes caps how much of a stored tool result is replayed as history. The
+// turn that fetched the data sees it in full; later turns only need the gist, and a single web fetch
+// can otherwise occupy a large share of the context window for as long as it stays in scope.
+const maxReplayedToolResponseBytes = 4096
 
+// replayableToolResponse returns the content to replay for a stored tool response, substituting a
+// marker once the result has expired and truncating results too large to be worth replaying whole
+func replayableToolResponse(msg db.ChatMessage, now time.Time) string {
 	toolName := "tool"
 	if msg.ToolName != nil {
 		toolName = *msg.ToolName
 	}
-	return fmt.Sprintf("[expired: the %s result from this point in the conversation is no longer "+
-		"current, call the tool again if you need this information]", toolName)
+
+	if msg.Expiry != nil && !msg.Expiry.After(now) {
+		return fmt.Sprintf("[expired: the %s result from this point in the conversation is no longer "+
+			"current, call the tool again if you need this information]", toolName)
+	}
+
+	return truncateForReplay(msg.Message, toolName)
+}
+
+// truncateForReplay shortens an oversized tool result, cutting on a rune boundary so the result
+// stays valid UTF-8, and says plainly that it was shortened rather than appearing to end mid-thought
+func truncateForReplay(response, toolName string) string {
+	if len(response) <= maxReplayedToolResponseBytes {
+		return response
+	}
+
+	cut := maxReplayedToolResponseBytes
+	for cut > 0 && !utf8.RuneStart(response[cut]) {
+		cut--
+	}
+
+	return response[:cut] + fmt.Sprintf("\n\n[truncated: the full %s result is not replayed in full, "+
+		"call the tool again if you need the rest]", toolName)
 }
 
 // processRelatedMessage handles messages that are replies to other messages
@@ -568,6 +603,7 @@ func processImageMessage(ctx context.Context, roomID, msg, base64ImageURL string
 			*messages = append(*messages, aigateway.Message{Role: "user", Content: msg})
 			hasImage = false
 		} else {
+			detail := getImageDetailForRoom(ctx, roomID)
 			contentParts := []aigateway.ContentPart{
 				{
 					Type: "text",
@@ -575,10 +611,9 @@ func processImageMessage(ctx context.Context, roomID, msg, base64ImageURL string
 				},
 				{
 					Type: "image_url",
-					ImageURL: &struct {
-						URL string `json:"url"`
-					}{
-						URL: base64ImageURL,
+					ImageURL: &aigateway.ImageURL{
+						URL:    base64ImageURL,
+						Detail: detail,
 					},
 				},
 			}
@@ -587,6 +622,10 @@ func processImageMessage(ctx context.Context, roomID, msg, base64ImageURL string
 				Role:    "user",
 				Content: contentParts,
 			})
+			log.Debug().Ctx(ctx).
+				Str("room_id", roomID).
+				Str("image_detail", detail).
+				Msg("Attaching image to chat request")
 			metrics.RecordChatImageProcessed()
 		}
 	} else {
@@ -656,6 +695,7 @@ func processToolCalls(
 	ctx context.Context,
 	roomID, sender, model string,
 	hasImage bool,
+	maxTokens int,
 	chatResp *aigateway.ChatResponse,
 	messages []aigateway.Message,
 	tools []aigateway.ToolDefinition,
@@ -706,9 +746,10 @@ func processToolCalls(
 
 		// Update the request with the new messages
 		req := aigateway.ChatRequest{
-			Model:    model,
-			Messages: messages,
-			Tools:    tools,
+			Model:     model,
+			Messages:  messages,
+			Tools:     tools,
+			MaxTokens: &maxTokens,
 		}
 
 		// Send typing indicator for the next request
@@ -802,8 +843,9 @@ func processToolCalls(
 
 		// Final request without tools
 		req := aigateway.ChatRequest{
-			Model:    model,
-			Messages: messages,
+			Model:     model,
+			Messages:  messages,
+			MaxTokens: &maxTokens,
 		}
 
 		// Send typing indicator for the final request

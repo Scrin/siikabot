@@ -25,13 +25,21 @@ const runPath = "/ai/run"
 
 var httpClient = &http.Client{Timeout: requestTimeout}
 
+// ImageURL is the image payload of a content part.
+//
+// Detail selects the fidelity the provider renders the image at, and is the difference between a
+// flat handful of tokens and several thousand for the same picture. Omitted when empty, which
+// leaves the choice to the provider.
+type ImageURL struct {
+	URL    string `json:"url"`
+	Detail string `json:"detail,omitempty"`
+}
+
 // ContentPart represents a part of a message content in the chat API
 type ContentPart struct {
-	Type     string `json:"type"`
-	Text     string `json:"text,omitempty"`
-	ImageURL *struct {
-		URL string `json:"url"`
-	} `json:"image_url,omitempty"`
+	Type     string    `json:"type"`
+	Text     string    `json:"text,omitempty"`
+	ImageURL *ImageURL `json:"image_url,omitempty"`
 }
 
 // Message represents a message in the chat API

@@ -19,6 +19,18 @@ const defaultModel = "openai/gpt-4o-mini"
 // Default values for configurable parameters
 const defaultMaxToolIterations = 5
 
+// defaultMaxTokens caps a single response. Generous enough that ordinary answers are unaffected —
+// the system prompt already asks for concise replies — but a backstop so a runaway generation is
+// not billed in full. Raise it per room with "!chat maxtokens" if replies get cut short.
+const defaultMaxTokens = 2048
+
+// defaultImageDetail is the fidelity images are sent at. "low" costs a flat, small number of tokens
+// per image, where the provider default tiles the image and can cost thousands for the same picture.
+const defaultImageDetail = "low"
+
+// imageDetailAuto omits the detail field, leaving the choice to the provider
+const imageDetailAuto = "auto"
+
 // How long to keep chat history before cleaning it up
 const chatHistoryRetention = 7 * 24 * time.Hour // 7 days
 
@@ -97,6 +109,37 @@ func getImageModelForRoom(ctx context.Context, roomID string) string {
 	return *model
 }
 
+// getMaxTokensForRoom returns the response length cap for a room
+// If no room-specific value is set, returns the default value
+func getMaxTokensForRoom(ctx context.Context, roomID string) int {
+	maxTokens, err := db.GetRoomChatMaxTokens(ctx, roomID)
+	if err != nil || maxTokens == nil || *maxTokens <= 0 {
+		return defaultMaxTokens
+	}
+	return *maxTokens
+}
+
+// getImageDetailForRoom returns the image detail level for a room.
+// Returns an empty string for "auto", which omits the field and lets the provider choose.
+func getImageDetailForRoom(ctx context.Context, roomID string) string {
+	detail, err := db.GetRoomChatImageDetail(ctx, roomID)
+	if err != nil || detail == nil || *detail == "" {
+		return defaultImageDetail
+	}
+	if *detail == imageDetailAuto {
+		return ""
+	}
+	return *detail
+}
+
+// describeImageDetail renders the room's image detail setting for display
+func describeImageDetail(ctx context.Context, roomID string) string {
+	if detail := getImageDetailForRoom(ctx, roomID); detail != "" {
+		return detail
+	}
+	return imageDetailAuto
+}
+
 // describeContextWindow renders the room's context window settings and the size of the window as it
 // currently stands, since a token budget on its own is hard to picture.
 //
@@ -162,9 +205,12 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 			"Text model: %s\n"+
 			"Image model: %s\n"+
 			"Context window: %s\n"+
+			"Max response tokens: %d\n"+
+			"Image detail: %s\n"+
 			"Max tool iterations: %d\n"+
 			"Max web content size: %d bytes",
-			textModel, imageModel, contextWindow, maxToolIterations, maxWebContentSize))
+			textModel, imageModel, contextWindow, getMaxTokensForRoom(ctx, roomID),
+			describeImageDetail(ctx, roomID), maxToolIterations, maxWebContentSize))
 	case "model":
 		if len(split) < 4 {
 			matrix.SendMessage(roomID, "Usage: !chat model [text|image] <model_name>")
@@ -255,6 +301,66 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 			Int("low_tokens", lowTokens).
 			Msg("Context window changed")
 		matrix.SendMessage(roomID, fmt.Sprintf("Context window changed to: %d / %d tokens", highTokens, lowTokens))
+	case "maxtokens":
+		if len(split) < 3 {
+			matrix.SendMessage(roomID, "Usage: !chat maxtokens <tokens>")
+			return
+		}
+
+		if sender != config.Admin {
+			matrix.SendMessage(roomID, "Only admins can change the max response tokens")
+			return
+		}
+
+		var maxTokens int
+		if _, err := fmt.Sscanf(split[2], "%d", &maxTokens); err != nil || maxTokens <= 0 {
+			matrix.SendMessage(roomID, "Max response tokens must be a positive integer")
+			return
+		}
+
+		if err := db.SetRoomChatMaxTokens(ctx, roomID, maxTokens); err != nil {
+			log.Error().Ctx(ctx).Err(err).
+				Str("room_id", roomID).
+				Int("max_tokens", maxTokens).
+				Msg("Failed to set room max response tokens")
+			matrix.SendMessage(roomID, "Failed to set max response tokens")
+			return
+		}
+		log.Info().Ctx(ctx).
+			Str("room_id", roomID).
+			Int("max_tokens", maxTokens).
+			Msg("Max response tokens changed")
+		matrix.SendMessage(roomID, fmt.Sprintf("Max response tokens changed to: %d", maxTokens))
+	case "imagedetail":
+		if len(split) < 3 {
+			matrix.SendMessage(roomID, "Usage: !chat imagedetail [low|high|auto]")
+			return
+		}
+
+		if sender != config.Admin {
+			matrix.SendMessage(roomID, "Only admins can change the image detail")
+			return
+		}
+
+		detail := strings.TrimSpace(split[2])
+		if detail != "low" && detail != "high" && detail != imageDetailAuto {
+			matrix.SendMessage(roomID, "Usage: !chat imagedetail [low|high|auto]")
+			return
+		}
+
+		if err := db.SetRoomChatImageDetail(ctx, roomID, detail); err != nil {
+			log.Error().Ctx(ctx).Err(err).
+				Str("room_id", roomID).
+				Str("image_detail", detail).
+				Msg("Failed to set room image detail")
+			matrix.SendMessage(roomID, "Failed to set image detail")
+			return
+		}
+		log.Info().Ctx(ctx).
+			Str("room_id", roomID).
+			Str("image_detail", detail).
+			Msg("Image detail changed")
+		matrix.SendMessage(roomID, fmt.Sprintf("Image detail changed to: %s", detail))
 	case "tools":
 		if len(split) < 3 {
 			matrix.SendMessage(roomID, "Usage: !chat tools <max_iterations>")

@@ -18,6 +18,8 @@ type RoomConfig struct {
 	ChatContextLowTokens  *int    `db:"chat_context_low_tokens"`
 	ChatContextAnchorID   *int64  `db:"chat_context_anchor_id"`
 	ChatMaxToolIterations *int    `db:"chat_max_tool_iterations"`
+	ChatMaxTokens         *int    `db:"chat_max_tokens"`
+	ChatImageDetail       *string `db:"chat_image_detail"`
 }
 
 // GetRoomChatLLMModelText retrieves the chat LLM model for text messages in a room
@@ -148,6 +150,76 @@ func GetRoomChatMaxToolIterations(ctx context.Context, roomID string) (*int, err
 		return nil, err
 	}
 	return maxIterations, nil
+}
+
+// GetRoomChatMaxTokens retrieves the maximum response length for a room
+// Returns nil if not set (which means use the default)
+func GetRoomChatMaxTokens(ctx context.Context, roomID string) (*int, error) {
+	var maxTokens *int
+	err := pool.QueryRow(ctx,
+		"SELECT chat_max_tokens FROM room_config WHERE room_id = $1",
+		roomID).Scan(&maxTokens)
+	if err != nil {
+		if err.Error() == "no rows in result set" {
+			return nil, nil
+		}
+		log.Error().Ctx(ctx).Err(err).
+			Str("room_id", roomID).
+			Msg("Failed to get room chat max tokens")
+		return nil, err
+	}
+	return maxTokens, nil
+}
+
+// SetRoomChatMaxTokens sets the maximum response length for a room
+func SetRoomChatMaxTokens(ctx context.Context, roomID string, maxTokens int) error {
+	_, err := pool.Exec(ctx,
+		"INSERT INTO room_config (room_id, chat_max_tokens) VALUES ($1, $2) "+
+			"ON CONFLICT (room_id) DO UPDATE SET chat_max_tokens = $2",
+		roomID, maxTokens)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).
+			Str("room_id", roomID).
+			Int("max_tokens", maxTokens).
+			Msg("Failed to set room chat max tokens")
+		return err
+	}
+	return nil
+}
+
+// GetRoomChatImageDetail retrieves the image detail level for a room
+// Returns nil if not set (which means use the default)
+func GetRoomChatImageDetail(ctx context.Context, roomID string) (*string, error) {
+	var detail *string
+	err := pool.QueryRow(ctx,
+		"SELECT chat_image_detail FROM room_config WHERE room_id = $1",
+		roomID).Scan(&detail)
+	if err != nil {
+		if err.Error() == "no rows in result set" {
+			return nil, nil
+		}
+		log.Error().Ctx(ctx).Err(err).
+			Str("room_id", roomID).
+			Msg("Failed to get room chat image detail")
+		return nil, err
+	}
+	return detail, nil
+}
+
+// SetRoomChatImageDetail sets the image detail level for a room
+func SetRoomChatImageDetail(ctx context.Context, roomID, detail string) error {
+	_, err := pool.Exec(ctx,
+		"INSERT INTO room_config (room_id, chat_image_detail) VALUES ($1, $2) "+
+			"ON CONFLICT (room_id) DO UPDATE SET chat_image_detail = $2",
+		roomID, detail)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).
+			Str("room_id", roomID).
+			Str("image_detail", detail).
+			Msg("Failed to set room chat image detail")
+		return err
+	}
+	return nil
 }
 
 // SetRoomChatContextTokens sets the context window token budget for a room
