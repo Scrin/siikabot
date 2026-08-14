@@ -77,7 +77,7 @@ In general, each command or webhook is considered a **self-contained feature** a
   - State stores for crypto, sync, and state management
 
 - **`./aigateway/`** - Cloudflare AI Gateway communication for LLM integration
-  - `aigateway.go` - HTTP client. All requests go through the `/ai/run` REST endpoint
+  - `aigateway.go` - HTTP client. Inference goes to the Unified API (`gateway.ai.cloudflare.com/.../compat/chat/completions`), which is the only endpoint that honours the OTel trace headers; the REST API on `api.cloudflare.com` is used for the management API only
   - `logs.go` - Background poller that records cost/token/latency metrics from gateway logs
   - `tools.go` - Tool definition framework for function calling
 

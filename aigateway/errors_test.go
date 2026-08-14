@@ -151,21 +151,21 @@ func TestCachedPromptTokens(t *testing.T) {
 	}
 }
 
-// TestUsageParsesCachedTokens verifies the field is read from a real response body
+// TestUsageParsesCachedTokens verifies the field is read from a real response body, including the
+// sibling fields the compat endpoint returns alongside it
 func TestUsageParsesCachedTokens(t *testing.T) {
 	body := []byte(`{
-		"result": {"choices": [{"message": {"role": "assistant", "content": "hi"}}],
-			"usage": {"prompt_tokens": 8518, "completion_tokens": 1, "total_tokens": 8519,
-				"prompt_tokens_details": {"cached_tokens": 8192, "audio_tokens": 0}}},
-		"success": true, "errors": []
+		"choices": [{"message": {"role": "assistant", "content": "hi"}}],
+		"usage": {"prompt_tokens": 8518, "completion_tokens": 1, "total_tokens": 8519,
+			"prompt_tokens_details": {"cached_tokens": 8192, "audio_tokens": 0}}
 	}`)
 
-	var resp runResponse
+	var resp chatCompletionResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if got := resp.Result.Usage.CachedPromptTokens(); got != 8192 {
+	if got := resp.Usage.CachedPromptTokens(); got != 8192 {
 		t.Errorf("expected 8192 cached tokens, got %d", got)
 	}
 }

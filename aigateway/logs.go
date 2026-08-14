@@ -163,7 +163,7 @@ func fetchLogs(ctx context.Context, page int) ([]GatewayLog, error) {
 		log.Error().Ctx(ctx).Err(err).Int("page", page).Msg("Failed to create gateway logs request")
 		return nil, fmt.Errorf("failed to create gateway logs request: %w", err)
 	}
-	setAuthHeaders(httpReq)
+	setManagementAuthHeader(httpReq)
 
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {

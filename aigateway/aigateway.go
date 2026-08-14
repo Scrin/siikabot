@@ -48,17 +48,32 @@ const gatewayMaxAttempts = "2"
 const gatewayRetryDelayMS = "500"
 const gatewayBackoff = "exponential"
 
-// All requests go through the /ai/run endpoint. It accepts the OpenAI chat completions
-// body nested under "input" and returns the response wrapped in "result". The
-// OpenAI-compatible endpoint (/ai/v1/chat/completions) is deliberately not used: it
-// forwards image content parts to OpenAI models in a shape they reject.
-const runPath = "/ai/run"
-
-// Instrumented so each attempt produces a client span. Cloudflare's own span cannot be nested under
-// it — the REST API discards the trace context we send — but the local timing is still worth having.
+// Instrumented so each attempt produces a client span, which Cloudflare's own span then nests
+// under by way of the trace headers set on the request
 var httpClient = &http.Client{
 	Timeout:   httpTimeout,
 	Transport: otelhttp.NewTransport(http.DefaultTransport),
+}
+
+// chatCompletionsURL builds the Unified API URL for the configured account and gateway.
+//
+// This is the OpenAI-compatible endpoint on gateway.ai.cloudflare.com rather than the newer REST
+// API on api.cloudflare.com, and the choice is deliberate: it is the only endpoint that honours
+// cf-aig-otel-trace-id, which is what lets Cloudflare's span join this trace instead of sitting in
+// one of its own. Verified by sending a known trace id to all three candidate endpoints — see T10
+// in OTEL_TRACING_PLAN.md, which also records the probe showing tool calling, image input and
+// cached-token accounting all work here.
+//
+// Cloudflare marks this endpoint deprecated for single-model chat completions while keeping it
+// required for dynamic routing, so it is not going away soon. Should it ever be withdrawn, the way
+// back is /ai/run with the body nested under "input" and the response unwrapped from "result",
+// giving up span nesting and falling back to the metadata correlation that is still sent below.
+//
+// Note that /ai/v1/chat/completions is not an alternative even setting tracing aside: it forwards
+// image content parts to OpenAI models in a shape they reject.
+func chatCompletionsURL() string {
+	return fmt.Sprintf("https://gateway.ai.cloudflare.com/v1/%s/%s/compat/chat/completions",
+		config.CloudflareAccountID, config.CloudflareAIGatewayID)
 }
 
 // ImageURL is the image payload of a content part.
@@ -97,19 +112,6 @@ type ChatRequest struct {
 	// Metadata travels in the cf-aig-metadata header rather than the body, and Cloudflare turns it
 	// into attributes on its own span and filterable fields in its logs
 	Metadata map[string]string `json:"-"`
-}
-
-// chatInput is the "input" object of an /ai/run request, holding everything but the model
-type chatInput struct {
-	Messages  []Message        `json:"messages"`
-	Tools     []ToolDefinition `json:"tools,omitempty"`
-	MaxTokens *int             `json:"max_tokens,omitempty"`
-}
-
-// runRequest is the envelope the /ai/run endpoint expects
-type runRequest struct {
-	Model string    `json:"model"`
-	Input chatInput `json:"input"`
 }
 
 // Choice represents a choice in the chat API response
@@ -163,24 +165,93 @@ type apiError struct {
 	Message string `json:"message"`
 }
 
-// runResponse is the envelope the /ai/run endpoint returns, for both success and failure
-type runResponse struct {
-	Success bool         `json:"success"`
-	Errors  []apiError   `json:"errors"`
-	Result  ChatResponse `json:"result"`
+// providerError is the error object a provider returns through the compat endpoint.
+//
+// Its code is a string where Cloudflare's is numeric, so it is kept as an any for logging rather
+// than forced into apiError. Classification does not need it: that keys on the HTTP status and the
+// message, both of which are present either way.
+type providerError struct {
+	Message string `json:"message"`
+	Type    string `json:"type,omitempty"`
+	Code    any    `json:"code,omitempty"`
 }
 
-// endpoint builds a full Cloudflare API URL for the configured account
+// chatCompletionResponse is what the compat endpoint returns: OpenAI's chat completion object at
+// the top level, with no Cloudflare envelope wrapped around it.
+//
+// Two error shapes have to be accepted because a request can fail on either side of the gateway.
+// The provider's own failures arrive as OpenAI's "error" object, while the gateway's arrive in
+// Cloudflare's "errors" array, and neither is reported by the other.
+type chatCompletionResponse struct {
+	ChatResponse
+	Error  *providerError `json:"error,omitempty"`
+	Errors []apiError     `json:"errors,omitempty"`
+}
+
+// failed reports whether the response carries an error in either shape
+func (r chatCompletionResponse) failed() bool {
+	return r.Error != nil || len(r.Errors) > 0
+}
+
+// apiErrors normalises whichever error shape arrived into the form classifyResponseError expects
+func (r chatCompletionResponse) apiErrors() []apiError {
+	if r.Error != nil {
+		return []apiError{{Message: r.Error.Message}}
+	}
+	return r.Errors
+}
+
+// errorCode returns the provider's string code, or the gateway's numeric one rendered as a string.
+// Only used for logging, where knowing which of the two arrived is itself informative.
+func (r chatCompletionResponse) errorCode() string {
+	if r.Error != nil && r.Error.Code != nil {
+		return fmt.Sprint(r.Error.Code)
+	}
+	if code, _ := firstError(r.Errors); code != 0 {
+		return strconv.Itoa(code)
+	}
+	return ""
+}
+
+// endpoint builds a full Cloudflare REST API URL for the configured account.
+//
+// Used for the management API — the log poller — and not for inference, which goes to the Unified
+// API instead. See chatCompletionsURL.
 func endpoint(path string) string {
 	return fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s%s", config.CloudflareAccountID, path)
 }
 
-// setAuthHeaders sets the authentication and gateway headers required by the AI Gateway REST API.
-// Note that unlike the legacy gateway.ai.cloudflare.com endpoints, the REST API takes the
-// Cloudflare token in Authorization, not in cf-aig-authorization.
-func setAuthHeaders(req *http.Request) {
+// setManagementAuthHeader authenticates a call to the REST management API on api.cloudflare.com,
+// which takes the Cloudflare token in Authorization
+func setManagementAuthHeader(req *http.Request) {
 	req.Header.Set("Authorization", "Bearer "+config.CloudflareAPIToken)
-	req.Header.Set("cf-aig-gateway-id", config.CloudflareAIGatewayID)
+}
+
+// setInferenceAuthHeader authenticates a call to the Unified API, which takes the Cloudflare token
+// in cf-aig-authorization instead.
+//
+// Authorization is deliberately left unset: that header is where a provider's own key would go, and
+// Unified Billing means we do not hold one. The gateway is named in the URL here rather than in a
+// cf-aig-gateway-id header.
+func setInferenceAuthHeader(req *http.Request) {
+	req.Header.Set("cf-aig-authorization", "Bearer "+config.CloudflareAPIToken)
+}
+
+// setTraceHeaders asks Cloudflare to emit its span as a child of the current one.
+//
+// This is what puts the gateway's own view of a call — provider-side timing, gen_ai.usage.cost, the
+// full prompt and completion — into the same waterfall as the rest of the turn, rather than in a
+// separate trace reachable only by correlation.
+//
+// Guarded like the metadata below: without a valid span context these would be all-zero ids, and
+// Cloudflare would dutifully attach its span to a trace that does not exist.
+func setTraceHeaders(ctx context.Context, req *http.Request) {
+	sc := trace.SpanContextFromContext(ctx)
+	if !sc.IsValid() {
+		return
+	}
+	req.Header.Set("cf-aig-otel-trace-id", sc.TraceID().String())
+	req.Header.Set("cf-aig-otel-parent-span-id", sc.SpanID().String())
 }
 
 // setInferenceHeaders sets the per-request gateway behaviour for an inference call: a timeout
@@ -195,9 +266,11 @@ func setInferenceHeaders(req *http.Request) {
 
 // setMetadataHeader attaches request metadata for Cloudflare to record.
 //
-// This carries the trace correlation as well as the business context. Cloudflare's spans cannot be
-// nested under ours — the REST API discards cf-aig-otel-trace-id — but metadata does survive, so the
-// bot's trace and span ids ride along as attributes and the two traces can be matched up afterwards.
+// The business context is the point of it. The trace and span ids are also included, which is now
+// redundant with the trace headers doing the real nesting, but kept for two reasons: metadata is
+// the only one of the two that also reaches the gateway logs, where it makes a log entry traceable
+// back to a turn; and it keeps the association working on its own should the trace headers ever
+// stop being honoured, which is exactly how the REST API behaves.
 func setMetadataHeader(ctx context.Context, req *http.Request, metadata map[string]string) {
 	combined := make(map[string]string, len(metadata)+2)
 	for k, v := range metadata {
@@ -232,14 +305,9 @@ func firstError(errs []apiError) (int, string) {
 
 // SendChatRequest sends a request to the AI Gateway chat API
 func SendChatRequest(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
-	jsonData, err := json.Marshal(runRequest{
-		Model: req.Model,
-		Input: chatInput{
-			Messages:  req.Messages,
-			Tools:     req.Tools,
-			MaxTokens: req.MaxTokens,
-		},
-	})
+	// ChatRequest is already the OpenAI request shape the compat endpoint expects, and Metadata is
+	// tagged json:"-" because it travels as a header, so this marshals to exactly the right body
+	jsonData, err := json.Marshal(req)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("model", req.Model).Msg("Failed to marshal chat request")
 		return nil, fmt.Errorf("failed to marshal chat request: %w", err)
@@ -353,16 +421,18 @@ func sendOnce(ctx context.Context, model string, metadata map[string]string, jso
 	callCtx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 
-	httpReq, err := http.NewRequestWithContext(callCtx, "POST", endpoint(runPath), bytes.NewBuffer(jsonData))
+	httpReq, err := http.NewRequestWithContext(callCtx, "POST", chatCompletionsURL(), bytes.NewBuffer(jsonData))
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("model", model).Msg("Failed to create HTTP request")
 		return nil, ErrorKindUnknown, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	setAuthHeaders(httpReq)
+	setInferenceAuthHeader(httpReq)
 	setInferenceHeaders(httpReq)
-	// Uses the attempt's context, so the correlation ids point at this attempt's span
+	// Both use the attempt's context, so Cloudflare's span hangs off this attempt rather than off
+	// the enclosing call — a retry is then visibly its own subtree
+	setTraceHeaders(ctx, httpReq)
 	setMetadataHeader(ctx, httpReq, metadata)
 
 	// Measured around the call itself, so a slow turn can be attributed to the model rather than to
@@ -385,8 +455,8 @@ func sendOnce(ctx context.Context, model string, metadata map[string]string, jso
 		return nil, kind, fmt.Errorf("failed to read chat response: %w", err)
 	}
 
-	var runResp runResponse
-	if err := json.Unmarshal(body, &runResp); err != nil {
+	var compatResp chatCompletionResponse
+	if err := json.Unmarshal(body, &compatResp); err != nil {
 		recordFailure(ctx, model, ErrorKindParseError, startTime)
 		log.Error().Ctx(ctx).Err(err).
 			Str("model", model).
@@ -396,15 +466,18 @@ func sendOnce(ctx context.Context, model string, metadata map[string]string, jso
 		return nil, ErrorKindParseError, fmt.Errorf("failed to parse chat response: %w", err)
 	}
 
-	// Failures are reported both by the HTTP status and by the envelope's success field
-	if resp.StatusCode >= 400 || !runResp.Success || len(runResp.Errors) > 0 {
-		errorCode, errorMessage := firstError(runResp.Errors)
-		errorKind := classifyResponseError(resp.StatusCode, runResp.Errors)
+	// A failure shows up either in the HTTP status or in an error object in the body. There is no
+	// success flag on this endpoint, so an error-shaped body is the only signal when the status
+	// itself is 200 — which happens when the gateway succeeds but the provider behind it does not.
+	if resp.StatusCode >= 400 || compatResp.failed() {
+		errs := compatResp.apiErrors()
+		_, errorMessage := firstError(errs)
+		errorKind := classifyResponseError(resp.StatusCode, errs)
 		recordFailure(ctx, model, errorKind, startTime)
 		log.Error().Ctx(ctx).
 			Str("model", model).
 			Int("status_code", resp.StatusCode).
-			Int("error_code", errorCode).
+			Str("error_code", compatResp.errorCode()).
 			Str("error_kind", string(errorKind)).
 			Str("error_message", errorMessage).
 			Str("response", string(body)).
@@ -415,7 +488,7 @@ func sendOnce(ctx context.Context, model string, metadata map[string]string, jso
 		return nil, errorKind, fmt.Errorf("chat API error: %s", errorMessage)
 	}
 
-	chatResp := runResp.Result
+	chatResp := compatResp.ChatResponse
 
 	log.Trace().Ctx(ctx).
 		Str("model", model).

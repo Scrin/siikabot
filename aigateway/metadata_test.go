@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/Scrin/siikabot/config"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -124,5 +125,76 @@ func TestProviderFromModel(t *testing.T) {
 		if got := providerFromModel(model); got != want {
 			t.Errorf("providerFromModel(%q) = %q, want %q", model, got, want)
 		}
+	}
+}
+
+// TestTraceHeadersNestCloudflaresSpan covers the mechanism the Unified API was adopted for.
+//
+// These two headers are the only reason inference does not use the newer REST API. If they stop
+// being sent, everything still works and nothing fails — Cloudflare simply generates its own trace
+// id again and its spans quietly leave the waterfall, which is precisely the kind of regression
+// that goes unnoticed until someone opens a trace expecting to see cost data.
+func TestTraceHeadersNestCloudflaresSpan(t *testing.T) {
+	const traceHex = "bad5326e2fca4bafbead818b13dc7111"
+	const spanHex = "d271e004dacacb31"
+
+	req, _ := http.NewRequest("POST", "https://example.org", nil)
+	setTraceHeaders(ctxWithSpan(t, traceHex, spanHex), req)
+
+	if got := req.Header.Get("cf-aig-otel-trace-id"); got != traceHex {
+		t.Errorf("cf-aig-otel-trace-id = %q, want %q", got, traceHex)
+	}
+	if got := req.Header.Get("cf-aig-otel-parent-span-id"); got != spanHex {
+		t.Errorf("cf-aig-otel-parent-span-id = %q, want %q", got, spanHex)
+	}
+}
+
+// TestTraceHeadersOmittedWithoutASpan verifies no ids are sent when there is no span to parent to.
+//
+// Cloudflare validates only the format, so an all-zero id would be accepted and its span attached
+// to a trace that does not exist — worse than not linking at all, because the link looks real.
+func TestTraceHeadersOmittedWithoutASpan(t *testing.T) {
+	req, _ := http.NewRequest("POST", "https://example.org", nil)
+	setTraceHeaders(context.Background(), req)
+
+	for _, header := range []string{"cf-aig-otel-trace-id", "cf-aig-otel-parent-span-id"} {
+		if got := req.Header.Get(header); got != "" {
+			t.Errorf("%s was set to %q with no span to parent to", header, got)
+		}
+	}
+}
+
+// TestInferenceAuthUsesTheGatewayHeader guards the split between the two endpoints' authentication.
+//
+// The Unified API reads the Cloudflare token from cf-aig-authorization and treats Authorization as
+// the provider's own key. Putting the token in Authorization would forward it to OpenAI as if it
+// were an OpenAI key, so this is not a failure that degrades gracefully.
+func TestInferenceAuthUsesTheGatewayHeader(t *testing.T) {
+	config.CloudflareAPIToken = "cf-token"
+
+	req, _ := http.NewRequest("POST", "https://example.org", nil)
+	setInferenceAuthHeader(req)
+
+	if got := req.Header.Get("cf-aig-authorization"); got != "Bearer cf-token" {
+		t.Errorf("cf-aig-authorization = %q", got)
+	}
+	if got := req.Header.Get("Authorization"); got != "" {
+		t.Errorf("Authorization should be left for a provider key, got %q", got)
+	}
+}
+
+// TestManagementAuthUsesTheStandardHeader verifies the log poller still authenticates the way the
+// REST API on api.cloudflare.com expects, which is the opposite of the above
+func TestManagementAuthUsesTheStandardHeader(t *testing.T) {
+	config.CloudflareAPIToken = "cf-token"
+
+	req, _ := http.NewRequest("GET", "https://example.org", nil)
+	setManagementAuthHeader(req)
+
+	if got := req.Header.Get("Authorization"); got != "Bearer cf-token" {
+		t.Errorf("Authorization = %q", got)
+	}
+	if got := req.Header.Get("cf-aig-authorization"); got != "" {
+		t.Errorf("cf-aig-authorization should not be sent to the REST API, got %q", got)
 	}
 }

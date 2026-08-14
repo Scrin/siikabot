@@ -3,25 +3,29 @@ package aigateway
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/Scrin/siikabot/config"
 )
 
-// TestRunRequestEnvelope verifies the /ai/run body shape: the model at the top level and
-// everything else nested under "input".
-func TestRunRequestEnvelope(t *testing.T) {
+// TestChatRequestBodyShape verifies the compat endpoint's flat OpenAI body: everything at the top
+// level, with no Cloudflare "input" wrapper around it.
+//
+// The body is produced by marshalling ChatRequest directly, so the struct tags are the whole
+// contract. A stray tag would silently send a shape the endpoint does not understand.
+func TestChatRequestBodyShape(t *testing.T) {
 	maxTokens := 512
-	data, err := json.Marshal(runRequest{
+	data, err := json.Marshal(ChatRequest{
 		Model: "openai/gpt-4o-mini",
-		Input: chatInput{
-			Messages: []Message{
-				{Role: "system", Content: "You are a bot."},
-				{Role: "user", Content: "Hello"},
-			},
-			Tools: []ToolDefinition{{
-				Type:     "function",
-				Function: FunctionSchema{Name: "get_weather", Parameters: json.RawMessage(`{"type":"object"}`)},
-			}},
-			MaxTokens: &maxTokens,
+		Messages: []Message{
+			{Role: "system", Content: "You are a bot."},
+			{Role: "user", Content: "Hello"},
 		},
+		Tools: []ToolDefinition{{
+			Type:     "function",
+			Function: FunctionSchema{Name: "get_weather", Parameters: json.RawMessage(`{"type":"object"}`)},
+		}},
+		MaxTokens: &maxTokens,
+		Metadata:  map[string]string{"room_id": "!room:example.org"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -35,55 +39,68 @@ func TestRunRequestEnvelope(t *testing.T) {
 	if got["model"] != "openai/gpt-4o-mini" {
 		t.Errorf("expected model at the top level, got %v", got["model"])
 	}
-
-	input, ok := got["input"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected an input object, got %T", got["input"])
-	}
-
 	for _, key := range []string{"messages", "tools", "max_tokens"} {
-		if _, ok := input[key]; !ok {
-			t.Errorf("expected %q inside input", key)
+		if _, ok := got[key]; !ok {
+			t.Errorf("expected %q at the top level", key)
 		}
 	}
 
-	// The model must not be duplicated inside input
-	if _, ok := input["model"]; ok {
-		t.Error("model should not appear inside input")
+	// The old /ai/run nesting must not reappear; the compat endpoint would ignore the whole request
+	if _, ok := got["input"]; ok {
+		t.Error("the body should not be nested under input")
 	}
 
-	messages, ok := input["messages"].([]any)
+	// Metadata travels as a header. In the body it would be an unrecognised field carrying a room
+	// id and a user id into the provider's request.
+	if _, ok := got["Metadata"]; ok {
+		t.Error("metadata should not be serialised into the request body")
+	}
+	if _, ok := got["metadata"]; ok {
+		t.Error("metadata should not be serialised into the request body")
+	}
+
+	messages, ok := got["messages"].([]any)
 	if !ok || len(messages) != 2 {
-		t.Fatalf("expected 2 messages, got %v", input["messages"])
+		t.Fatalf("expected 2 messages, got %v", got["messages"])
 	}
 	if first := messages[0].(map[string]any); first["role"] != "system" {
 		t.Errorf("expected the system message to be preserved, got %v", first["role"])
 	}
 }
 
-// TestRunRequestOmitsEmptyOptionalFields verifies tools and max_tokens are omitted when
-// unset, since max_tokens is deliberately not defaulted.
-func TestRunRequestOmitsEmptyOptionalFields(t *testing.T) {
-	data, err := json.Marshal(runRequest{
-		Model: "google/gemini-3-flash",
-		Input: chatInput{Messages: []Message{{Role: "user", Content: "Hello"}}},
+// TestChatRequestOmitsEmptyOptionalFields verifies tools and max_tokens are omitted when unset,
+// since max_tokens is deliberately not defaulted
+func TestChatRequestOmitsEmptyOptionalFields(t *testing.T) {
+	data, err := json.Marshal(ChatRequest{
+		Model:    "google/gemini-3-flash",
+		Messages: []Message{{Role: "user", Content: "Hello"}},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	var got struct {
-		Input map[string]any `json:"input"`
-	}
+	var got map[string]any
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if _, ok := got.Input["tools"]; ok {
+	if _, ok := got["tools"]; ok {
 		t.Error("tools should be omitted when empty")
 	}
-	if _, ok := got.Input["max_tokens"]; ok {
+	if _, ok := got["max_tokens"]; ok {
 		t.Error("max_tokens should be omitted when unset")
+	}
+}
+
+// TestChatCompletionsURL verifies the inference URL targets the Unified API, which is the only
+// endpoint that honours the OTel trace headers
+func TestChatCompletionsURL(t *testing.T) {
+	config.CloudflareAccountID = "acct123"
+	config.CloudflareAIGatewayID = "siikabot"
+
+	want := "https://gateway.ai.cloudflare.com/v1/acct123/siikabot/compat/chat/completions"
+	if got := chatCompletionsURL(); got != want {
+		t.Errorf("chatCompletionsURL() = %q, want %q", got, want)
 	}
 }
 
@@ -122,60 +139,58 @@ func TestToolCallMessageMarshalling(t *testing.T) {
 	}
 }
 
-// TestRunResponseUnwrapping verifies a successful response is read out of the envelope's
-// result field rather than the top level.
-func TestRunResponseUnwrapping(t *testing.T) {
+// TestChatCompletionResponseParsing verifies a successful response is read from the top level,
+// where the compat endpoint puts it, rather than out of a "result" field
+func TestChatCompletionResponseParsing(t *testing.T) {
 	body := []byte(`{
-		"result": {
-			"id": "chatcmpl-1",
-			"object": "chat.completion",
-			"model": "gpt-4o-mini-2024-07-18",
-			"choices": [{"index":0,"message":{"role":"assistant","content":"Red"},"finish_reason":"stop"}],
-			"usage": {"prompt_tokens":8518,"completion_tokens":1,"total_tokens":8519},
-			"gatewayMetadata": {"keySource":"Unified"}
-		},
-		"success": true,
-		"errors": [],
-		"messages": []
+		"id": "chatcmpl-1",
+		"object": "chat.completion",
+		"model": "gpt-4o-mini-2024-07-18",
+		"choices": [{"index":0,"message":{"role":"assistant","content":"Red"},"finish_reason":"stop"}],
+		"usage": {"prompt_tokens":8518,"completion_tokens":1,"total_tokens":8519,
+		          "prompt_tokens_details":{"cached_tokens":8192}}
 	}`)
 
-	var resp runResponse
+	var resp chatCompletionResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !resp.Success {
-		t.Error("expected success")
+	if resp.failed() {
+		t.Error("a successful response should not report a failure")
 	}
-	if len(resp.Result.Choices) != 1 {
-		t.Fatalf("expected 1 choice, got %d", len(resp.Result.Choices))
+	if len(resp.Choices) != 1 {
+		t.Fatalf("expected 1 choice, got %d", len(resp.Choices))
 	}
-	if content, ok := resp.Result.Choices[0].Message.Content.(string); !ok || content != "Red" {
-		t.Errorf("expected content %q, got %v", "Red", resp.Result.Choices[0].Message.Content)
+	if content, ok := resp.Choices[0].Message.Content.(string); !ok || content != "Red" {
+		t.Errorf("expected content %q, got %v", "Red", resp.Choices[0].Message.Content)
 	}
-	if resp.Result.Usage == nil || resp.Result.Usage.PromptTokens != 8518 {
-		t.Errorf("expected usage to be parsed, got %+v", resp.Result.Usage)
+	if resp.Model != "gpt-4o-mini-2024-07-18" {
+		t.Errorf("expected the resolved model id, got %q", resp.Model)
+	}
+	if resp.Usage == nil || resp.Usage.PromptTokens != 8518 {
+		t.Fatalf("expected usage to be parsed, got %+v", resp.Usage)
+	}
+	// The measurement the whole prompt-caching effort is judged by, so it has to survive the move
+	if got := resp.Usage.CachedPromptTokens(); got != 8192 {
+		t.Errorf("expected 8192 cached tokens, got %d", got)
 	}
 }
 
-// TestRunResponseToolCallUnwrapping verifies a tool call survives the envelope.
-func TestRunResponseToolCallUnwrapping(t *testing.T) {
+// TestChatCompletionResponseToolCall verifies a tool call parses from the top-level shape
+func TestChatCompletionResponseToolCall(t *testing.T) {
 	body := []byte(`{
-		"result": {
-			"choices": [{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[
-				{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"location\":\"Oulu\"}"}}
-			]},"finish_reason":"tool_calls"}]
-		},
-		"success": true,
-		"errors": []
+		"choices": [{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[
+			{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"location\":\"Oulu\"}"}}
+		]},"finish_reason":"tool_calls"}]
 	}`)
 
-	var resp runResponse
+	var resp chatCompletionResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	choice := resp.Result.Choices[0]
+	choice := resp.Choices[0]
 	if choice.FinishReason != "tool_calls" {
 		t.Errorf("expected finish_reason tool_calls, got %q", choice.FinishReason)
 	}
@@ -187,26 +202,63 @@ func TestRunResponseToolCallUnwrapping(t *testing.T) {
 	}
 }
 
-// TestErrorEnvelope verifies the Cloudflare error envelope is parsed, including the
-// numeric code. This is the shape real failures arrive in.
-func TestErrorEnvelope(t *testing.T) {
-	body := []byte(`{"errors":[{"message":"Model not found: openai/nope","code":7003}],"success":false,"result":{},"messages":[]}`)
+// TestProviderErrorShape verifies OpenAI's error object is recognised.
+//
+// This is the shape a provider failure arrives in, and it can come back with HTTP 200 when the
+// gateway itself succeeded. Missing it would mean returning an empty completion as a success.
+func TestProviderErrorShape(t *testing.T) {
+	body := []byte(`{"error":{"message":"The model does not exist","type":"invalid_request_error","code":"model_not_found"}}`)
 
-	var resp runResponse
+	var resp chatCompletionResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if resp.Success {
-		t.Error("expected success to be false")
+	if !resp.failed() {
+		t.Fatal("an error object should be reported as a failure")
+	}
+	if _, message := firstError(resp.apiErrors()); message != "The model does not exist" {
+		t.Errorf("unexpected message: %q", message)
+	}
+	if got := resp.errorCode(); got != "model_not_found" {
+		t.Errorf("expected the provider string code, got %q", got)
+	}
+	// Classification has to reach the same verdict from the normalised form
+	if kind := classifyResponseError(200, resp.apiErrors()); kind != ErrorKindProviderError {
+		t.Errorf("expected provider_error, got %q", kind)
+	}
+}
+
+// TestGatewayErrorShape verifies Cloudflare's own error array is still recognised, since the
+// gateway can fail before the provider is ever reached
+func TestGatewayErrorShape(t *testing.T) {
+	body := []byte(`{"errors":[{"message":"Model not found: openai/nope","code":7003}]}`)
+
+	var resp chatCompletionResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 
-	code, message := firstError(resp.Errors)
-	if code != 7003 {
-		t.Errorf("expected code 7003, got %d", code)
+	if !resp.failed() {
+		t.Fatal("an errors array should be reported as a failure")
 	}
-	if message != "Model not found: openai/nope" {
+	if _, message := firstError(resp.apiErrors()); message != "Model not found: openai/nope" {
 		t.Errorf("unexpected message: %q", message)
+	}
+	if got := resp.errorCode(); got != "7003" {
+		t.Errorf("expected the gateway numeric code, got %q", got)
+	}
+}
+
+// TestSuccessfulResponseIsNotMistakenForAFailure guards the absent success flag: the compat
+// endpoint has none, so a response is a failure only if it says so
+func TestSuccessfulResponseIsNotMistakenForAFailure(t *testing.T) {
+	var resp chatCompletionResponse
+	if err := json.Unmarshal([]byte(`{"choices":[{"message":{"role":"assistant","content":"hi"}}]}`), &resp); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.failed() {
+		t.Error("a response with no error fields should not be a failure")
 	}
 }
 
