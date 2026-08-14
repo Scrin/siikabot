@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"fmt"
+	"github.com/Scrin/siikabot/tracing"
 	"strings"
 	"time"
 
@@ -77,10 +78,10 @@ func Init(ctx context.Context) {
 			case <-ticker.C:
 				// Each tick is its own root span: there is no request to inherit from, and
 				// attaching to the bot's context would produce a span that never ends
-				tickCtx, span := tracer.Start(ctx, "chat.cleanup")
-				cleanupChatHistory(tickCtx)
-				cleanupChatUsage(tickCtx)
-				span.End()
+				tracing.Run(ctx, tracer, "chat.cleanup", func(tickCtx context.Context) {
+					cleanupChatHistory(tickCtx)
+					cleanupChatUsage(tickCtx)
+				})
 			}
 		}
 	}()

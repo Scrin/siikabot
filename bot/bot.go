@@ -25,6 +25,7 @@ import (
 	"github.com/Scrin/siikabot/matrix"
 	"github.com/Scrin/siikabot/metrics"
 	"github.com/rs/zerolog/log"
+	"go.opentelemetry.io/otel/trace"
 	"maunium.net/go/mautrix/event"
 )
 
@@ -69,6 +70,20 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 		msg := evt.Content.Raw["body"].(string)
 
 		attrs := messageAttrs(evt.RoomID.String(), evt.Sender.String(), evt.ID.String())
+
+		// Everything from here to the dispatch below is real work — a room-config lookup, a reply
+		// lookup against the homeserver, mention detection — and until this span existed it all
+		// happened before any span was open. That had two costs: its latency was invisible, because
+		// the handler span only starts once the routing decision is already made, and every call it
+		// made produced a parentless span of its own. Those orphans were the bulk of the junk traces
+		// in Tempo.
+		//
+		// The handler spans started below are children of this one and outlive it, since they run
+		// asynchronously. That is legal and reads correctly: this span is the routing, not the work.
+		ctx, routeSpan := tracer.Start(ctx, "message.route",
+			trace.WithSpanKind(trace.SpanKindConsumer),
+			trace.WithAttributes(attrs...))
+		defer routeSpan.End()
 
 		// Track message stats asynchronously
 		traced(ctx, "stats.message", attrs, func(ctx context.Context) {
@@ -313,7 +328,10 @@ func Init(ctx context.Context) error {
 		return err
 	}
 
-	resp := matrix.InitialSync(ctx)
+	resp, err := matrix.InitialSync(ctx)
+	if err != nil {
+		return err
+	}
 	for roomID := range resp.Rooms.Invite {
 		matrix.JoinRoom(ctx, roomID.String())
 		log.Info().
@@ -331,6 +349,6 @@ func Init(ctx context.Context) error {
 	return nil
 }
 
-func Run() error {
-	return matrix.Sync()
+func Run(ctx context.Context) error {
+	return matrix.Sync(ctx)
 }

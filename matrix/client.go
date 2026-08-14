@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Scrin/siikabot/config"
@@ -15,6 +16,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/crypto"
@@ -62,14 +64,63 @@ func JoinRoom(ctx context.Context, roomID string) {
 	}
 }
 
+// displayNameTTL bounds how stale a cached display name may be. Display names change rarely and
+// nothing here breaks if one is an hour out of date.
+const displayNameTTL = time.Hour
+
+type displayNameEntry struct {
+	name      string
+	fetchedAt time.Time
+}
+
+var displayNameCache = struct {
+	sync.Mutex
+	entries map[string]displayNameEntry
+}{entries: make(map[string]displayNameEntry)}
+
+// GetDisplayName returns a user's display name, cached for displayNameTTL.
+//
+// The cache is not an optimisation so much as a correction. This is called from mention detection on
+// every single incoming message — twice more when a mention matches — and each call used to be a
+// live homeserver round trip on the critical path before the bot had even decided what the message
+// was. Bot display names in particular are effectively constant.
+// fresh reports whether a cached entry can still be served without asking the homeserver
+func (e displayNameEntry) fresh() bool {
+	return time.Since(e.fetchedAt) < displayNameTTL
+}
+
+// lookupDisplayName returns the cached entry for a user, if there is one
+func lookupDisplayName(mxid string) (displayNameEntry, bool) {
+	displayNameCache.Lock()
+	defer displayNameCache.Unlock()
+
+	entry, ok := displayNameCache.entries[mxid]
+	return entry, ok
+}
+
 func GetDisplayName(ctx context.Context, mxid string) string {
+	entry, ok := lookupDisplayName(mxid)
+	if ok && entry.fresh() {
+		return entry.name
+	}
+
 	dn, err := client.GetDisplayName(ctx, id.UserID(mxid))
 	if err != nil {
-		log.Error().Err(err).Str("user_id", mxid).Msg("Failed to get display name")
+		log.Error().Ctx(ctx).Err(err).Str("user_id", mxid).Msg("Failed to get display name")
+		// A failure is deliberately not cached, so a homeserver blip does not pin the fallback for
+		// an hour. Any previously cached name is still better than the raw id.
+		if ok {
+			return entry.name
+		}
 	}
 	if dn == nil {
 		return mxid
 	}
+
+	displayNameCache.Lock()
+	displayNameCache.entries[mxid] = displayNameEntry{name: dn.DisplayName, fetchedAt: time.Now()}
+	displayNameCache.Unlock()
+
 	return dn.DisplayName
 }
 
@@ -88,6 +139,19 @@ func GetRoomName(ctx context.Context, roomID string) string {
 func processOutboundEvents(ctx context.Context) {
 	for evt := range outboundEvents {
 		sendOutboundEvent(ctx, evt)
+	}
+}
+
+// recordSendOutcome records how a send ended, on the metric and on the span alike.
+//
+// The failure paths all recorded the metric and left the span untouched, so a reply that was never
+// delivered produced a span with an unset status — rendered exactly like a success. That made
+// matrix.send the most misleading span in the system, sitting as it does at the end of the path a
+// user complains about.
+func recordSendOutcome(span trace.Span, status constants.MatrixSendStatus) {
+	metrics.RecordMatrixMessageSent(status)
+	if status != constants.MatrixSendSuccess {
+		span.SetStatus(codes.Error, string(status))
 	}
 }
 
@@ -124,7 +188,7 @@ encryptionLoop:
 		if err != nil {
 			log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to check if room is encrypted")
 			if !evt.RetryOnFailure {
-				metrics.RecordMatrixMessageSent(constants.MatrixSendFailedEncryption)
+				recordSendOutcome(span, constants.MatrixSendFailedEncryption)
 				return
 			}
 			time.Sleep(100 * time.Millisecond)
@@ -139,7 +203,7 @@ encryptionLoop:
 				if err != nil {
 					log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to get room members")
 					if !evt.RetryOnFailure {
-						metrics.RecordMatrixMessageSent(constants.MatrixSendFailedEncryption)
+						recordSendOutcome(span, constants.MatrixSendFailedEncryption)
 						return
 					}
 					time.Sleep(100 * time.Millisecond)
@@ -149,7 +213,7 @@ encryptionLoop:
 				if err != nil {
 					log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to share group session")
 					if !evt.RetryOnFailure {
-						metrics.RecordMatrixMessageSent(constants.MatrixSendFailedEncryption)
+						recordSendOutcome(span, constants.MatrixSendFailedEncryption)
 						return
 					}
 					time.Sleep(100 * time.Millisecond)
@@ -161,7 +225,7 @@ encryptionLoop:
 			if err != nil {
 				log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to encrypt message")
 				if !evt.RetryOnFailure {
-					metrics.RecordMatrixMessageSent(constants.MatrixSendFailedEncryption)
+					recordSendOutcome(span, constants.MatrixSendFailedEncryption)
 					return
 				}
 				time.Sleep(100 * time.Millisecond)
@@ -182,7 +246,7 @@ retry:
 			if evt.done != nil {
 				evt.done <- string(resp.EventID)
 			}
-			metrics.RecordMatrixMessageSent(constants.MatrixSendSuccess)
+			recordSendOutcome(span, constants.MatrixSendSuccess)
 			metrics.RecordMatrixMessageLatency(time.Since(startTime).Seconds())
 			break // Success, break the retry loop
 		}
@@ -190,7 +254,7 @@ retry:
 		httpError, isHttpError := err.(mautrix.HTTPError)
 		if !isHttpError {
 			log.Error().Ctx(ctx).Err(err).Msg("Failed to parse error response of unexpected type")
-			metrics.RecordMatrixMessageSent(constants.MatrixSendFailedSend)
+			recordSendOutcome(span, constants.MatrixSendFailedSend)
 			evt.done <- ""
 			break
 		}
@@ -209,7 +273,7 @@ retry:
 				Str("room_id", evt.RoomID).
 				Str("error_code", e).
 				Msg("Failed to send message due to permissions")
-			metrics.RecordMatrixMessageSent(constants.MatrixSendFailedForbidden)
+			recordSendOutcome(span, constants.MatrixSendFailedForbidden)
 			evt.done <- ""
 			break retry
 		default:
@@ -221,7 +285,7 @@ retry:
 				Msg("Failed to send message")
 		}
 		if !evt.RetryOnFailure {
-			metrics.RecordMatrixMessageSent(constants.MatrixSendFailedSend)
+			recordSendOutcome(span, constants.MatrixSendFailedSend)
 			evt.done <- ""
 			break
 		}
@@ -307,18 +371,24 @@ func Init(ctx context.Context, handleEvent func(ctx context.Context, evt *event.
 	return nil
 }
 
-// InitialSync gets the initial sync from the server for catching up with important missed event such as invites
-func InitialSync(ctx context.Context) *mautrix.RespSync {
+// InitialSync gets the initial sync from the server for catching up with important missed event such as invites.
+//
+// Returns an error rather than exiting: a process that calls os.Exit here skips the tracing flush,
+// so the spans explaining the failure are discarded along with everything else still batched.
+func InitialSync(ctx context.Context) (*mautrix.RespSync, error) {
 	resp, err := client.SyncRequest(ctx, 0, "", "", false, "online")
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to perform initial sync")
+		log.Error().Ctx(ctx).Err(err).Msg("Failed to perform initial sync")
+		return nil, fmt.Errorf("failed to perform initial sync: %w", err)
 	}
-	return resp
+	return resp, nil
 }
 
-// Sync begins synchronizing the events from the server and returns only in case of a severe error
-func Sync() error {
-	return client.Sync()
+// Sync begins synchronizing events from the server, returning when the context ends or on a severe
+// error. Taking a context is what lets a shutdown signal unwind the process in an orderly way
+// instead of killing it where it stands.
+func Sync(ctx context.Context) error {
+	return client.SyncWithContext(ctx)
 }
 
 // SendTyping sends a typing indicator to a room.

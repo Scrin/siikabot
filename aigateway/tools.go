@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Scrin/siikabot/metrics"
+	"github.com/Scrin/siikabot/tracing"
 	"github.com/rs/zerolog/log"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -136,6 +137,26 @@ func (r *ToolRegistry) HandleToolCallsIndividually(ctx context.Context, toolCall
 				attribute.String("siikabot.tool.call_id", currentCall.ID),
 			))
 			defer span.End()
+
+			// A panicking tool handler used to take the whole process down with it. Recovering keeps
+			// the bot alive, but the model requires a response for every tool call it asked for —
+			// omitting one makes the *next* request fail with a confusing error about an unanswered
+			// call — so a failure response is substituted in its place.
+			//
+			// Registered before the handler runs, and the handler runs outside the mutex, so this
+			// can safely take the lock while unwinding.
+			defer func() {
+				if recovered := tracing.Recover(ctx, span); recovered != nil {
+					metrics.RecordToolCall(currentCall.Function.Name, false)
+
+					mu.Lock()
+					responses = append(responses, ToolResponse{
+						ToolCallID: currentCall.ID,
+						Response:   fmt.Sprintf("Tool %s failed unexpectedly", currentCall.Function.Name),
+					})
+					mu.Unlock()
+				}
+			}()
 
 			handler, exists := r.handlers[currentCall.Function.Name]
 			if !exists {

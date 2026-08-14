@@ -65,6 +65,9 @@ func Init(ctx context.Context) (func(context.Context) error, error) {
 	}
 
 	provider := sdktrace.NewTracerProvider(
+		// Registered ahead of the batcher so the intent is clear, though the batcher only reads a
+		// span at OnEnd and would see the redacted form either way
+		sdktrace.WithSpanProcessor(redactingProcessor{}),
 		sdktrace.WithBatcher(exporter),
 		sdktrace.WithResource(newResource()),
 		// Everything is sampled. At this bot's volume the cost is immaterial, and partial sampling

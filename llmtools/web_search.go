@@ -11,6 +11,7 @@ import (
 
 	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/config"
+	"github.com/Scrin/siikabot/tracing"
 	"github.com/rs/zerolog/log"
 )
 
@@ -140,12 +141,12 @@ func performGoogleSearch(ctx context.Context, query string) (*GoogleSearchRespon
 
 	requestURL := fmt.Sprintf("%s?%s", baseURL, params.Encode())
 
-	log.Debug().Ctx(ctx).Str("url", requestURL).Str("query", query).Msg("Fetching web search results")
+	log.Debug().Ctx(ctx).Str("url", tracing.RedactURL(requestURL)).Str("query", query).Msg("Fetching web search results")
 
 	// Create HTTP request
 	req, err := http.NewRequestWithContext(ctx, "GET", requestURL, nil)
 	if err != nil {
-		log.Error().Ctx(ctx).Err(err).Str("url", requestURL).Msg("Failed to create web search API request")
+		log.Error().Ctx(ctx).Err(err).Str("url", tracing.RedactURL(requestURL)).Msg("Failed to create web search API request")
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
@@ -155,13 +156,13 @@ func performGoogleSearch(ctx context.Context, query string) (*GoogleSearchRespon
 	// Execute the request
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		log.Error().Ctx(ctx).Err(err).Str("url", requestURL).Msg("Failed to fetch web search results")
+		log.Error().Ctx(ctx).Err(err).Str("url", tracing.RedactURL(requestURL)).Msg("Failed to fetch web search results")
 		return nil, fmt.Errorf("failed to fetch web search results: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		log.Error().Ctx(ctx).Int("status_code", resp.StatusCode).Str("url", requestURL).Msg("Web search API returned non-OK status")
+		log.Error().Ctx(ctx).Int("status_code", resp.StatusCode).Str("url", tracing.RedactURL(requestURL)).Msg("Web search API returned non-OK status")
 
 		// Try to read the error response body for more details
 		errorBody, _ := io.ReadAll(resp.Body)
@@ -175,7 +176,7 @@ func performGoogleSearch(ctx context.Context, query string) (*GoogleSearchRespon
 	// Read the response body
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Error().Ctx(ctx).Err(err).Str("url", requestURL).Msg("Failed to read web search API response")
+		log.Error().Ctx(ctx).Err(err).Str("url", tracing.RedactURL(requestURL)).Msg("Failed to read web search API response")
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 

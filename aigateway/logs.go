@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/Scrin/siikabot/tracing"
 	"io"
 	"net/http"
 	"time"
@@ -70,10 +71,12 @@ func StartLogPoller(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				// Its own root span per poll, for the same reason as the other background jobs
-				pollCtx, span := tracer.Start(ctx, "aigateway.poll_logs")
-				cursor, seenAtCursor = pollLogs(pollCtx, cursor, seenAtCursor)
-				span.End()
+				// Its own root span per poll: there is no request to inherit from, and attaching to
+				// the bot's context would produce a span that never ends. tracing.Run also keeps a
+				// panic in a poll from killing the process along with every span still batched.
+				tracing.Run(ctx, tracer, "aigateway.poll_logs", func(pollCtx context.Context) {
+					cursor, seenAtCursor = pollLogs(pollCtx, cursor, seenAtCursor)
+				})
 			}
 		}
 	}()

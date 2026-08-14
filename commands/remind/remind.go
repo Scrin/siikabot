@@ -10,7 +10,10 @@ import (
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/matrix"
 	"github.com/Scrin/siikabot/metrics"
+	"github.com/Scrin/siikabot/tracing"
 	"github.com/rs/zerolog/log"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var dateTimeFormats = []string{
@@ -47,16 +50,33 @@ func StartReminder(ctx context.Context, rem db.Reminder) {
 		Time("remind_time", rem.RemindTime).
 		Msg("Starting reminder")
 
+	deliverCtx, scheduledBy := deliveryContext(ctx)
+
 	f := func() {
-		matrix.SendFormattedMessage(ctx, rem.RoomID, "<a href=\"https://matrix.to/#/"+rem.UserID+"\">"+matrix.GetDisplayName(ctx, rem.UserID)+"</a> "+rem.Message)
-		if err := db.RemoveReminder(ctx, rem.ID); err != nil {
-			log.Error().Err(err).Int64("id", rem.ID).Msg("Failed to remove triggered reminder")
+		opts := []trace.SpanStartOption{
+			trace.WithSpanKind(trace.SpanKindInternal),
+			trace.WithAttributes(
+				attribute.String("matrix.room_id", rem.RoomID),
+				attribute.String("matrix.user_id", rem.UserID),
+				attribute.Int64("siikabot.remind.id", rem.ID),
+			),
 		}
-		metrics.RecordReminderTriggered()
-		log.Debug().
-			Str("user_id", rem.UserID).
-			Str("room_id", rem.RoomID).
-			Msg("Reminder triggered")
+		if scheduledBy.SpanContext.IsValid() {
+			opts = append(opts, trace.WithLinks(scheduledBy))
+		}
+
+		tracing.Run(deliverCtx, tracer, "remind.deliver", func(ctx context.Context) {
+			matrix.SendFormattedMessage(ctx, rem.RoomID, "<a href=\"https://matrix.to/#/"+rem.UserID+"\">"+matrix.GetDisplayName(ctx, rem.UserID)+"</a> "+rem.Message)
+			if err := db.RemoveReminder(ctx, rem.ID); err != nil {
+				log.Error().Ctx(ctx).Err(err).Int64("id", rem.ID).Msg("Failed to remove triggered reminder")
+			}
+			metrics.RecordReminderTriggered()
+			log.Debug().
+				Ctx(ctx).
+				Str("user_id", rem.UserID).
+				Str("room_id", rem.RoomID).
+				Msg("Reminder triggered")
+		}, opts...)
 	}
 	duration := time.Until(rem.RemindTime)
 	if duration <= 0 {
