@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/config"
@@ -154,8 +153,7 @@ func performGoogleSearch(ctx context.Context, query string) (*GoogleSearchRespon
 	req.Header.Set("User-Agent", "SiikabotWebSearch/1.0")
 
 	// Execute the request
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("url", requestURL).Msg("Failed to fetch web search results")
 		return nil, fmt.Errorf("failed to fetch web search results: %w", err)

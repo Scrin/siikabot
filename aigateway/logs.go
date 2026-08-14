@@ -70,7 +70,10 @@ func StartLogPoller(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				cursor, seenAtCursor = pollLogs(ctx, cursor, seenAtCursor)
+				// Its own root span per poll, for the same reason as the other background jobs
+				pollCtx, span := tracer.Start(ctx, "aigateway.poll_logs")
+				cursor, seenAtCursor = pollLogs(pollCtx, cursor, seenAtCursor)
+				span.End()
 			}
 		}
 	}()

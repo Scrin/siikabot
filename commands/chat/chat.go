@@ -75,8 +75,12 @@ func Init(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				cleanupChatHistory(ctx)
-				cleanupChatUsage(ctx)
+				// Each tick is its own root span: there is no request to inherit from, and
+				// attaching to the bot's context would produce a span that never ends
+				tickCtx, span := tracer.Start(ctx, "chat.cleanup")
+				cleanupChatHistory(tickCtx)
+				cleanupChatUsage(tickCtx)
+				span.End()
 			}
 		}
 	}()
@@ -201,7 +205,7 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 		count, err := db.DeleteChatHistoryForRoom(ctx, roomID)
 		if err != nil {
 			log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Msg("Failed to reset chat history")
-			matrix.SendMessage(roomID, "Failed to reset chat history")
+			matrix.SendMessage(ctx, roomID, "Failed to reset chat history")
 			return
 		}
 		// The anchor points at a row that no longer exists, so clear it along with the history
@@ -210,7 +214,7 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 			// Continue: a stale anchor degrades to starting from the oldest available row
 		}
 		log.Info().Ctx(ctx).Str("room_id", roomID).Int64("deleted_count", count).Msg("Chat history reset")
-		matrix.SendMessage(roomID, fmt.Sprintf("Chat history reset (%d messages deleted)", count))
+		matrix.SendMessage(ctx, roomID, fmt.Sprintf("Chat history reset (%d messages deleted)", count))
 	case "config":
 		// Show current configuration for the room
 		textModel := getTextModelForRoom(ctx, roomID)
@@ -219,7 +223,7 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 		maxToolIterations := getMaxToolIterationsForRoom(ctx, roomID)
 		maxWebContentSize := getMaxWebContentSizeForRoom(ctx, roomID)
 
-		matrix.SendMessage(roomID, fmt.Sprintf("Current chat configuration for this room:\n"+
+		matrix.SendMessage(ctx, roomID, fmt.Sprintf("Current chat configuration for this room:\n"+
 			"Text model: %s\n"+
 			"Image model: %s\n"+
 			"Context window: %s\n"+
@@ -231,12 +235,12 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 			describeImageDetail(ctx, roomID), maxToolIterations, maxWebContentSize))
 	case "model":
 		if len(split) < 4 {
-			matrix.SendMessage(roomID, "Usage: !chat model [text|image] <model_name>")
+			matrix.SendMessage(ctx, roomID, "Usage: !chat model [text|image] <model_name>")
 			return
 		}
 
 		if sender != config.Admin {
-			matrix.SendMessage(roomID, "Only admins can change the chat models")
+			matrix.SendMessage(ctx, roomID, "Only admins can change the chat models")
 			return
 		}
 
@@ -251,14 +255,14 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 					Str("room_id", roomID).
 					Str("model", newModel).
 					Msg("Failed to set room text chat model")
-				matrix.SendMessage(roomID, "Failed to set text chat model")
+				matrix.SendMessage(ctx, roomID, "Failed to set text chat model")
 				return
 			}
 			log.Info().Ctx(ctx).
 				Str("room_id", roomID).
 				Str("model", newModel).
 				Msg("Text chat model changed")
-			matrix.SendMessage(roomID, fmt.Sprintf("Text chat model changed to: %s", newModel))
+			matrix.SendMessage(ctx, roomID, fmt.Sprintf("Text chat model changed to: %s", newModel))
 		case "image":
 			err := db.SetRoomChatLLMModelImage(ctx, roomID, newModel)
 			if err != nil {
@@ -266,41 +270,41 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 					Str("room_id", roomID).
 					Str("model", newModel).
 					Msg("Failed to set room image chat model")
-				matrix.SendMessage(roomID, "Failed to set image chat model")
+				matrix.SendMessage(ctx, roomID, "Failed to set image chat model")
 				return
 			}
 			log.Info().Ctx(ctx).
 				Str("room_id", roomID).
 				Str("model", newModel).
 				Msg("Image chat model changed")
-			matrix.SendMessage(roomID, fmt.Sprintf("Image chat model changed to: %s", newModel))
+			matrix.SendMessage(ctx, roomID, fmt.Sprintf("Image chat model changed to: %s", newModel))
 		default:
-			matrix.SendMessage(roomID, "Usage: !chat model [text|image] <model_name>")
+			matrix.SendMessage(ctx, roomID, "Usage: !chat model [text|image] <model_name>")
 		}
 	case "context":
 		if len(split) < 4 {
-			matrix.SendMessage(roomID, "Usage: !chat context <high_tokens> <low_tokens>")
+			matrix.SendMessage(ctx, roomID, "Usage: !chat context <high_tokens> <low_tokens>")
 			return
 		}
 
 		if sender != config.Admin {
-			matrix.SendMessage(roomID, "Only admins can change the context window")
+			matrix.SendMessage(ctx, roomID, "Only admins can change the context window")
 			return
 		}
 
 		var highTokens, lowTokens int
 		if _, err := fmt.Sscanf(split[2], "%d", &highTokens); err != nil || highTokens <= 0 {
-			matrix.SendMessage(roomID, "High mark must be a positive integer")
+			matrix.SendMessage(ctx, roomID, "High mark must be a positive integer")
 			return
 		}
 		if _, err := fmt.Sscanf(split[3], "%d", &lowTokens); err != nil || lowTokens <= 0 {
-			matrix.SendMessage(roomID, "Low mark must be a positive integer")
+			matrix.SendMessage(ctx, roomID, "Low mark must be a positive integer")
 			return
 		}
 		// The window grows to the high mark then drops back to the low mark, so the marks have to
 		// straddle a usable range or the window would be trimmed on every single turn
 		if lowTokens >= highTokens {
-			matrix.SendMessage(roomID, "Low mark must be below the high mark")
+			matrix.SendMessage(ctx, roomID, "Low mark must be below the high mark")
 			return
 		}
 
@@ -310,7 +314,7 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 				Int("high_tokens", highTokens).
 				Int("low_tokens", lowTokens).
 				Msg("Failed to set room context window")
-			matrix.SendMessage(roomID, "Failed to set context window")
+			matrix.SendMessage(ctx, roomID, "Failed to set context window")
 			return
 		}
 		log.Info().Ctx(ctx).
@@ -318,21 +322,21 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 			Int("high_tokens", highTokens).
 			Int("low_tokens", lowTokens).
 			Msg("Context window changed")
-		matrix.SendMessage(roomID, fmt.Sprintf("Context window changed to: %d / %d tokens", highTokens, lowTokens))
+		matrix.SendMessage(ctx, roomID, fmt.Sprintf("Context window changed to: %d / %d tokens", highTokens, lowTokens))
 	case "maxtokens":
 		if len(split) < 3 {
-			matrix.SendMessage(roomID, "Usage: !chat maxtokens <tokens>")
+			matrix.SendMessage(ctx, roomID, "Usage: !chat maxtokens <tokens>")
 			return
 		}
 
 		if sender != config.Admin {
-			matrix.SendMessage(roomID, "Only admins can change the max response tokens")
+			matrix.SendMessage(ctx, roomID, "Only admins can change the max response tokens")
 			return
 		}
 
 		var maxTokens int
 		if _, err := fmt.Sscanf(split[2], "%d", &maxTokens); err != nil || maxTokens <= 0 {
-			matrix.SendMessage(roomID, "Max response tokens must be a positive integer")
+			matrix.SendMessage(ctx, roomID, "Max response tokens must be a positive integer")
 			return
 		}
 
@@ -341,28 +345,28 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 				Str("room_id", roomID).
 				Int("max_tokens", maxTokens).
 				Msg("Failed to set room max response tokens")
-			matrix.SendMessage(roomID, "Failed to set max response tokens")
+			matrix.SendMessage(ctx, roomID, "Failed to set max response tokens")
 			return
 		}
 		log.Info().Ctx(ctx).
 			Str("room_id", roomID).
 			Int("max_tokens", maxTokens).
 			Msg("Max response tokens changed")
-		matrix.SendMessage(roomID, fmt.Sprintf("Max response tokens changed to: %d", maxTokens))
+		matrix.SendMessage(ctx, roomID, fmt.Sprintf("Max response tokens changed to: %d", maxTokens))
 	case "imagedetail":
 		if len(split) < 3 {
-			matrix.SendMessage(roomID, "Usage: !chat imagedetail [low|high|auto]")
+			matrix.SendMessage(ctx, roomID, "Usage: !chat imagedetail [low|high|auto]")
 			return
 		}
 
 		if sender != config.Admin {
-			matrix.SendMessage(roomID, "Only admins can change the image detail")
+			matrix.SendMessage(ctx, roomID, "Only admins can change the image detail")
 			return
 		}
 
 		detail := strings.TrimSpace(split[2])
 		if detail != "low" && detail != "high" && detail != imageDetailAuto {
-			matrix.SendMessage(roomID, "Usage: !chat imagedetail [low|high|auto]")
+			matrix.SendMessage(ctx, roomID, "Usage: !chat imagedetail [low|high|auto]")
 			return
 		}
 
@@ -371,29 +375,29 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 				Str("room_id", roomID).
 				Str("image_detail", detail).
 				Msg("Failed to set room image detail")
-			matrix.SendMessage(roomID, "Failed to set image detail")
+			matrix.SendMessage(ctx, roomID, "Failed to set image detail")
 			return
 		}
 		log.Info().Ctx(ctx).
 			Str("room_id", roomID).
 			Str("image_detail", detail).
 			Msg("Image detail changed")
-		matrix.SendMessage(roomID, fmt.Sprintf("Image detail changed to: %s", detail))
+		matrix.SendMessage(ctx, roomID, fmt.Sprintf("Image detail changed to: %s", detail))
 	case "tools":
 		if len(split) < 3 {
-			matrix.SendMessage(roomID, "Usage: !chat tools <max_iterations>")
+			matrix.SendMessage(ctx, roomID, "Usage: !chat tools <max_iterations>")
 			return
 		}
 
 		if sender != config.Admin {
-			matrix.SendMessage(roomID, "Only admins can change the max tool iterations")
+			matrix.SendMessage(ctx, roomID, "Only admins can change the max tool iterations")
 			return
 		}
 
 		var maxIterations int
 		_, err := fmt.Sscanf(split[2], "%d", &maxIterations)
 		if err != nil || maxIterations <= 0 {
-			matrix.SendMessage(roomID, "Max iterations must be a positive integer")
+			matrix.SendMessage(ctx, roomID, "Max iterations must be a positive integer")
 			return
 		}
 
@@ -403,29 +407,29 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 				Str("room_id", roomID).
 				Int("max_iterations", maxIterations).
 				Msg("Failed to set room max tool iterations")
-			matrix.SendMessage(roomID, "Failed to set max tool iterations")
+			matrix.SendMessage(ctx, roomID, "Failed to set max tool iterations")
 			return
 		}
 		log.Info().Ctx(ctx).
 			Str("room_id", roomID).
 			Int("max_iterations", maxIterations).
 			Msg("Max tool iterations changed")
-		matrix.SendMessage(roomID, fmt.Sprintf("Max tool iterations changed to: %d", maxIterations))
+		matrix.SendMessage(ctx, roomID, fmt.Sprintf("Max tool iterations changed to: %d", maxIterations))
 	case "web":
 		if len(split) < 3 {
-			matrix.SendMessage(roomID, "Usage: !chat web <max_size_bytes>")
+			matrix.SendMessage(ctx, roomID, "Usage: !chat web <max_size_bytes>")
 			return
 		}
 
 		if sender != config.Admin {
-			matrix.SendMessage(roomID, "Only admins can change the max web content size")
+			matrix.SendMessage(ctx, roomID, "Only admins can change the max web content size")
 			return
 		}
 
 		var maxSize int
 		_, err := fmt.Sscanf(split[2], "%d", &maxSize)
 		if err != nil || maxSize <= 0 {
-			matrix.SendMessage(roomID, "Max web content size must be a positive integer")
+			matrix.SendMessage(ctx, roomID, "Max web content size must be a positive integer")
 			return
 		}
 
@@ -435,15 +439,15 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 				Str("room_id", roomID).
 				Int("max_size", maxSize).
 				Msg("Failed to set room max web content size")
-			matrix.SendMessage(roomID, "Failed to set max web content size")
+			matrix.SendMessage(ctx, roomID, "Failed to set max web content size")
 			return
 		}
 		log.Info().Ctx(ctx).
 			Str("room_id", roomID).
 			Int("max_size", maxSize).
 			Msg("Max web content size changed")
-		matrix.SendMessage(roomID, fmt.Sprintf("Max web content size changed to: %d bytes", maxSize))
+		matrix.SendMessage(ctx, roomID, fmt.Sprintf("Max web content size changed to: %d bytes", maxSize))
 	default:
-		matrix.SendMessage(roomID, "Unknown command")
+		matrix.SendMessage(ctx, roomID, "Unknown command")
 	}
 }

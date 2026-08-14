@@ -184,8 +184,7 @@ func getElectricityPrices(ctx context.Context, date time.Time) ([]PriceEntry, er
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("url", url).Msg("Failed to fetch electricity prices")
 		return nil, fmt.Errorf("failed to fetch electricity prices: %w", err)

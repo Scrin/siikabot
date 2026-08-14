@@ -25,6 +25,9 @@ var requiredVars = []string{
 	"SIIKABOT_GOOGLE_SEARCH_ENGINE_ID",
 	"SIIKABOT_ALERTMANAGER_USER",
 	"SIIKABOT_ALERTMANAGER_PASSWORD",
+	"SIIKABOT_TEMPO_ENDPOINT",
+	"SIIKABOT_TEMPO_USER",
+	"SIIKABOT_TEMPO_PASSWORD",
 }
 
 // setAllRequired populates every required variable with a placeholder, restored by t.Setenv
@@ -32,6 +35,58 @@ func setAllRequired(t *testing.T) {
 	t.Helper()
 	for _, name := range requiredVars {
 		t.Setenv(name, "test-value")
+	}
+	// The endpoint is validated as a URL, so a placeholder will not do for it
+	t.Setenv("SIIKABOT_TEMPO_ENDPOINT", "https://tempo.example.org:443")
+}
+
+// TestTempoEndpointMustBeAURL guards the shape of the endpoint rather than merely its presence.
+//
+// The OTLP exporter treats an endpoint it cannot parse as a reason to fall back to localhost:4317,
+// and a bare "host:port" parses without error but yields no host at all. Either way the bot runs with
+// tracing that appears configured and exports nowhere, so the value is rejected here at boot instead.
+func TestTempoEndpointMustBeAURL(t *testing.T) {
+	rejected := map[string]string{
+		"no scheme":       "tempo.example.org:443",
+		"scheme only":     "https://",
+		"wrong scheme":    "grpc://tempo.example.org:443",
+		"host only":       "tempo.example.org",
+		"unparseable":     "https://tempo.example.org:port",
+		"leading garbage": "://tempo.example.org",
+	}
+
+	for name, endpoint := range rejected {
+		t.Run(name, func(t *testing.T) {
+			setAllRequired(t)
+			t.Setenv("SIIKABOT_TEMPO_ENDPOINT", endpoint)
+
+			err := loadConfig()
+			if err == nil {
+				t.Fatalf("%q was accepted as a Tempo endpoint", endpoint)
+			}
+			if !strings.Contains(err.Error(), "SIIKABOT_TEMPO_ENDPOINT") {
+				t.Errorf("error should name the variable, got: %v", err)
+			}
+		})
+	}
+}
+
+// TestTempoEndpointAcceptsValidURLs verifies plaintext endpoints stay usable, since a local Tempo
+// without TLS is the ordinary way to try this out
+func TestTempoEndpointAcceptsValidURLs(t *testing.T) {
+	for _, endpoint := range []string{
+		"https://tempo.example.org:443",
+		"https://tempo.example.org",
+		"http://localhost:4317",
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			setAllRequired(t)
+			t.Setenv("SIIKABOT_TEMPO_ENDPOINT", endpoint)
+
+			if err := loadConfig(); err != nil {
+				t.Fatalf("%q should be a valid endpoint, got: %v", endpoint, err)
+			}
+		})
 	}
 }
 

@@ -2,6 +2,7 @@ package bot
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"text/template"
 	"time"
@@ -38,7 +39,7 @@ Started at <b>{{ .StartsAt.Format "Jan 02, 2006 15:04:05 UTC" }}</b>{{ if eq .St
 
 var alertTemplate = template.Must(template.New("alert").Parse(alertMessageTemplate))
 
-func sendAlertmanagerMsg(payload AlertmanagerPayload, roomID string) {
+func sendAlertmanagerMsg(ctx context.Context, payload AlertmanagerPayload, roomID string) {
 	log.Debug().
 		Str("room_id", roomID).
 		Str("status", payload.Status).
@@ -57,7 +58,7 @@ func sendAlertmanagerMsg(payload AlertmanagerPayload, roomID string) {
 				Msg("Failed to execute alert template")
 			continue
 		}
-		matrix.SendFormattedMessage(roomID, buf.String())
+		matrix.SendFormattedMessage(ctx, roomID, buf.String())
 	}
 }
 
@@ -104,6 +105,6 @@ func AlertmanagerWebhookHandler(c *gin.Context) {
 		Int("alert_count", len(payload.Alerts)).
 		Msg("Processing Alertmanager webhook request")
 
-	sendAlertmanagerMsg(payload, roomID)
+	sendAlertmanagerMsg(c.Request.Context(), payload, roomID)
 	c.Status(http.StatusOK)
 }

@@ -17,7 +17,7 @@ import (
 func Handle(ctx context.Context, roomID, sender, msg string) {
 	split := strings.Fields(msg)
 	if len(split) < 2 {
-		matrix.SendMessage(roomID, "Usage: !auth <challenge> or !auth logout")
+		matrix.SendMessage(ctx, roomID, "Usage: !auth <challenge> or !auth logout")
 		return
 	}
 
@@ -38,12 +38,12 @@ func handleLogout(ctx context.Context, roomID, sender string) {
 	err := db.ClearWebSessionToken(ctx, sender)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("sender", sender).Msg("Failed to clear web session token")
-		matrix.SendMessage(roomID, "Failed to log out from web interface")
+		matrix.SendMessage(ctx, roomID, "Failed to log out from web interface")
 		return
 	}
 
 	log.Info().Ctx(ctx).Str("sender", sender).Msg("User logged out from web")
-	matrix.SendMessage(roomID, "Logged out from web interface")
+	matrix.SendMessage(ctx, roomID, "Logged out from web interface")
 }
 
 // handleAuthenticate completes a web authentication challenge
@@ -54,7 +54,7 @@ func handleAuthenticate(ctx context.Context, roomID, sender, challenge string) {
 	token, err := auth.GenerateSessionToken()
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("sender", sender).Msg("Failed to generate session token")
-		matrix.SendMessage(roomID, "Failed to authenticate: internal error")
+		matrix.SendMessage(ctx, roomID, "Failed to authenticate: internal error")
 		return
 	}
 
@@ -62,7 +62,7 @@ func handleAuthenticate(ctx context.Context, roomID, sender, challenge string) {
 	err = db.SetWebSessionToken(ctx, sender, token)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("sender", sender).Msg("Failed to store session token")
-		matrix.SendMessage(roomID, "Failed to authenticate: internal error")
+		matrix.SendMessage(ctx, roomID, "Failed to authenticate: internal error")
 		return
 	}
 
@@ -74,10 +74,10 @@ func handleAuthenticate(ctx context.Context, roomID, sender, challenge string) {
 		// Clear the token since the auth flow failed
 		_ = db.ClearWebSessionToken(ctx, sender)
 		log.Warn().Ctx(ctx).Err(err).Str("sender", sender).Str("challenge", challenge[:min(8, len(challenge))]+"...").Msg("Failed to complete auth challenge")
-		matrix.SendMessage(roomID, "Authentication failed: invalid or expired challenge")
+		matrix.SendMessage(ctx, roomID, "Authentication failed: invalid or expired challenge")
 		return
 	}
 
 	log.Info().Ctx(ctx).Str("sender", sender).Msg("User authenticated for web")
-	matrix.SendMessage(roomID, "Authenticated for web access")
+	matrix.SendMessage(ctx, roomID, "Authenticated for web access")
 }

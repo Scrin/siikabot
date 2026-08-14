@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 )
 
 func initHTTP() {
@@ -17,7 +18,13 @@ func initHTTP() {
 
 	router := gin.New()
 
-	// Global middleware
+	// Global middleware. otelgin goes on before anything else so every route is traced, including
+	// /metrics and the healthcheck — Tempo already handles far more than this bot can produce, and a
+	// filter is one more place for a route to end up silently untraced.
+	//
+	// It also extracts the inbound traceparent, which is what makes a webhook span a child of the
+	// nginx span in front of it rather than the root of an unrelated trace.
+	router.Use(otelgin.Middleware("siikabot"))
 	router.Use(gin.Recovery())
 	router.Use(requestLoggingMiddleware())
 

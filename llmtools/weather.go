@@ -126,8 +126,7 @@ func getWeatherData(ctx context.Context, location string) (*WeatherData, error) 
 	}
 
 	// Execute the request
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("url", requestURL).Msg("Failed to fetch weather data")
 		return nil, fmt.Errorf("failed to fetch weather data: %w", err)

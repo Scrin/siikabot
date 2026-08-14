@@ -29,12 +29,12 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 			Str("room_id", roomID).
 			Str("target_user_id", userID).
 			Msg("Failed to get message stats")
-		matrix.SendNotice(roomID, "Failed to retrieve stats: "+err.Error())
+		matrix.SendNotice(ctx, roomID, "Failed to retrieve stats: "+err.Error())
 		return
 	}
 
 	if stats == nil {
-		matrix.SendNotice(roomID, fmt.Sprintf("No stats found for user %s in this room", userID))
+		matrix.SendNotice(ctx, roomID, fmt.Sprintf("No stats found for user %s in this room", userID))
 		return
 	}
 
@@ -57,7 +57,7 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 		sb.WriteString(fmt.Sprintf("- Avg chars/message: %.1f", avgChars))
 	}
 
-	matrix.SendNotice(roomID, sb.String())
+	matrix.SendNotice(ctx, roomID, sb.String())
 
 	log.Debug().Ctx(ctx).
 		Str("room_id", roomID).

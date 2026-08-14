@@ -11,6 +11,9 @@ import (
 
 	"github.com/Scrin/siikabot/metrics"
 	"github.com/rs/zerolog/log"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // ToolDefinition represents a tool that can be used by the chat model
@@ -96,6 +99,17 @@ func (r *ToolRegistry) HandleToolCallsIndividually(ctx context.Context, toolCall
 		return []ToolResponse{}, nil
 	}
 
+	names := make([]string, 0, len(toolCalls))
+	for _, call := range toolCalls {
+		names = append(names, call.Function.Name)
+	}
+
+	ctx, batchSpan := tracer.Start(ctx, "tool.batch", trace.WithAttributes(
+		attribute.Int("siikabot.tool.count", len(toolCalls)),
+		attribute.StringSlice("siikabot.tool.names", names),
+	))
+	defer batchSpan.End()
+
 	var (
 		responses []ToolResponse
 		wg        sync.WaitGroup
@@ -117,11 +131,18 @@ func (r *ToolRegistry) HandleToolCallsIndividually(ctx context.Context, toolCall
 		go func() {
 			defer wg.Done()
 
+			ctx, span := tracer.Start(ctx, "tool."+currentCall.Function.Name, trace.WithAttributes(
+				attribute.String("siikabot.tool.name", currentCall.Function.Name),
+				attribute.String("siikabot.tool.call_id", currentCall.ID),
+			))
+			defer span.End()
+
 			handler, exists := r.handlers[currentCall.Function.Name]
 			if !exists {
 				log.Warn().Ctx(ctx).
 					Str("tool", currentCall.Function.Name).
 					Msg("Unknown tool called")
+				span.SetStatus(codes.Error, "unknown tool")
 				metrics.RecordToolCall(currentCall.Function.Name, false)
 
 				mu.Lock()
@@ -142,6 +163,9 @@ func (r *ToolRegistry) HandleToolCallsIndividually(ctx context.Context, toolCall
 
 			if err != nil {
 				errorKind := ClassifyToolError(err)
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+				span.SetAttributes(attribute.String("siikabot.tool.error_kind", string(errorKind)))
 				log.Error().Ctx(ctx).Err(err).
 					Str("tool", currentCall.Function.Name).
 					Str("arguments", currentCall.Function.Arguments).
@@ -161,6 +185,7 @@ func (r *ToolRegistry) HandleToolCallsIndividually(ctx context.Context, toolCall
 					Int("response_length", len(response)).
 					Float64("execution_time_sec", executionTime).
 					Msg("Tool call succeeded")
+				span.SetAttributes(attribute.Int("siikabot.tool.response_bytes", len(response)))
 				metrics.RecordToolCall(currentCall.Function.Name, true)
 				metrics.RecordToolLatency(currentCall.Function.Name, executionTime)
 				responses = append(responses, ToolResponse{

@@ -121,8 +121,7 @@ func fetchGitHubStatusSummary(ctx context.Context) (*gitHubStatusSummary, error)
 
 	req.Header.Set("User-Agent", "Siikabot-GitHubStatus-Tool")
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("url", apiURL).Msg("Failed to fetch GitHub status")
 		return nil, fmt.Errorf("failed to fetch GitHub status: %w", err)
@@ -165,8 +164,7 @@ func fetchGitHubStatusIncidents(ctx context.Context) ([]gitHubStatusIncident, er
 
 	req.Header.Set("User-Agent", "Siikabot-GitHubStatus-Tool")
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("url", apiURL).Msg("Failed to fetch GitHub incidents")
 		return nil, fmt.Errorf("failed to fetch GitHub incidents: %w", err)

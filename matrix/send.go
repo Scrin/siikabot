@@ -1,6 +1,7 @@
 package matrix
 
 import (
+	"context"
 	"html"
 	"strings"
 
@@ -14,94 +15,96 @@ import (
 // SendMessage queues a message to be sent and returns immediatedly.
 //
 // The returned channel will provide the event ID of the message after the message has been sent
-func SendMessage(roomID string, message string) <-chan string {
-	return sendMessage(roomID, simpleMessage{"m.text", message, "", "", nil}, true)
+func SendMessage(ctx context.Context, roomID string, message string) <-chan string {
+	return sendMessage(ctx, roomID, simpleMessage{"m.text", message, "", "", nil}, true)
 }
 
 // SendMessageWithDebugData queues a message to be sent and returns immediatedly.
 //
 // The returned channel will provide the event ID of the message after the message has been sent
-func SendMessageWithDebugData(roomID string, message string, debugData map[string]any) <-chan string {
-	return sendMessage(roomID, simpleMessage{"m.text", message, "", "", debugData}, true)
+func SendMessageWithDebugData(ctx context.Context, roomID string, message string, debugData map[string]any) <-chan string {
+	return sendMessage(ctx, roomID, simpleMessage{"m.text", message, "", "", debugData}, true)
 }
 
 // SendFormattedMessage queues a html-formatted message to be sent and returns immediatedly.
 //
 // The returned channel will provide the event ID of the message after the message has been sent
-func SendFormattedMessage(roomID string, message string) <-chan string {
-	return sendMessage(roomID, simpleMessage{"m.text", stripFormatting(message), "org.matrix.custom.html", message, nil}, true)
+func SendFormattedMessage(ctx context.Context, roomID string, message string) <-chan string {
+	return sendMessage(ctx, roomID, simpleMessage{"m.text", stripFormatting(message), "org.matrix.custom.html", message, nil}, true)
 }
 
 // SendFormattedMessageWithDebugData queues a html-formatted message to be sent and returns immediatedly.
 //
 // The returned channel will provide the event ID of the message after the message has been sent
-func SendFormattedMessageWithDebugData(roomID string, message string, debugData map[string]any) <-chan string {
-	return sendMessage(roomID, simpleMessage{"m.text", stripFormatting(message), "org.matrix.custom.html", message, debugData}, true)
+func SendFormattedMessageWithDebugData(ctx context.Context, roomID string, message string, debugData map[string]any) <-chan string {
+	return sendMessage(ctx, roomID, simpleMessage{"m.text", stripFormatting(message), "org.matrix.custom.html", message, debugData}, true)
 }
 
 // SendNotice queues a notice to be sent and returns immediatedly.
 //
 // The returned channel will provide the event ID of the notice after the notice has been sent
-func SendNotice(roomID string, notice string) <-chan string {
-	return sendMessage(roomID, simpleMessage{"m.notice", notice, "", "", nil}, true)
+func SendNotice(ctx context.Context, roomID string, notice string) <-chan string {
+	return sendMessage(ctx, roomID, simpleMessage{"m.notice", notice, "", "", nil}, true)
 }
 
 // SendNoticeWithDebugData queues a notice to be sent and returns immediatedly.
 //
 // The returned channel will provide the event ID of the notice after the notice has been sent
-func SendNoticeWithDebugData(roomID string, notice string, debugData map[string]any) <-chan string {
-	return sendMessage(roomID, simpleMessage{"m.notice", notice, "", "", debugData}, true)
+func SendNoticeWithDebugData(ctx context.Context, roomID string, notice string, debugData map[string]any) <-chan string {
+	return sendMessage(ctx, roomID, simpleMessage{"m.notice", notice, "", "", debugData}, true)
 }
 
 // SendFormattedNotice queues a html-formatted notice to be sent and returns immediatedly.
 //
 // The returned channel will provide the event ID of the notice after the notice has been sent
-func SendFormattedNotice(roomID string, notice string) <-chan string {
-	return sendMessage(roomID, simpleMessage{"m.notice", stripFormatting(notice), "org.matrix.custom.html", notice, nil}, true)
+func SendFormattedNotice(ctx context.Context, roomID string, notice string) <-chan string {
+	return sendMessage(ctx, roomID, simpleMessage{"m.notice", stripFormatting(notice), "org.matrix.custom.html", notice, nil}, true)
 }
 
 // SendFormattedNotice queues a html-formatted notice to be sent and returns immediatedly.
 //
 // The returned channel will provide the event ID of the notice after the notice has been sent
-func SendFormattedNoticeWithDebugData(roomID string, notice string, debugData map[string]any) <-chan string {
-	return sendMessage(roomID, simpleMessage{"m.notice", stripFormatting(notice), "org.matrix.custom.html", notice, debugData}, true)
+func SendFormattedNoticeWithDebugData(ctx context.Context, roomID string, notice string, debugData map[string]any) <-chan string {
+	return sendMessage(ctx, roomID, simpleMessage{"m.notice", stripFormatting(notice), "org.matrix.custom.html", notice, debugData}, true)
 }
 
 // SendMarkdownFormattedMessage converts markdown text to HTML and queues the formatted message to be sent.
 //
 // The returned channel will provide the event ID of the message after the message has been sent
-func SendMarkdownFormattedMessage(roomID string, markdownText string) <-chan string {
+func SendMarkdownFormattedMessage(ctx context.Context, roomID string, markdownText string) <-chan string {
 	htmlOutput := markdownToHTML(markdownText)
-	return SendFormattedMessage(roomID, htmlOutput)
+	return SendFormattedMessage(ctx, roomID, htmlOutput)
 }
 
 // SendMarkdownFormattedMessageWithDebugData converts markdown text to HTML and queues the formatted message to be sent.
 //
 // The returned channel will provide the event ID of the message after the message has been sent
-func SendMarkdownFormattedMessageWithDebugData(roomID string, markdownText string, debugData map[string]any) <-chan string {
+func SendMarkdownFormattedMessageWithDebugData(ctx context.Context, roomID string, markdownText string, debugData map[string]any) <-chan string {
 	htmlOutput := markdownToHTML(markdownText)
-	return SendFormattedMessageWithDebugData(roomID, htmlOutput, debugData)
+	return SendFormattedMessageWithDebugData(ctx, roomID, htmlOutput, debugData)
 }
 
 // SendMarkdownFormattedNotice converts markdown text to HTML and queues the formatted notice to be sent.
 //
 // The returned channel will provide the event ID of the notice after the notice has been sent
-func SendMarkdownFormattedNotice(roomID string, markdownText string) <-chan string {
+func SendMarkdownFormattedNotice(ctx context.Context, roomID string, markdownText string) <-chan string {
 	htmlOutput := markdownToHTML(markdownText)
-	return SendFormattedNotice(roomID, htmlOutput)
+	return SendFormattedNotice(ctx, roomID, htmlOutput)
 }
 
 // SendMarkdownFormattedNotice converts markdown text to HTML and queues the formatted notice to be sent.
 //
 // The returned channel will provide the event ID of the notice after the notice has been sent
-func SendMarkdownFormattedNoticeWithDebugData(roomID string, markdownText string, debugData map[string]any) <-chan string {
+func SendMarkdownFormattedNoticeWithDebugData(ctx context.Context, roomID string, markdownText string, debugData map[string]any) <-chan string {
 	htmlOutput := markdownToHTML(markdownText)
-	return SendFormattedNoticeWithDebugData(roomID, htmlOutput, debugData)
+	return SendFormattedNoticeWithDebugData(ctx, roomID, htmlOutput, debugData)
 }
 
-func sendMessage(roomID string, message any, retryOnFailure bool) <-chan string {
+func sendMessage(ctx context.Context, roomID string, message any, retryOnFailure bool) <-chan string {
 	done := make(chan string, 1)
-	outboundEvents <- outboundEvent{roomID, "m.room.message", message, retryOnFailure, done}
+	// The context travels with the event so the worker goroutine that actually talks to the
+	// homeserver can continue the caller's trace rather than starting an unrelated one
+	outboundEvents <- outboundEvent{ctx, roomID, "m.room.message", message, retryOnFailure, done}
 	metrics.SetMatrixOutboundQueueDepth(len(outboundEvents))
 	return done
 }

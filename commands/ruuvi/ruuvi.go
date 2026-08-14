@@ -40,7 +40,7 @@ func formatEndpoints(endpoints []db.RuuviEndpoint) string {
 func Handle(ctx context.Context, roomID, sender, msg string) {
 	params := strings.Split(msg, " ")
 	if len(params) == 1 {
-		matrix.SendFormattedMessage(roomID, formatRuuviData(ctx))
+		matrix.SendFormattedMessage(ctx, roomID, formatRuuviData(ctx))
 		return
 	}
 	switch params[1] {
@@ -51,22 +51,22 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 		case 5:
 			queryRuuviData(ctx, roomID, params[2], params[3], params[4])
 		default:
-			matrix.SendMessage(roomID, "Usage: !ruuvi query [<n> <tag_name>] <field>")
+			matrix.SendMessage(ctx, roomID, "Usage: !ruuvi query [<n> <tag_name>] <field>")
 		}
 	case "config":
 		endpoints, err := db.GetRuuviEndpoints(ctx)
 		if err != nil {
-			matrix.SendMessage(roomID, "Error getting endpoints: "+err.Error())
+			matrix.SendMessage(ctx, roomID, "Error getting endpoints: "+err.Error())
 			return
 		}
-		matrix.SendMessage(roomID, formatEndpoints(endpoints))
+		matrix.SendMessage(ctx, roomID, formatEndpoints(endpoints))
 	case "add":
 		if sender != config.Admin {
-			matrix.SendMessage(roomID, "Only admins can use this command")
+			matrix.SendMessage(ctx, roomID, "Only admins can use this command")
 			return
 		}
 		if len(params) < 4 {
-			matrix.SendMessage(roomID, "Usage: !ruuvi add <base_url> <tag_name> <name>")
+			matrix.SendMessage(ctx, roomID, "Usage: !ruuvi add <base_url> <tag_name> <name>")
 			return
 		}
 		endpoint := db.RuuviEndpoint{
@@ -75,35 +75,35 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 			TagName: params[3],
 		}
 		if err := db.AddRuuviEndpoint(ctx, endpoint); err != nil {
-			matrix.SendMessage(roomID, "Error adding endpoint: "+err.Error())
+			matrix.SendMessage(ctx, roomID, "Error adding endpoint: "+err.Error())
 			return
 		}
 		endpoints, err := db.GetRuuviEndpoints(ctx)
 		if err != nil {
-			matrix.SendMessage(roomID, "Error getting endpoints: "+err.Error())
+			matrix.SendMessage(ctx, roomID, "Error getting endpoints: "+err.Error())
 			return
 		}
-		matrix.SendMessage(roomID, formatEndpoints(endpoints))
+		matrix.SendMessage(ctx, roomID, formatEndpoints(endpoints))
 	case "remove":
 		if sender != config.Admin {
-			matrix.SendMessage(roomID, "Only admins can use this command")
+			matrix.SendMessage(ctx, roomID, "Only admins can use this command")
 			return
 		}
 		if len(params) < 3 {
-			matrix.SendMessage(roomID, "Usage: !ruuvi remove <n>")
+			matrix.SendMessage(ctx, roomID, "Usage: !ruuvi remove <n>")
 			return
 		}
 		name := strings.Join(params[2:], " ")
 		if err := db.RemoveRuuviEndpoint(ctx, name); err != nil {
-			matrix.SendMessage(roomID, "Error removing endpoint: "+err.Error())
+			matrix.SendMessage(ctx, roomID, "Error removing endpoint: "+err.Error())
 			return
 		}
 		endpoints, err := db.GetRuuviEndpoints(ctx)
 		if err != nil {
-			matrix.SendMessage(roomID, "Error getting endpoints: "+err.Error())
+			matrix.SendMessage(ctx, roomID, "Error getting endpoints: "+err.Error())
 			return
 		}
-		matrix.SendMessage(roomID, formatEndpoints(endpoints))
+		matrix.SendMessage(ctx, roomID, formatEndpoints(endpoints))
 	}
 }
 
@@ -152,7 +152,7 @@ func queryGrafana(baseURL, tagName string, offset time.Duration, fields ...strin
 func queryRuuviData(ctx context.Context, roomID, name, tagName, field string) {
 	endpoints, err := db.GetRuuviEndpoints(ctx)
 	if err != nil {
-		matrix.SendMessage(roomID, "Error getting endpoints: "+err.Error())
+		matrix.SendMessage(ctx, roomID, "Error getting endpoints: "+err.Error())
 		return
 	}
 
@@ -169,7 +169,7 @@ func queryRuuviData(ctx context.Context, roomID, name, tagName, field string) {
 				respLines = append(respLines, e.Name+" "+field+": <b>"+value+"</b>")
 			}
 		}
-		matrix.SendFormattedMessage(roomID, strings.Join(respLines, "<br />"))
+		matrix.SendFormattedMessage(ctx, roomID, strings.Join(respLines, "<br />"))
 	} else {
 		ok := false
 		for _, e := range endpoints {
@@ -178,18 +178,18 @@ func queryRuuviData(ctx context.Context, roomID, name, tagName, field string) {
 			}
 			grafanaResp, err := queryGrafana(e.BaseURL, tagName, 0, field)
 			if err != nil {
-				matrix.SendMessage(roomID, err.Error())
+				matrix.SendMessage(ctx, roomID, err.Error())
 			} else {
 				allValues := grafanaResp.Results[0].Series[0].Values
 				latestValues := allValues[len(allValues)-1]
 				value := strconv.FormatFloat(latestValues[1].(float64), 'f', 2, 64)
-				matrix.SendFormattedMessage(roomID, e.Name+" "+tagName+" "+field+": <b>"+value+"</b>")
+				matrix.SendFormattedMessage(ctx, roomID, e.Name+" "+tagName+" "+field+": <b>"+value+"</b>")
 			}
 			ok = true
 			break
 		}
 		if !ok {
-			matrix.SendMessage(roomID, name+" not found")
+			matrix.SendMessage(ctx, roomID, name+" not found")
 		}
 	}
 }

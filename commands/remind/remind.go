@@ -48,7 +48,7 @@ func StartReminder(ctx context.Context, rem db.Reminder) {
 		Msg("Starting reminder")
 
 	f := func() {
-		matrix.SendFormattedMessage(rem.RoomID, "<a href=\"https://matrix.to/#/"+rem.UserID+"\">"+matrix.GetDisplayName(ctx, rem.UserID)+"</a> "+rem.Message)
+		matrix.SendFormattedMessage(ctx, rem.RoomID, "<a href=\"https://matrix.to/#/"+rem.UserID+"\">"+matrix.GetDisplayName(ctx, rem.UserID)+"</a> "+rem.Message)
 		if err := db.RemoveReminder(ctx, rem.ID); err != nil {
 			log.Error().Err(err).Int64("id", rem.ID).Msg("Failed to remove triggered reminder")
 		}
@@ -70,7 +70,7 @@ func StartReminder(ctx context.Context, rem db.Reminder) {
 func Handle(ctx context.Context, roomID, sender, msg, msgType, formattedBody string) {
 	params := strings.SplitN(msg, " ", 3)
 	if len(params) < 3 {
-		matrix.SendMessage(roomID, "Usage: !remind <time, date, datetime or duration> <message>")
+		matrix.SendMessage(ctx, roomID, "Usage: !remind <time, date, datetime or duration> <message>")
 		return
 	}
 
@@ -81,7 +81,7 @@ func Handle(ctx context.Context, roomID, sender, msg, msgType, formattedBody str
 		reminderTime, timeErr = RemindTime(t, params[1])
 	}
 	if timeErr != nil {
-		matrix.SendFormattedMessage(roomID, "Invalid date/time or duration: "+params[1]+"<br>duration error: "+durationErr.Error()+"<br> date/time error: "+timeErr.Error())
+		matrix.SendFormattedMessage(ctx, roomID, "Invalid date/time or duration: "+params[1]+"<br>duration error: "+durationErr.Error()+"<br> date/time error: "+timeErr.Error())
 		return
 	}
 
@@ -102,7 +102,7 @@ func Handle(ctx context.Context, roomID, sender, msg, msgType, formattedBody str
 
 	id, err := db.AddReminder(ctx, rem)
 	if err != nil {
-		matrix.SendMessage(roomID, "Failed to save reminder: "+err.Error())
+		matrix.SendMessage(ctx, roomID, "Failed to save reminder: "+err.Error())
 		return
 	}
 	rem.ID = id
@@ -119,7 +119,7 @@ func Handle(ctx context.Context, roomID, sender, msg, msgType, formattedBody str
 		Str("duration", duration.String()).
 		Msg("Reminder set")
 
-	matrix.SendFormattedMessage(roomID, "Reminding at "+reminderTime.In(loc).Format("15:04:05 on 2.1.2006")+" (in "+duration.String()+"): "+reminderText)
+	matrix.SendFormattedMessage(ctx, roomID, "Reminding at "+reminderTime.In(loc).Format("15:04:05 on 2.1.2006")+" (in "+duration.String()+"): "+reminderText)
 }
 
 // RemindDuration parses a duration string and returns a time in the future

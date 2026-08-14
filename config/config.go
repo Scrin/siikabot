@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 
 	"github.com/joho/godotenv"
@@ -29,6 +30,9 @@ var (
 	GoogleSearchEngineID     = ""
 	AlertmanagerUser         = ""
 	AlertmanagerPassword     = ""
+	TempoEndpoint            = ""
+	TempoUser                = ""
+	TempoPassword            = ""
 )
 
 func loadConfig() error {
@@ -48,6 +52,9 @@ func loadConfig() error {
 	GoogleSearchEngineID = os.Getenv("SIIKABOT_GOOGLE_SEARCH_ENGINE_ID")
 	AlertmanagerUser = os.Getenv("SIIKABOT_ALERTMANAGER_USER")
 	AlertmanagerPassword = os.Getenv("SIIKABOT_ALERTMANAGER_PASSWORD")
+	TempoEndpoint = os.Getenv("SIIKABOT_TEMPO_ENDPOINT")
+	TempoUser = os.Getenv("SIIKABOT_TEMPO_USER")
+	TempoPassword = os.Getenv("SIIKABOT_TEMPO_PASSWORD")
 
 	if HomeserverURL == "" {
 		return fmt.Errorf("SIIKABOT_HOMESERVER_URL is not set")
@@ -93,6 +100,28 @@ func loadConfig() error {
 	}
 	if AlertmanagerPassword == "" {
 		return fmt.Errorf("SIIKABOT_ALERTMANAGER_PASSWORD is not set")
+	}
+	// Tracing is always on, so these are required like everything else. A deployment missing them
+	// fails at boot rather than running indefinitely with no traces and no indication of why.
+	if TempoEndpoint == "" {
+		return fmt.Errorf("SIIKABOT_TEMPO_ENDPOINT is not set")
+	}
+	// Validated here rather than left to the exporter, which treats an unparseable endpoint as a
+	// reason to silently fall back to localhost:4317. url.Parse is permissive enough that a bare
+	// "host:port" parses without error but yields no host, so the scheme and host are checked
+	// explicitly — the alternative is a confusing DNS error at runtime instead of a clear one now.
+	if endpoint, err := url.Parse(TempoEndpoint); err != nil {
+		return fmt.Errorf("SIIKABOT_TEMPO_ENDPOINT is not a valid URL: %w", err)
+	} else if endpoint.Scheme != "http" && endpoint.Scheme != "https" {
+		return fmt.Errorf("SIIKABOT_TEMPO_ENDPOINT must start with http:// or https://, got %q", TempoEndpoint)
+	} else if endpoint.Host == "" {
+		return fmt.Errorf("SIIKABOT_TEMPO_ENDPOINT has no host: %q", TempoEndpoint)
+	}
+	if TempoUser == "" {
+		return fmt.Errorf("SIIKABOT_TEMPO_USER is not set")
+	}
+	if TempoPassword == "" {
+		return fmt.Errorf("SIIKABOT_TEMPO_PASSWORD is not set")
 	}
 	return nil
 }

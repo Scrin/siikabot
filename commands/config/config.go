@@ -16,29 +16,29 @@ import (
 // mentionedUsers contains user IDs extracted from m.mentions in the event
 func Handle(ctx context.Context, roomID, senderID, msg string, mentionedUsers []string) {
 	if senderID != config.Admin {
-		matrix.SendNotice(roomID, "You don't have permission to use this command")
+		matrix.SendNotice(ctx, roomID, "You don't have permission to use this command")
 		return
 	}
 
 	args := strings.Fields(msg)
 	if len(args) < 2 {
-		showHelp(roomID)
+		showHelp(ctx, roomID)
 		return
 	}
 
 	switch args[1] {
 	case "help":
-		showHelp(roomID)
+		showHelp(ctx, roomID)
 	case "command":
 		handleCommand(ctx, roomID, args[2:])
 	case "user":
 		handleUser(ctx, roomID, args[2:], mentionedUsers)
 	default:
-		matrix.SendNotice(roomID, "Unknown config type. Use !config help for usage.")
+		matrix.SendNotice(ctx, roomID, "Unknown config type. Use !config help for usage.")
 	}
 }
 
-func showHelp(roomID string) {
+func showHelp(ctx context.Context, roomID string) {
 	help := `Usage:
 !config command <enable|disable> <command> - Enable or disable a command in this room
 !config user list - List all users with their authorizations
@@ -48,12 +48,12 @@ func showHelp(roomID string) {
 
 Supported features: ` + strings.Join(db.GetSupportedFeatures(), ", ")
 
-	matrix.SendNotice(roomID, help)
+	matrix.SendNotice(ctx, roomID, help)
 }
 
 func handleCommand(ctx context.Context, roomID string, args []string) {
 	if len(args) < 2 {
-		matrix.SendNotice(roomID, "Usage: !config command <enable|disable> <command>")
+		matrix.SendNotice(ctx, roomID, "Usage: !config command <enable|disable> <command>")
 		return
 	}
 
@@ -68,46 +68,46 @@ func handleCommand(ctx context.Context, roomID string, args []string) {
 		enabled, err := db.IsCommandEnabled(ctx, roomID, cmdName)
 		if err != nil {
 			log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("command", cmdName).Msg("Failed to check command status")
-			matrix.SendNotice(roomID, "Failed to check command status")
+			matrix.SendNotice(ctx, roomID, "Failed to check command status")
 			return
 		}
 		if enabled {
-			matrix.SendNotice(roomID, fmt.Sprintf("Command %s is already enabled", cmdName))
+			matrix.SendNotice(ctx, roomID, fmt.Sprintf("Command %s is already enabled", cmdName))
 			return
 		}
 		if err := db.SetCommandEnabled(ctx, roomID, cmdName, true); err != nil {
 			log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("command", cmdName).Msg("Failed to enable command")
-			matrix.SendNotice(roomID, "Failed to enable command")
+			matrix.SendNotice(ctx, roomID, "Failed to enable command")
 			return
 		}
-		matrix.SendNotice(roomID, fmt.Sprintf("Command %s has been enabled", cmdName))
+		matrix.SendNotice(ctx, roomID, fmt.Sprintf("Command %s has been enabled", cmdName))
 
 	case "disable":
 		enabled, err := db.IsCommandEnabled(ctx, roomID, cmdName)
 		if err != nil {
 			log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("command", cmdName).Msg("Failed to check command status")
-			matrix.SendNotice(roomID, "Failed to check command status")
+			matrix.SendNotice(ctx, roomID, "Failed to check command status")
 			return
 		}
 		if !enabled {
-			matrix.SendNotice(roomID, fmt.Sprintf("Command %s is already disabled", cmdName))
+			matrix.SendNotice(ctx, roomID, fmt.Sprintf("Command %s is already disabled", cmdName))
 			return
 		}
 		if err := db.SetCommandEnabled(ctx, roomID, cmdName, false); err != nil {
 			log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("command", cmdName).Msg("Failed to disable command")
-			matrix.SendNotice(roomID, "Failed to disable command")
+			matrix.SendNotice(ctx, roomID, "Failed to disable command")
 			return
 		}
-		matrix.SendNotice(roomID, fmt.Sprintf("Command %s has been disabled", cmdName))
+		matrix.SendNotice(ctx, roomID, fmt.Sprintf("Command %s has been disabled", cmdName))
 
 	default:
-		matrix.SendNotice(roomID, "Invalid action. Use 'enable' or 'disable'")
+		matrix.SendNotice(ctx, roomID, "Invalid action. Use 'enable' or 'disable'")
 	}
 }
 
 func handleUser(ctx context.Context, roomID string, args []string, mentionedUsers []string) {
 	if len(args) < 1 {
-		matrix.SendNotice(roomID, "Usage: !config user <list|show|authorize|unauthorize> ...")
+		matrix.SendNotice(ctx, roomID, "Usage: !config user <list|show|authorize|unauthorize> ...")
 		return
 	}
 
@@ -121,7 +121,7 @@ func handleUser(ctx context.Context, roomID string, args []string, mentionedUser
 	case "unauthorize":
 		handleUserAuthorize(ctx, roomID, args[1:], false, mentionedUsers)
 	default:
-		matrix.SendNotice(roomID, "Unknown user action. Use: list, show, authorize, unauthorize")
+		matrix.SendNotice(ctx, roomID, "Unknown user action. Use: list, show, authorize, unauthorize")
 	}
 }
 
@@ -129,12 +129,12 @@ func handleUserList(ctx context.Context, roomID string) {
 	users, err := db.GetAllUsersWithAuthorizations(ctx)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Msg("Failed to list user authorizations")
-		matrix.SendNotice(roomID, "Failed to list user authorizations")
+		matrix.SendNotice(ctx, roomID, "Failed to list user authorizations")
 		return
 	}
 
 	if len(users) == 0 {
-		matrix.SendNotice(roomID, "No users with authorizations found")
+		matrix.SendNotice(ctx, roomID, "No users with authorizations found")
 		return
 	}
 
@@ -144,25 +144,25 @@ func handleUserList(ctx context.Context, roomID string) {
 		sb.WriteString(fmt.Sprintf("• %s - grafana: %s\n", u.UserID, boolToYesNo(u.Grafana)))
 	}
 
-	matrix.SendNotice(roomID, sb.String())
+	matrix.SendNotice(ctx, roomID, sb.String())
 }
 
 func handleUserShow(ctx context.Context, roomID string, args []string, mentionedUsers []string) {
 	if len(args) < 1 {
-		matrix.SendNotice(roomID, "Usage: !config user show <user-id>")
+		matrix.SendNotice(ctx, roomID, "Usage: !config user show <user-id>")
 		return
 	}
 
 	userID := resolveUserID(args[0], mentionedUsers)
 	if userID == "" {
-		matrix.SendNotice(roomID, "Invalid user ID format. Expected: @user:domain.com or a mention")
+		matrix.SendNotice(ctx, roomID, "Invalid user ID format. Expected: @user:domain.com or a mention")
 		return
 	}
 
 	auth, err := db.GetUserAuthorizations(ctx, userID)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("user_id", userID).Msg("Failed to get user authorizations")
-		matrix.SendNotice(roomID, "Failed to get user information")
+		matrix.SendNotice(ctx, roomID, "Failed to get user information")
 		return
 	}
 
@@ -172,7 +172,7 @@ func handleUserShow(ctx context.Context, roomID string, args []string, mentioned
 	sb.WriteString("Authorizations:\n")
 	sb.WriteString(fmt.Sprintf("  • grafana: %s", boolToYesNo(auth.Grafana)))
 
-	matrix.SendNotice(roomID, sb.String())
+	matrix.SendNotice(ctx, roomID, sb.String())
 }
 
 func handleUserAuthorize(ctx context.Context, roomID string, args []string, authorize bool, mentionedUsers []string) {
@@ -181,7 +181,7 @@ func handleUserAuthorize(ctx context.Context, roomID string, args []string, auth
 		if !authorize {
 			action = "unauthorize"
 		}
-		matrix.SendNotice(roomID, fmt.Sprintf("Usage: !config user %s <user-id> <feature>", action))
+		matrix.SendNotice(ctx, roomID, fmt.Sprintf("Usage: !config user %s <user-id> <feature>", action))
 		return
 	}
 
@@ -189,14 +189,14 @@ func handleUserAuthorize(ctx context.Context, roomID string, args []string, auth
 	feature := strings.ToLower(args[1])
 
 	if userID == "" {
-		matrix.SendNotice(roomID, "Invalid user ID format. Expected: @user:domain.com or a mention")
+		matrix.SendNotice(ctx, roomID, "Invalid user ID format. Expected: @user:domain.com or a mention")
 		return
 	}
 
 	// Validate feature
 	supportedFeatures := db.GetSupportedFeatures()
 	if !slices.Contains(supportedFeatures, feature) {
-		matrix.SendNotice(roomID, fmt.Sprintf("Unknown feature '%s'. Supported features: %s", feature, strings.Join(supportedFeatures, ", ")))
+		matrix.SendNotice(ctx, roomID, fmt.Sprintf("Unknown feature '%s'. Supported features: %s", feature, strings.Join(supportedFeatures, ", ")))
 		return
 	}
 
@@ -207,7 +207,7 @@ func handleUserAuthorize(ctx context.Context, roomID string, args []string, auth
 			Str("feature", feature).
 			Bool("authorize", authorize).
 			Msg("Failed to update user authorization")
-		matrix.SendNotice(roomID, "Failed to update user authorization")
+		matrix.SendNotice(ctx, roomID, "Failed to update user authorization")
 		return
 	}
 
@@ -215,7 +215,7 @@ func handleUserAuthorize(ctx context.Context, roomID string, args []string, auth
 	if !authorize {
 		action = "unauthorized"
 	}
-	matrix.SendNotice(roomID, fmt.Sprintf("User %s %s for %s", userID, action, feature))
+	matrix.SendNotice(ctx, roomID, fmt.Sprintf("User %s %s for %s", userID, action, feature))
 }
 
 func boolToYesNo(b bool) string {

@@ -36,7 +36,7 @@ func Handle(ctx context.Context, roomID, msg string) {
 	cmdReader, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Error().Err(err).Str("room_id", roomID).Str("target", target).Msg("Failed to create stdout pipe")
-		matrix.SendMessage(roomID, err.Error())
+		matrix.SendMessage(ctx, roomID, err.Error())
 		return
 	}
 
@@ -48,7 +48,7 @@ func Handle(ctx context.Context, roomID, msg string) {
 			Str("room_id", roomID).
 			Str("target", target).
 			Msg("Failed to start traceroute command")
-		matrix.SendMessage(roomID, err.Error())
+		matrix.SendMessage(ctx, roomID, err.Error())
 		return
 	}
 
@@ -64,12 +64,12 @@ func Handle(ctx context.Context, roomID, msg string) {
 			Str("room_id", roomID).
 			Str("target", target).
 			Msg("Traceroute command failed")
-		matrix.SendMessage(roomID, err.Error())
+		matrix.SendMessage(ctx, roomID, err.Error())
 	} else {
 		log.Debug().
 			Str("room_id", roomID).
 			Str("target", target).
 			Msg("Traceroute command completed")
-		matrix.SendMessage(roomID, strings.Join(output, "\n"))
+		matrix.SendMessage(ctx, roomID, strings.Join(output, "\n"))
 	}
 }

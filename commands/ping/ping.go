@@ -67,7 +67,7 @@ func Handle(ctx context.Context, roomID, msg string) {
 			Str("room_id", roomID).
 			Str("target", target).
 			Msg("Failed to create stdout pipe")
-		matrix.SendMessage(roomID, err.Error())
+		matrix.SendMessage(ctx, roomID, err.Error())
 		return
 	}
 
@@ -79,7 +79,7 @@ func Handle(ctx context.Context, roomID, msg string) {
 			Str("room_id", roomID).
 			Str("target", target).
 			Msg("Failed to start ping command")
-		matrix.SendMessage(roomID, err.Error())
+		matrix.SendMessage(ctx, roomID, err.Error())
 		return
 	}
 
@@ -95,12 +95,12 @@ func Handle(ctx context.Context, roomID, msg string) {
 			Str("room_id", roomID).
 			Str("target", target).
 			Msg("Ping command failed")
-		matrix.SendMessage(roomID, err.Error())
+		matrix.SendMessage(ctx, roomID, err.Error())
 	} else {
 		log.Debug().
 			Str("room_id", roomID).
 			Str("target", target).
 			Msg("Ping command completed")
-		matrix.SendMessage(roomID, strings.Join(output, "\n"))
+		matrix.SendMessage(ctx, roomID, strings.Join(output, "\n"))
 	}
 }

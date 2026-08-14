@@ -2,6 +2,7 @@ package bot
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha1"
 	"encoding/hex"
@@ -52,7 +53,7 @@ type GithubPayload struct {
 	} `json:"sender"`
 }
 
-func sendGithubMsg(payload GithubPayload, roomID string) {
+func sendGithubMsg(ctx context.Context, payload GithubPayload, roomID string) {
 	log.Debug().
 		Str("room_id", roomID).
 		Str("repository", payload.Repository.FullName).
@@ -61,35 +62,35 @@ func sendGithubMsg(payload GithubPayload, roomID string) {
 
 	if payload.Hook.Type == "Repository" {
 		metrics.RecordWebhookEventHandled(constants.WebhookGitHub, constants.WebhookEventGitHubConfig)
-		sendGithubHookConfig(payload, roomID)
+		sendGithubHookConfig(ctx, payload, roomID)
 	} else if payload.Pusher.Name != "" {
 		metrics.RecordWebhookEventHandled(constants.WebhookGitHub, constants.WebhookEventGitHubPush)
-		sendGithubPush(payload, roomID)
+		sendGithubPush(ctx, payload, roomID)
 	} else if payload.PullRequest.HtmlUrl != "" {
 		metrics.RecordWebhookEventHandled(constants.WebhookGitHub, constants.WebhookEventGitHubPullRequest)
-		sendGithubPullrequest(payload, roomID)
+		sendGithubPullrequest(ctx, payload, roomID)
 	} else {
 		metrics.RecordWebhookEventHandled(constants.WebhookGitHub, constants.WebhookEventGitHubUnknown)
 		log.Warn().
 			Str("room_id", roomID).
 			Str("repository", payload.Repository.FullName).
 			Msg("Unknown GitHub webhook type received")
-		matrix.SendNotice(roomID, "Unknown github hook called")
+		matrix.SendNotice(ctx, roomID, "Unknown github hook called")
 	}
 }
 
-func sendGithubHookConfig(payload GithubPayload, roomID string) {
-	matrix.SendFormattedNotice(roomID, "[<font color=\"#0000FC\">"+payload.Repository.FullName+"</font>] "+
+func sendGithubHookConfig(ctx context.Context, payload GithubPayload, roomID string) {
+	matrix.SendFormattedNotice(ctx, roomID, "[<font color=\"#0000FC\">"+payload.Repository.FullName+"</font>] "+
 		"<font color=\"#9C009C\">"+payload.Sender.Login+"</font> configured a webhook: "+payload.Repository.HtmlUrl)
 }
 
-func sendGithubPullrequest(payload GithubPayload, roomID string) {
-	matrix.SendFormattedNotice(roomID, "[<font color=\"#0000FC\">"+payload.Repository.FullName+"</font>] "+
+func sendGithubPullrequest(ctx context.Context, payload GithubPayload, roomID string) {
+	matrix.SendFormattedNotice(ctx, roomID, "[<font color=\"#0000FC\">"+payload.Repository.FullName+"</font>] "+
 		"<font color=\"#9C009C\">"+payload.Sender.Login+"</font> <a href=\""+payload.PullRequest.HtmlUrl+"\">"+payload.Action+" a pull request:</a> "+
 		"<font color=\"#7F0000\">"+payload.PullRequest.Title+"</font>")
 }
 
-func sendGithubPush(payload GithubPayload, roomID string) {
+func sendGithubPush(ctx context.Context, payload GithubPayload, roomID string) {
 	nullCommit := "0000000000000000000000000000000000000000"
 	if payload.AfterCommit == nullCommit {
 		// TODO branch was deleted
@@ -118,7 +119,7 @@ func sendGithubPush(payload GithubPayload, roomID string) {
 			"<font color=\"#9C009C\">"+commit.Author.Name+"</font>: "+commit.Message)
 	}
 
-	matrix.SendFormattedNotice(roomID, strings.Join(output, "<br />"))
+	matrix.SendFormattedNotice(ctx, roomID, strings.Join(output, "<br />"))
 }
 
 func verifySignature(secret []byte, signature string, body []byte) bool {
@@ -192,6 +193,6 @@ func GithubWebhookHandler(c *gin.Context) {
 		Str("sender", payload.Sender.Login).
 		Msg("Processing GitHub webhook request")
 
-	sendGithubMsg(payload, roomID)
+	sendGithubMsg(c.Request.Context(), payload, roomID)
 	c.Status(http.StatusOK)
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Scrin/siikabot/config"
@@ -11,6 +13,9 @@ import (
 	"github.com/Scrin/siikabot/logging"
 	"github.com/Scrin/siikabot/metrics"
 	"github.com/rs/zerolog/log"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/crypto"
 	"maunium.net/go/mautrix/event"
@@ -28,6 +33,7 @@ var (
 )
 
 type outboundEvent struct {
+	ctx            context.Context
 	RoomID         string
 	EventType      string
 	Content        any
@@ -80,123 +86,144 @@ func GetRoomName(ctx context.Context, roomID string) string {
 }
 
 func processOutboundEvents(ctx context.Context) {
-outboundProcessingLoop:
 	for evt := range outboundEvents {
-		startTime := time.Now()
-		metrics.SetMatrixOutboundQueueDepth(len(outboundEvents))
+		sendOutboundEvent(ctx, evt)
+	}
+}
 
-		roomId := id.RoomID(evt.RoomID)
-		evtType := event.NewEventType(evt.EventType)
-		evtContent := evt.Content
+// sendOutboundEvent delivers a single queued event to the homeserver.
+//
+// Split out from the loop so the span can be ended with a defer: the body has several early exits,
+// and inside a loop those were labelled continues that no defer would cover.
+func sendOutboundEvent(ctx context.Context, evt outboundEvent) {
+	// Continue the caller's trace rather than starting a fresh one. Sends are queued and delivered
+	// on this goroutine, so without carrying the context across the channel a reply would be traced
+	// separately from the work that produced it.
+	//
+	// Cancellation is deliberately dropped: the turn that queued a message is often finished by the
+	// time it goes out, and a cancelled context must not stop a reply being delivered.
+	ctx, span := tracer.Start(context.WithoutCancel(evt.ctx), "matrix.send",
+		trace.WithSpanKind(trace.SpanKindProducer),
+		trace.WithAttributes(
+			attribute.String("matrix.room_id", evt.RoomID),
+			attribute.String("matrix.event_type", evt.EventType),
+		))
+	defer span.End()
 
-	encryptionLoop:
-		for {
-			isEncrypted, err := stateStore.IsEncrypted(ctx, roomId)
+	startTime := time.Now()
+	metrics.SetMatrixOutboundQueueDepth(len(outboundEvents))
 
-			if err != nil {
-				log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to check if room is encrypted")
-				if !evt.RetryOnFailure {
-					metrics.RecordMatrixMessageSent(constants.MatrixSendFailedEncryption)
-					continue outboundProcessingLoop
-				}
-				time.Sleep(100 * time.Millisecond)
-				continue encryptionLoop
+	roomId := id.RoomID(evt.RoomID)
+	evtType := event.NewEventType(evt.EventType)
+	evtContent := evt.Content
+
+encryptionLoop:
+	for {
+		isEncrypted, err := stateStore.IsEncrypted(ctx, roomId)
+
+		if err != nil {
+			log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to check if room is encrypted")
+			if !evt.RetryOnFailure {
+				metrics.RecordMatrixMessageSent(constants.MatrixSendFailedEncryption)
+				return
 			}
+			time.Sleep(100 * time.Millisecond)
+			continue encryptionLoop
+		}
 
-			if isEncrypted {
-				encrypted, err := olmMachine.EncryptMegolmEvent(ctx, roomId, evtType, evtContent)
-				// These three errors mean we have to make a new Megolm session
-				if err == crypto.SessionExpired || err == crypto.SessionNotShared || err == crypto.NoGroupSession {
-					members, err := stateStore.GetRoomMembers(ctx, roomId)
-					if err != nil {
-						log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to get room members")
-						if !evt.RetryOnFailure {
-							metrics.RecordMatrixMessageSent(constants.MatrixSendFailedEncryption)
-							continue outboundProcessingLoop
-						}
-						time.Sleep(100 * time.Millisecond)
-						continue encryptionLoop
-					}
-					err = olmMachine.ShareGroupSession(ctx, roomId, members)
-					if err != nil {
-						log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to share group session")
-						if !evt.RetryOnFailure {
-							metrics.RecordMatrixMessageSent(constants.MatrixSendFailedEncryption)
-							continue outboundProcessingLoop
-						}
-						time.Sleep(100 * time.Millisecond)
-						continue encryptionLoop
-					}
-					encrypted, err = olmMachine.EncryptMegolmEvent(ctx, roomId, evtType, evtContent)
-				}
-
+		if isEncrypted {
+			encrypted, err := olmMachine.EncryptMegolmEvent(ctx, roomId, evtType, evtContent)
+			// These three errors mean we have to make a new Megolm session
+			if err == crypto.SessionExpired || err == crypto.SessionNotShared || err == crypto.NoGroupSession {
+				members, err := stateStore.GetRoomMembers(ctx, roomId)
 				if err != nil {
-					log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to encrypt message")
+					log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to get room members")
 					if !evt.RetryOnFailure {
 						metrics.RecordMatrixMessageSent(constants.MatrixSendFailedEncryption)
-						continue outboundProcessingLoop
+						return
 					}
 					time.Sleep(100 * time.Millisecond)
 					continue encryptionLoop
 				}
-				evtType = event.EventEncrypted
-				evtContent = encrypted
-				break
-			} else {
-				break
+				err = olmMachine.ShareGroupSession(ctx, roomId, members)
+				if err != nil {
+					log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to share group session")
+					if !evt.RetryOnFailure {
+						metrics.RecordMatrixMessageSent(constants.MatrixSendFailedEncryption)
+						return
+					}
+					time.Sleep(100 * time.Millisecond)
+					continue encryptionLoop
+				}
+				encrypted, err = olmMachine.EncryptMegolmEvent(ctx, roomId, evtType, evtContent)
 			}
+
+			if err != nil {
+				log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to encrypt message")
+				if !evt.RetryOnFailure {
+					metrics.RecordMatrixMessageSent(constants.MatrixSendFailedEncryption)
+					return
+				}
+				time.Sleep(100 * time.Millisecond)
+				continue encryptionLoop
+			}
+			evtType = event.EventEncrypted
+			evtContent = encrypted
+			break
+		} else {
+			break
+		}
+	}
+
+retry:
+	for {
+		resp, err := client.SendMessageEvent(ctx, roomId, evtType, evtContent)
+		if err == nil {
+			if evt.done != nil {
+				evt.done <- string(resp.EventID)
+			}
+			metrics.RecordMatrixMessageSent(constants.MatrixSendSuccess)
+			metrics.RecordMatrixMessageLatency(time.Since(startTime).Seconds())
+			break // Success, break the retry loop
+		}
+		var httpErr httpError
+		httpError, isHttpError := err.(mautrix.HTTPError)
+		if !isHttpError {
+			log.Error().Ctx(ctx).Err(err).Msg("Failed to parse error response of unexpected type")
+			metrics.RecordMatrixMessageSent(constants.MatrixSendFailedSend)
+			evt.done <- ""
+			break
+		}
+		if jsonErr := json.Unmarshal([]byte(httpError.ResponseBody), &httpErr); jsonErr != nil {
+			log.Error().Ctx(ctx).Err(jsonErr).Msg("Failed to parse error response")
 		}
 
-	retry:
-		for {
-			resp, err := client.SendMessageEvent(ctx, roomId, evtType, evtContent)
-			if err == nil {
-				if evt.done != nil {
-					evt.done <- string(resp.EventID)
-				}
-				metrics.RecordMatrixMessageSent(constants.MatrixSendSuccess)
-				metrics.RecordMatrixMessageLatency(time.Since(startTime).Seconds())
-				break // Success, break the retry loop
-			}
-			var httpErr httpError
-			httpError, isHttpError := err.(mautrix.HTTPError)
-			if !isHttpError {
-				log.Error().Ctx(ctx).Err(err).Msg("Failed to parse error response of unexpected type")
-				metrics.RecordMatrixMessageSent(constants.MatrixSendFailedSend)
-				evt.done <- ""
-				break
-			}
-			if jsonErr := json.Unmarshal([]byte(httpError.ResponseBody), &httpErr); jsonErr != nil {
-				log.Error().Ctx(ctx).Err(jsonErr).Msg("Failed to parse error response")
-			}
-
-			switch e := httpErr.Errcode; e {
-			case "M_LIMIT_EXCEEDED":
-				metrics.RecordMatrixRateLimitRetry()
-				time.Sleep(time.Duration(httpErr.RetryAfterMs) * time.Millisecond)
-			case "M_FORBIDDEN":
-				log.Error().
-					Ctx(ctx).
-					Err(err).
-					Str("room_id", evt.RoomID).
-					Str("error_code", e).
-					Msg("Failed to send message due to permissions")
-				metrics.RecordMatrixMessageSent(constants.MatrixSendFailedForbidden)
-				evt.done <- ""
-				break retry
-			default:
-				log.Error().
-					Ctx(ctx).
-					Err(err).
-					Str("room_id", evt.RoomID).
-					Str("error_code", e).
-					Msg("Failed to send message")
-			}
-			if !evt.RetryOnFailure {
-				metrics.RecordMatrixMessageSent(constants.MatrixSendFailedSend)
-				evt.done <- ""
-				break
-			}
+		switch e := httpErr.Errcode; e {
+		case "M_LIMIT_EXCEEDED":
+			metrics.RecordMatrixRateLimitRetry()
+			time.Sleep(time.Duration(httpErr.RetryAfterMs) * time.Millisecond)
+		case "M_FORBIDDEN":
+			log.Error().
+				Ctx(ctx).
+				Err(err).
+				Str("room_id", evt.RoomID).
+				Str("error_code", e).
+				Msg("Failed to send message due to permissions")
+			metrics.RecordMatrixMessageSent(constants.MatrixSendFailedForbidden)
+			evt.done <- ""
+			break retry
+		default:
+			log.Error().
+				Ctx(ctx).
+				Err(err).
+				Str("room_id", evt.RoomID).
+				Str("error_code", e).
+				Msg("Failed to send message")
+		}
+		if !evt.RetryOnFailure {
+			metrics.RecordMatrixMessageSent(constants.MatrixSendFailedSend)
+			evt.done <- ""
+			break
 		}
 	}
 }
@@ -211,6 +238,16 @@ func Init(ctx context.Context, handleEvent func(ctx context.Context, evt *event.
 	if err != nil {
 		return err
 	}
+
+	// Instrument the homeserver calls. GetDisplayName and GetEventContent sit on the chat path, so
+	// without this a turn's trace has unexplained gaps where it was waiting on Matrix.
+	//
+	// The sync loop is deliberately excluded: it is a single long-poll that runs for the process's
+	// lifetime, so it would produce one span per sync cycle carrying no useful information.
+	client.Client.Transport = otelhttp.NewTransport(client.Client.Transport,
+		otelhttp.WithFilter(func(r *http.Request) bool {
+			return !strings.Contains(r.URL.Path, "/sync")
+		}))
 	_, err = client.Login(ctx, &mautrix.ReqLogin{
 		Type: mautrix.AuthTypePassword,
 		Identifier: mautrix.UserIdentifier{

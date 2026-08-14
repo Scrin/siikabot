@@ -28,7 +28,7 @@ func Handle(ctx context.Context, roomID, msg string) {
 		log.Error().Ctx(ctx).Err(err).
 			Str("room_id", roomID).
 			Msg("Failed to get room members")
-		matrix.SendNotice(roomID, "Failed to get room members")
+		matrix.SendNotice(ctx, roomID, "Failed to get room members")
 		return
 	}
 
@@ -149,5 +149,5 @@ func Handle(ctx context.Context, roomID, msg string) {
 	}
 
 	// Send the response
-	matrix.SendFormattedNotice(roomID, response.String())
+	matrix.SendFormattedNotice(ctx, roomID, response.String())
 }

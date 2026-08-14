@@ -43,23 +43,23 @@ func FormatTemplate(config db.GrafanaConfig) string {
 func Handle(ctx context.Context, roomID, sender, msg string) {
 	params := strings.Split(msg, " ")
 	if len(params) != 2 {
-		matrix.SendMessage(roomID, "Usage: !grafana <template-name>")
+		matrix.SendMessage(ctx, roomID, "Usage: !grafana <template-name>")
 		return
 	}
 
 	configs, err := db.GetGrafanaConfigs(ctx)
 	if err != nil {
-		matrix.SendMessage(roomID, "Error getting configs: "+err.Error())
+		matrix.SendMessage(ctx, roomID, "Error getting configs: "+err.Error())
 		return
 	}
 
 	config, ok := configs[params[1]]
 	if !ok {
-		matrix.SendMessage(roomID, "Template "+params[1]+" not found.")
+		matrix.SendMessage(ctx, roomID, "Template "+params[1]+" not found.")
 		return
 	}
 
-	matrix.SendFormattedMessage(roomID, FormatTemplate(config))
+	matrix.SendFormattedMessage(ctx, roomID, FormatTemplate(config))
 }
 
 func queryGrafana(queryURL string) string {

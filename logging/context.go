@@ -4,12 +4,15 @@ import (
 	"context"
 
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type contextHook struct{}
 
 func (h contextHook) Run(e *zerolog.Event, level zerolog.Level, msg string) {
-	if v := e.GetCtx().Value(fieldContextKey{}); v != nil {
+	ctx := e.GetCtx()
+
+	if v := ctx.Value(fieldContextKey{}); v != nil {
 		fctx := v.(fieldContext)
 		for k, v := range fctx.strValues {
 			e.Str(k, v)
@@ -17,6 +20,13 @@ func (h contextHook) Run(e *zerolog.Event, level zerolog.Level, msg string) {
 		for k, v := range fctx.intValues {
 			e.Int(k, v)
 		}
+	}
+
+	// Tie every line to the span it was written under, so a log entry in Loki links straight to the
+	// trace in Tempo and vice versa. Absent outside a span, which is why it is not unconditional.
+	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
+		e.Str("trace_id", sc.TraceID().String())
+		e.Str("span_id", sc.SpanID().String())
 	}
 }
 

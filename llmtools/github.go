@@ -150,8 +150,7 @@ func getGitHubIssueData(ctx context.Context, repo string, issueNumber int) (*Git
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
 	// Execute the request
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("url", apiURL).Msg("Failed to fetch GitHub issue data")
 		return nil, fmt.Errorf("failed to fetch GitHub issue data: %w", err)
@@ -204,8 +203,7 @@ func getGitHubIssueComments(ctx context.Context, repo string, issueNumber int) (
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
 	// Execute the request
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("url", apiURL).Msg("Failed to fetch GitHub issue comments")
 		return nil, fmt.Errorf("failed to fetch GitHub issue comments: %w", err)

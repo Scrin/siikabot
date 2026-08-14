@@ -12,6 +12,7 @@ import (
 	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/config"
 	"github.com/rs/zerolog/log"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // FingridToolDefinition returns the tool definition for the Fingrid power production tool
@@ -184,8 +185,9 @@ func getFingridPowerStats(ctx context.Context, targetTime time.Time) (*PowerStat
 		},
 	}
 	client := &http.Client{
-		Timeout:   10 * time.Second,
-		Transport: transport,
+		Timeout: toolHTTPTimeout,
+		// Its own transport, so it cannot use the shared client — but still instrumented
+		Transport: otelhttp.NewTransport(transport),
 	}
 
 	log.Debug().Ctx(ctx).Msg("Using insecure HTTP client to ignore certificate errors")

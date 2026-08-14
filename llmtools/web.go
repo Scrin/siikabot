@@ -20,6 +20,7 @@ import (
 	"github.com/Scrin/siikabot/db"
 	strip "github.com/grokify/html-strip-tags-go"
 	"github.com/rs/zerolog/log"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // WebToolDefinition returns the tool definition for the web content fetching tool
@@ -162,7 +163,9 @@ func handleWebToolCall(ctx context.Context, arguments string) (string, error) {
 
 	// Create HTTP client with redirect handling
 	client := &http.Client{
-		Timeout: 10 * time.Second,
+		Timeout: toolHTTPTimeout,
+		// Its own redirect policy, so it cannot use the shared client — but still instrumented
+		Transport: otelhttp.NewTransport(http.DefaultTransport),
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			// Check number of redirects
 			if len(via) >= maxRedirects {

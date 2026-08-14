@@ -112,8 +112,7 @@ func fetchWikipediaSummary(ctx context.Context, query, lang string) (*wikipediaS
 	req.Header.Set("User-Agent", "SiikaBot/1.0 (Matrix bot; contact: github.com/Scrin/siikabot)")
 	req.Header.Set("Accept", "application/json")
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("url", apiURL).Msg("Failed to fetch Wikipedia summary")
 		return nil, fmt.Errorf("failed to fetch Wikipedia summary: %w", err)

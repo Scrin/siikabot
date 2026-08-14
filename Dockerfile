@@ -10,7 +10,7 @@ RUN npm ci --ignore-scripts
 COPY web_frontend/ ./
 RUN npm run build
 
-FROM golang:1.24 AS builder
+FROM golang:1.25 AS builder
 
 RUN apt-get update && apt-get install -y libolm-dev && apt-get clean
 

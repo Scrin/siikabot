@@ -6,6 +6,7 @@ import (
 
 	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/metrics"
+	"github.com/exaring/otelpgx"
 	pgx "github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
@@ -25,6 +26,10 @@ func Init() (err error) {
 	}
 
 	conf.MaxConns = 8
+
+	// Every query becomes a span, with the SQL as an attribute. Cheap, and it means a failing query
+	// shows up in the trace of whatever caused it rather than only in the logs.
+	conf.ConnConfig.Tracer = otelpgx.NewTracer()
 
 	pool, err = pgxpool.NewWithConfig(context.Background(), conf)
 	if err != nil {

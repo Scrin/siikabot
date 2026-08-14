@@ -38,8 +38,8 @@ var ExchangeRatesToolDefinition = aigateway.ToolDefinition{
 
 // ECB XML response structures
 type ecbEnvelope struct {
-	XMLName xml.Name  `xml:"Envelope"`
-	Cube    ecbCube   `xml:"Cube>Cube"`
+	XMLName xml.Name `xml:"Envelope"`
+	Cube    ecbCube  `xml:"Cube>Cube"`
 }
 
 type ecbCube struct {
@@ -108,8 +108,7 @@ func getExchangeRates(ctx context.Context) (*ecbCube, error) {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("url", url).Msg("Failed to fetch exchange rates")
 		return nil, fmt.Errorf("failed to fetch exchange rates: %w", err)

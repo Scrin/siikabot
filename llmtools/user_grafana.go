@@ -248,14 +248,13 @@ func handleQueryUserGrafanaDatasource(ctx context.Context, userID, name string) 
 
 // queryGrafanaURL fetches a value from a Grafana query URL
 func queryGrafanaURL(ctx context.Context, queryURL string) string {
-	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, "GET", queryURL, nil)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("url", queryURL).Msg("Failed to create grafana request")
 		return "Error: " + err.Error()
 	}
 
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("url", queryURL).Msg("Failed to query grafana")
 		return "Error: " + err.Error()

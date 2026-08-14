@@ -68,9 +68,15 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 	if msgtype == "m.text" && evt.Sender.String() != config.UserID {
 		msg := evt.Content.Raw["body"].(string)
 
+		attrs := messageAttrs(evt.RoomID.String(), evt.Sender.String(), evt.ID.String())
+
 		// Track message stats asynchronously
-		go db.UpdateMessageStats(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
-		go db.UpdateRoomDailyStats(ctx, evt.RoomID.String(), msg)
+		traced(ctx, "stats.message", attrs, func(ctx context.Context) {
+			db.UpdateMessageStats(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
+		})
+		traced(ctx, "stats.room_daily", attrs, func(ctx context.Context) {
+			db.UpdateRoomDailyStats(ctx, evt.RoomID.String(), msg)
+		})
 
 		format, _ := evt.Content.Raw["format"].(string)
 		formattedBody, _ := evt.Content.Raw["formatted_body"].(string)
@@ -83,26 +89,46 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 
 		switch cmd {
 		case constants.CommandPing:
-			go ping.Handle(ctx, evt.RoomID.String(), msg)
+			traced(ctx, "command.ping", attrs, func(ctx context.Context) {
+				ping.Handle(ctx, evt.RoomID.String(), msg)
+			})
 		case constants.CommandTraceroute:
-			go traceroute.Handle(ctx, evt.RoomID.String(), msg)
+			traced(ctx, "command.traceroute", attrs, func(ctx context.Context) {
+				traceroute.Handle(ctx, evt.RoomID.String(), msg)
+			})
 		case constants.CommandRuuvi:
-			go ruuvi.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
+			traced(ctx, "command.ruuvi", attrs, func(ctx context.Context) {
+				ruuvi.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
+			})
 		case constants.CommandGrafana:
-			go grafana.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
+			traced(ctx, "command.grafana", attrs, func(ctx context.Context) {
+				grafana.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
+			})
 		case constants.CommandRemind:
-			go remind.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg, format, formattedBody)
+			traced(ctx, "command.remind", attrs, func(ctx context.Context) {
+				remind.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg, format, formattedBody)
+			})
 		case constants.CommandChat:
-			go chat.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
+			traced(ctx, "command.chat", attrs, func(ctx context.Context) {
+				chat.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
+			})
 		case constants.CommandServers:
-			go federation.Handle(ctx, evt.RoomID.String(), msg)
+			traced(ctx, "command.servers", attrs, func(ctx context.Context) {
+				federation.Handle(ctx, evt.RoomID.String(), msg)
+			})
 		case constants.CommandConfig:
 			mentionedUsers := extractMentionedUsers(evt)
-			go configcmd.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg, mentionedUsers)
+			traced(ctx, "command.config", attrs, func(ctx context.Context) {
+				configcmd.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg, mentionedUsers)
+			})
 		case constants.CommandAuth:
-			go authcmd.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
+			traced(ctx, "command.auth", attrs, func(ctx context.Context) {
+				authcmd.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
+			})
 		case constants.CommandStats:
-			go stats.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
+			traced(ctx, "command.stats", attrs, func(ctx context.Context) {
+				stats.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
+			})
 		default:
 			isCommand = false
 
@@ -134,7 +160,9 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 					chatMsg = extractMessageContent(msg, formattedBody)
 				}
 
-				go chat.HandleMention(ctx, evt.RoomID.String(), evt.Sender.String(), chatMsg, evt.ID.String(), relatesTo)
+				traced(ctx, "chat.mention", attrs, func(ctx context.Context) {
+					chat.HandleMention(ctx, evt.RoomID.String(), evt.Sender.String(), chatMsg, evt.ID.String(), relatesTo)
+				})
 				isCommand = true
 				cmd = constants.CommandMention
 				if isReplyToBot {

@@ -15,7 +15,10 @@ import (
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/matrix"
 	"github.com/Scrin/siikabot/metrics"
+	"github.com/Scrin/siikabot/tracing"
 	"github.com/rs/zerolog/log"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // roomLocks serialises chat turns per room. Each message is handled in its own goroutine, and two
@@ -112,6 +115,13 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 	ctx, cancelTurn := context.WithTimeout(ctx, turnTimeout)
 	defer cancelTurn()
 
+	ctx, turnSpan := tracer.Start(ctx, "chat.turn", trace.WithAttributes(
+		attribute.String("matrix.room_id", roomID),
+		attribute.String("matrix.sender", sender),
+		attribute.String("matrix.event_id", eventID),
+	))
+	defer turnSpan.End()
+
 	startTime := time.Now()
 
 	log.Debug().Ctx(ctx).
@@ -131,7 +141,14 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 	stats := &turnStats{outcome: "ok"}
 
 	// Build the initial messages with system prompt, history, and handle image if present
-	messages, hasImage, model, composition := buildInitialMessages(ctx, roomID, sender, msg, relatesTo)
+	buildCtx, buildSpan := tracer.Start(ctx, "chat.build_context")
+	messages, hasImage, model, composition := buildInitialMessages(buildCtx, roomID, sender, msg, relatesTo)
+	buildSpan.SetAttributes(
+		attribute.Int("siikabot.chat.message_count", len(messages)),
+		attribute.Int("siikabot.chat.history_tokens", composition.history),
+		attribute.Bool("siikabot.chat.has_image", hasImage),
+	)
+	buildSpan.End()
 
 	// Get tool definitions from the registry, filtering based on user permissions
 	tools := getToolsForUser(ctx, sender)
@@ -139,9 +156,19 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 	composition.tools = estimateToolDefinitionTokens(tools)
 	composition.record(ctx)
 
+	turnSpan.SetAttributes(
+		attribute.String("siikabot.chat.model", model),
+		attribute.Bool("siikabot.chat.has_image", hasImage),
+		attribute.Int("siikabot.chat.prompt_tokens_estimated", composition.total()),
+	)
+
 	// Cap the response length. Read once and threaded through the turn so a multi-iteration turn
 	// does not re-query it per request.
 	maxTokens := getMaxTokensForRoom(ctx, roomID)
+
+	// Recorded by Cloudflare as span attributes and log fields, which is the only way its side of a
+	// turn knows which room and user it belonged to
+	metadata := gatewayMetadata(roomID, sender, 1)
 
 	// Create the initial request
 	req := aigateway.ChatRequest{
@@ -149,6 +176,7 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 		Messages:  messages,
 		Tools:     tools,
 		MaxTokens: &maxTokens,
+		Metadata:  metadata,
 	}
 
 	// Estimated size of the whole prompt, compared against the reported usage below so the accuracy
@@ -184,13 +212,18 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 			stats.outcome = "turn_timeout"
 			stats.finish(ctx, roomID, sender, model, hasImage, time.Since(startTime))
 			metrics.RecordChatRequestDuration(model, hasImage, time.Since(startTime).Seconds())
-			matrix.SendMessage(roomID, "That took too long to answer, so I gave up. Try again, or ask something narrower.")
+			stats.recordOnSpan(turnSpan)
+			matrix.SendMessageWithDebugData(ctx, roomID,
+				"That took too long to answer, so I gave up. Try again, or ask something narrower.",
+				failureDebugData(ctx, model, stats.outcome))
 			return
 		}
 		stats.outcome = "request_failed"
 		stats.finish(ctx, roomID, sender, model, hasImage, time.Since(startTime))
 		metrics.RecordChatRequestDuration(model, hasImage, time.Since(startTime).Seconds())
-		matrix.SendMessage(roomID, "Failed to process chat request")
+		stats.recordOnSpan(turnSpan)
+		matrix.SendMessageWithDebugData(ctx, roomID, "Failed to process chat request",
+			failureDebugData(ctx, model, stats.outcome))
 		return
 	}
 
@@ -204,7 +237,9 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 		stats.outcome = "no_choices"
 		stats.finish(ctx, roomID, sender, model, hasImage, time.Since(startTime))
 		metrics.RecordChatRequestDuration(model, hasImage, time.Since(startTime).Seconds())
-		matrix.SendMessage(roomID, "No response from chat API")
+		stats.recordOnSpan(turnSpan)
+		matrix.SendMessageWithDebugData(ctx, roomID, "No response from chat API",
+			failureDebugData(ctx, model, stats.outcome))
 		return
 	}
 
@@ -250,14 +285,15 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 	}
 
 	stats.finish(ctx, roomID, sender, model, hasImage, time.Since(startTime))
+	stats.recordOnSpan(turnSpan)
 
 	metrics.RecordChatRequestDuration(model, hasImage, time.Since(startTime).Seconds())
 	metrics.RecordChatToolIterations(iterationCount)
 
 	// Create debug data with model info and tool calls
-	debugData := buildDebugData(model, messages, iterationCount)
+	debugData := buildDebugData(ctx, model, messages, iterationCount)
 
-	matrix.SendMarkdownFormattedNoticeWithDebugData(roomID, assistantResponse, debugData)
+	matrix.SendMarkdownFormattedNoticeWithDebugData(ctx, roomID, assistantResponse, debugData)
 }
 
 // buildInitialMessages creates the initial messages array with system prompt, history, and user
@@ -856,6 +892,7 @@ func processToolCalls(
 			Messages:  messages,
 			Tools:     tools,
 			MaxTokens: &maxTokens,
+			Metadata:  gatewayMetadata(roomID, sender, iterationCount),
 		}
 
 		// Log the request for debugging
@@ -953,6 +990,7 @@ func processToolCalls(
 			Model:     model,
 			Messages:  messages,
 			MaxTokens: &maxTokens,
+			Metadata:  gatewayMetadata(roomID, sender, iterationCount),
 		}
 
 		// Log the final request
@@ -1050,10 +1088,17 @@ func saveToolCallHistory(ctx context.Context, roomID string, toolCalls []aigatew
 }
 
 // buildDebugData creates debug data for the response
-func buildDebugData(model string, messages []aigateway.Message, iterationCount int) map[string]any {
+func buildDebugData(ctx context.Context, model string, messages []aigateway.Message, iterationCount int) map[string]any {
 	debugData := map[string]any{
 		"model":                model,
 		"prompt_message_count": len(messages),
+	}
+
+	// The trace id makes a reply self-describing: open its source, copy the id, and the whole turn
+	// can be pulled up in Tempo. It also finds Cloudflare's separate spans, which carry it as
+	// siikabot_trace_id, so one value reaches both halves of the picture.
+	if traceID := tracing.TraceID(ctx); traceID != "" {
+		debugData["trace_id"] = traceID
 	}
 
 	// Add tool calls information if any were made during the current processing

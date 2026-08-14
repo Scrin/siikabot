@@ -2,12 +2,17 @@ package chat
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/metrics"
+	"github.com/Scrin/siikabot/tracing"
 	"github.com/rs/zerolog/log"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Phase names for the turn duration breakdown
@@ -163,4 +168,49 @@ func estimateToolDefinitionTokens(tools []aigateway.ToolDefinition) int {
 		total += estimateTokens(string(tool.Function.Parameters))
 	}
 	return total
+}
+
+// recordOnSpan copies the turn's totals onto its span, so a trace answers the same questions the
+// summary log line does without needing the log
+func (s *turnStats) recordOnSpan(span trace.Span) {
+	span.SetAttributes(
+		attribute.String("siikabot.chat.outcome", s.outcome),
+		attribute.Int("siikabot.chat.tool_iterations", s.iterations),
+		attribute.StringSlice("siikabot.chat.tools_called", s.toolsCalled),
+		attribute.Int("siikabot.chat.prompt_tokens", s.promptTokens),
+		attribute.Int("siikabot.chat.completion_tokens", s.completionTokens),
+		attribute.Int("siikabot.chat.cached_prompt_tokens", s.cachedTokens),
+		attribute.Float64("siikabot.chat.cache_hit_rate", s.cacheHitRate()),
+	)
+	if s.outcome != "ok" {
+		span.SetStatus(codes.Error, s.outcome)
+	}
+}
+
+// gatewayMetadata is the context Cloudflare records against its own span and logs.
+//
+// Room and user make Cloudflare's cost view answerable by room, which the local usage table cannot
+// do; the iteration number distinguishes a turn's first call from its tool follow-ups, which is
+// otherwise invisible on their side.
+func gatewayMetadata(roomID, sender string, iteration int) map[string]string {
+	return map[string]string{
+		"room_id":   roomID,
+		"user_id":   sender,
+		"iteration": strconv.Itoa(iteration),
+	}
+}
+
+// failureDebugData is the debug blob attached to a failure reply.
+//
+// Failures previously carried none at all, which meant the one reply you would most want to
+// investigate was the only one with no trace id attached to it.
+func failureDebugData(ctx context.Context, model, outcome string) map[string]any {
+	debugData := map[string]any{
+		"model":   model,
+		"outcome": outcome,
+	}
+	if traceID := tracing.TraceID(ctx); traceID != "" {
+		debugData["trace_id"] = traceID
+	}
+	return debugData
 }

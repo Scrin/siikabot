@@ -14,6 +14,10 @@ import (
 	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/metrics"
 	"github.com/rs/zerolog/log"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // callTimeout bounds a single attempt. A chat bot that has not heard back within this is not going
@@ -50,7 +54,12 @@ const gatewayBackoff = "exponential"
 // forwards image content parts to OpenAI models in a shape they reject.
 const runPath = "/ai/run"
 
-var httpClient = &http.Client{Timeout: httpTimeout}
+// Instrumented so each attempt produces a client span. Cloudflare's own span cannot be nested under
+// it — the REST API discards the trace context we send — but the local timing is still worth having.
+var httpClient = &http.Client{
+	Timeout:   httpTimeout,
+	Transport: otelhttp.NewTransport(http.DefaultTransport),
+}
 
 // ImageURL is the image payload of a content part.
 //
@@ -84,6 +93,10 @@ type ChatRequest struct {
 	Messages  []Message        `json:"messages"`
 	Tools     []ToolDefinition `json:"tools,omitempty"`
 	MaxTokens *int             `json:"max_tokens,omitempty"`
+
+	// Metadata travels in the cf-aig-metadata header rather than the body, and Cloudflare turns it
+	// into attributes on its own span and filterable fields in its logs
+	Metadata map[string]string `json:"-"`
 }
 
 // chatInput is the "input" object of an /ai/run request, holding everything but the model
@@ -180,6 +193,35 @@ func setInferenceHeaders(req *http.Request) {
 	req.Header.Set("cf-aig-backoff", gatewayBackoff)
 }
 
+// setMetadataHeader attaches request metadata for Cloudflare to record.
+//
+// This carries the trace correlation as well as the business context. Cloudflare's spans cannot be
+// nested under ours — the REST API discards cf-aig-otel-trace-id — but metadata does survive, so the
+// bot's trace and span ids ride along as attributes and the two traces can be matched up afterwards.
+func setMetadataHeader(ctx context.Context, req *http.Request, metadata map[string]string) {
+	combined := make(map[string]string, len(metadata)+2)
+	for k, v := range metadata {
+		combined[k] = v
+	}
+
+	// Guarded: an invalid span context would otherwise write all-zero ids that match no trace
+	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
+		combined["siikabot_trace_id"] = sc.TraceID().String()
+		combined["siikabot_span_id"] = sc.SpanID().String()
+	}
+
+	if len(combined) == 0 {
+		return
+	}
+
+	encoded, err := json.Marshal(combined)
+	if err != nil {
+		log.Warn().Ctx(ctx).Err(err).Msg("Failed to encode gateway metadata")
+		return
+	}
+	req.Header.Set("cf-aig-metadata", string(encoded))
+}
+
 // firstError returns the code and message of the first error in an API response envelope
 func firstError(errs []apiError) (int, string) {
 	if len(errs) == 0 {
@@ -203,12 +245,22 @@ func SendChatRequest(ctx context.Context, req ChatRequest) (*ChatResponse, error
 		return nil, fmt.Errorf("failed to marshal chat request: %w", err)
 	}
 
+	ctx, span := tracer.Start(ctx, "gen_ai.chat "+req.Model,
+		trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(
+			attribute.String(attrOperationName, operationChat),
+			attribute.String(attrProviderName, providerFromModel(req.Model)),
+			attribute.String(attrRequestModel, req.Model),
+		))
+	defer span.End()
+
 	// Retry transient failures. Only the HTTP call is retried, never anything around it: by the
 	// time a caller is in a tool loop the tools have already run, and some of them write.
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		chatResp, kind, err := sendOnce(ctx, req.Model, jsonData)
+		chatResp, kind, err := sendOnce(ctx, req.Model, req.Metadata, jsonData, attempt)
 		if err == nil {
+			recordResponseAttributes(span, chatResp)
 			return chatResp, nil
 		}
 		lastErr = err
@@ -222,6 +274,10 @@ func SendChatRequest(ctx context.Context, req ChatRequest) (*ChatResponse, error
 		}
 
 		metrics.RecordChatAPIRetry(req.Model, string(kind))
+		span.AddEvent("retry", trace.WithAttributes(
+			attribute.Int(attrAttempt, attempt),
+			attribute.String("error_kind", string(kind)),
+		))
 		log.Warn().Ctx(ctx).
 			Str("model", req.Model).
 			Str("error_kind", string(kind)).
@@ -230,7 +286,29 @@ func SendChatRequest(ctx context.Context, req ChatRequest) (*ChatResponse, error
 			Msg("Retrying chat request after a transient failure")
 	}
 
+	span.RecordError(lastErr)
+	span.SetStatus(codes.Error, lastErr.Error())
 	return nil, lastErr
+}
+
+// recordResponseAttributes copies the parts of a successful response worth having on the span
+func recordResponseAttributes(span trace.Span, resp *ChatResponse) {
+	if resp == nil {
+		return
+	}
+	if resp.Model != "" {
+		span.SetAttributes(attribute.String(attrResponseModel, resp.Model))
+	}
+	if len(resp.Choices) > 0 && resp.Choices[0].FinishReason != "" {
+		span.SetAttributes(attribute.StringSlice(attrFinishReason, []string{resp.Choices[0].FinishReason}))
+	}
+	if resp.Usage != nil {
+		span.SetAttributes(
+			attribute.Int(attrInputTokens, resp.Usage.PromptTokens),
+			attribute.Int(attrOutputTokens, resp.Usage.CompletionTokens),
+			attribute.Int(attrCachedInputTokens, resp.Usage.CachedPromptTokens()),
+		)
+	}
 }
 
 // isRetryable reports whether a failure is worth another attempt. Anything caused by the request
@@ -265,7 +343,12 @@ func waitBeforeRetry(ctx context.Context, attempt int) bool {
 }
 
 // sendOnce performs a single attempt, returning the response or the failure with its classification
-func sendOnce(ctx context.Context, model string, jsonData []byte) (*ChatResponse, ErrorKind, error) {
+func sendOnce(ctx context.Context, model string, metadata map[string]string, jsonData []byte, attempt int) (*ChatResponse, ErrorKind, error) {
+	ctx, span := tracer.Start(ctx, "gen_ai.chat.attempt",
+		trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(attribute.Int(attrAttempt, attempt)))
+	defer span.End()
+
 	// Each attempt gets its own timeout, bounded by the caller's deadline for the whole turn
 	callCtx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
@@ -279,6 +362,8 @@ func sendOnce(ctx context.Context, model string, jsonData []byte) (*ChatResponse
 	httpReq.Header.Set("Content-Type", "application/json")
 	setAuthHeaders(httpReq)
 	setInferenceHeaders(httpReq)
+	// Uses the attempt's context, so the correlation ids point at this attempt's span
+	setMetadataHeader(ctx, httpReq, metadata)
 
 	// Measured around the call itself, so a slow turn can be attributed to the model rather than to
 	// tool execution without reading logs
