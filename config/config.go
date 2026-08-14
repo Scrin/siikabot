@@ -67,13 +67,11 @@ func loadConfig() error {
 	if CloudflareAccountID == "" {
 		return fmt.Errorf("SIIKABOT_CLOUDFLARE_ACCOUNT_ID is not set")
 	}
-	// The token needs both inference access and the AI Gateway Read permission, the latter
-	// for the gateway log polling that produces the cost and token metrics
 	if CloudflareAPIToken == "" {
 		return fmt.Errorf("SIIKABOT_CLOUDFLARE_API_TOKEN is not set")
 	}
 	if CloudflareAIGatewayID == "" {
-		CloudflareAIGatewayID = "default"
+		return fmt.Errorf("SIIKABOT_CLOUDFLARE_AI_GATEWAY_ID is not set")
 	}
 	if PostgresConnectionString == "" {
 		return fmt.Errorf("SIIKABOT_POSTGRES_CONNECTION_STRING is not set")

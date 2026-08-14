@@ -3,6 +3,7 @@ package aigateway
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 )
@@ -329,4 +330,97 @@ func TestHandleToolCallsIndividuallyMultipleCalls(t *testing.T) {
 	if responseMap["call_2"] != "response from tool_2" {
 		t.Errorf("expected 'response from tool_2', got %q", responseMap["call_2"])
 	}
+}
+
+// TestGetToolDefinitionsIsDeterministicallyOrdered is the regression test for a cache bug that cost
+// real money.
+//
+// Tool definitions live in a map, and Go randomises map iteration. An identical set of tools therefore
+// serialised in a different order on every request, so the prompt prefix never repeated and the
+// provider's cache could not hit across turns — only within a single turn, where one slice happens to
+// be reused across iterations. The tools are the largest part of the prompt, so this quietly defeated
+// the whole point of keeping volatile content at the end of the prompt.
+func TestGetToolDefinitionsIsDeterministicallyOrdered(t *testing.T) {
+	dummyHandler := func(ctx context.Context, arguments string) (string, error) { return "", nil }
+
+	// Enough tools that a random iteration order is overwhelmingly unlikely to repeat by chance
+	names := []string{
+		"get_weather", "get_news", "web_search", "get_electricity_prices", "user_grafana",
+		"memory", "reminder", "dns", "whois", "wikipedia", "timezone", "exchange_rates",
+		"github_issue", "github_status", "fingrid", "get_web_content", "weather_forecast",
+	}
+
+	registry := NewToolRegistry()
+	for _, name := range names {
+		registry.RegisterTool(ToolDefinition{
+			Type:     "function",
+			Function: FunctionSchema{Name: name},
+			Handler:  dummyHandler,
+		})
+	}
+
+	first := toolNames(registry.GetToolDefinitions())
+
+	// Repeated calls on the same registry must produce byte-identical ordering
+	for i := range 50 {
+		got := toolNames(registry.GetToolDefinitions())
+		if !slices.Equal(got, first) {
+			t.Fatalf("call %d returned a different order:\n got: %v\nwant: %v", i, got, first)
+		}
+	}
+
+	// A registry populated in a different order must also agree, since the model sees only the result
+	shuffled := NewToolRegistry()
+	for _, name := range slices.Backward(names) {
+		shuffled.RegisterTool(ToolDefinition{
+			Type:     "function",
+			Function: FunctionSchema{Name: name},
+			Handler:  dummyHandler,
+		})
+	}
+	if got := toolNames(shuffled.GetToolDefinitions()); !slices.Equal(got, first) {
+		t.Errorf("registration order changed the result:\n got: %v\nwant: %v", got, first)
+	}
+
+	// And the order is by name, so it is predictable rather than merely stable
+	if !slices.IsSorted(first) {
+		t.Errorf("expected definitions sorted by name, got %v", first)
+	}
+}
+
+// TestGetToolDefinitionsOrderSurvivesFiltering guards the assumption the caller relies on: filtering
+// tools by permission preserves the sorted order, so two users with different permissions still each
+// get a stable prefix.
+func TestGetToolDefinitionsOrderSurvivesFiltering(t *testing.T) {
+	dummyHandler := func(ctx context.Context, arguments string) (string, error) { return "", nil }
+
+	registry := NewToolRegistry()
+	for _, name := range []string{"weather", "user_grafana", "memory", "dns"} {
+		registry.RegisterTool(ToolDefinition{
+			Type:     "function",
+			Function: FunctionSchema{Name: name},
+			Handler:  dummyHandler,
+		})
+	}
+
+	// Mirrors getToolsForUser: drop one tool, keep the rest in the order they arrived
+	filtered := make([]string, 0, 4)
+	for _, def := range registry.GetToolDefinitions() {
+		if def.Function.Name == "user_grafana" {
+			continue
+		}
+		filtered = append(filtered, def.Function.Name)
+	}
+
+	if !slices.IsSorted(filtered) {
+		t.Errorf("filtering broke the ordering: %v", filtered)
+	}
+}
+
+func toolNames(definitions []ToolDefinition) []string {
+	names := make([]string, 0, len(definitions))
+	for _, def := range definitions {
+		names = append(names, def.Function.Name)
+	}
+	return names
 }

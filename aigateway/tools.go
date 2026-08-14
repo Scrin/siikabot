@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -69,12 +71,22 @@ func (r *ToolRegistry) RegisterTool(definition ToolDefinition) {
 	r.handlers[definition.Function.Name] = definition.Handler
 }
 
-// GetToolDefinitions returns all registered tool definitions
+// GetToolDefinitions returns all registered tool definitions, ordered by name.
+//
+// The ordering is not cosmetic. Tool definitions are the largest single part of every prompt and are
+// sent on every call, so they sit inside the prefix providers cache on. Go randomises map iteration,
+// which meant an identical set of tools serialised differently on every request and the prefix never
+// repeated — the cache could only ever hit within a single turn, where one slice is reused across
+// iterations. Sorting makes the prefix stable across turns, which is the whole point of keeping the
+// volatile parts of the prompt at the end.
 func (r *ToolRegistry) GetToolDefinitions() []ToolDefinition {
 	definitions := make([]ToolDefinition, 0, len(r.definitions))
 	for _, def := range r.definitions {
 		definitions = append(definitions, def)
 	}
+	slices.SortFunc(definitions, func(a, b ToolDefinition) int {
+		return strings.Compare(a.Function.Name, b.Function.Name)
+	})
 	return definitions
 }
 
