@@ -3,9 +3,10 @@ package chat
 import (
 	"context"
 	"fmt"
-	"github.com/Scrin/siikabot/tracing"
 	"strings"
 	"time"
+
+	"github.com/Scrin/siikabot/tracing"
 
 	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/config"
@@ -15,7 +16,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const defaultModel = "openai/gpt-4o-mini"
+const (
+	defaultTextModel  = "openrouter/deepseek/deepseek-v4-pro-0813"
+	defaultImageModel = "openrouter/openai/gpt-5.6-luna"
+)
 
 // Default values for configurable parameters
 const defaultMaxToolIterations = 5
@@ -117,7 +121,7 @@ func cleanupChatUsage(ctx context.Context) {
 func getTextModelForRoom(ctx context.Context, roomID string) string {
 	model, err := db.GetRoomChatLLMModelText(ctx, roomID)
 	if err != nil || model == nil {
-		return defaultModel
+		return defaultTextModel
 	}
 	return *model
 }
@@ -127,7 +131,7 @@ func getTextModelForRoom(ctx context.Context, roomID string) string {
 func getImageModelForRoom(ctx context.Context, roomID string) string {
 	model, err := db.GetRoomChatLLMModelImage(ctx, roomID)
 	if err != nil || model == nil {
-		return defaultModel
+		return defaultImageModel
 	}
 	return *model
 }

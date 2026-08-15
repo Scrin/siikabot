@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Scrin/siikabot/config"
@@ -295,6 +296,28 @@ func setMetadataHeader(ctx context.Context, req *http.Request, metadata map[stri
 	req.Header.Set("cf-aig-metadata", string(encoded))
 }
 
+// maxBodyMessageLength caps how much of a non-JSON error body is repeated into an error message.
+// Provider errors are usually a short sentence, but nothing guarantees it is not an HTML page.
+const maxBodyMessageLength = 200
+
+// errorMessageFromBody turns a response body that is not JSON into something worth reporting.
+//
+// The body is the only description available in that case, and it is often the most useful one:
+// "Authentication Fails (governor)" says precisely what went wrong, where a generic "HTTP 401" would
+// leave the reader guessing which side rejected the request.
+func errorMessageFromBody(body []byte) string {
+	message := strings.TrimSpace(string(body))
+	if message == "" {
+		return ""
+	}
+
+	// Truncated by runes rather than bytes, so a multi-byte character is never cut in half
+	if runes := []rune(message); len(runes) > maxBodyMessageLength {
+		return string(runes[:maxBodyMessageLength]) + "..."
+	}
+	return message
+}
+
 // firstError returns the code and message of the first error in an API response envelope
 func firstError(errs []apiError) (int, string) {
 	if len(errs) == 0 {
@@ -456,21 +479,24 @@ func sendOnce(ctx context.Context, model string, metadata map[string]string, jso
 	}
 
 	var compatResp chatCompletionResponse
-	if err := json.Unmarshal(body, &compatResp); err != nil {
-		recordFailure(ctx, model, ErrorKindParseError, startTime)
-		log.Error().Ctx(ctx).Err(err).
-			Str("model", model).
-			Int("status_code", resp.StatusCode).
-			Str("response", string(body)).
-			Msg("Failed to parse chat response")
-		return nil, ErrorKindParseError, fmt.Errorf("failed to parse chat response: %w", err)
-	}
+	parseErr := json.Unmarshal(body, &compatResp)
 
 	// A failure shows up either in the HTTP status or in an error object in the body. There is no
 	// success flag on this endpoint, so an error-shaped body is the only signal when the status
 	// itself is 200 — which happens when the gateway succeeds but the provider behind it does not.
-	if resp.StatusCode >= 400 || compatResp.failed() {
+	//
+	// The status is checked before the body is required to parse, because a failed response is not
+	// guaranteed to be JSON. The compat endpoint forwards some provider errors through verbatim, and
+	// not every provider answers in JSON: DeepSeek rejects a bad credential with the bare string
+	// "Authentication Fails (governor)". Parsing first turned that plain 401 into a parse_error,
+	// which reported the wrong metric and buried the actual cause. The /ai/run endpoint always
+	// wrapped errors in Cloudflare's own envelope, so this only became reachable on this endpoint.
+	if resp.StatusCode >= 400 || (parseErr == nil && compatResp.failed()) {
 		errs := compatResp.apiErrors()
+		if parseErr != nil {
+			// Nothing structured to read, so the body itself is the best description available
+			errs = []apiError{{Message: errorMessageFromBody(body)}}
+		}
 		_, errorMessage := firstError(errs)
 		errorKind := classifyResponseError(resp.StatusCode, errs)
 		recordFailure(ctx, model, errorKind, startTime)
@@ -486,6 +512,17 @@ func sendOnce(ctx context.Context, model string, metadata map[string]string, jso
 			return nil, errorKind, fmt.Errorf("chat API error: HTTP %d", resp.StatusCode)
 		}
 		return nil, errorKind, fmt.Errorf("chat API error: %s", errorMessage)
+	}
+
+	// A successful status with a body that will not parse is a genuine parse error
+	if parseErr != nil {
+		recordFailure(ctx, model, ErrorKindParseError, startTime)
+		log.Error().Ctx(ctx).Err(parseErr).
+			Str("model", model).
+			Int("status_code", resp.StatusCode).
+			Str("response", string(body)).
+			Msg("Failed to parse chat response")
+		return nil, ErrorKindParseError, fmt.Errorf("failed to parse chat response: %w", parseErr)
 	}
 
 	chatResp := compatResp.ChatResponse

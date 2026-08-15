@@ -120,7 +120,11 @@ func TestProviderFromModel(t *testing.T) {
 		"google/gemini-3-flash":    "google",
 		"anthropic/claude-opus-48": "anthropic",
 		"@cf/meta/llama-3":         "@cf",
-		"bare-model-name":          "bare-model-name",
+		// OpenRouter model ids contain a slash of their own, so the combined form has two. Only the
+		// first segment is the provider, which is what Cloudflare reports on its own span.
+		"openrouter/deepseek/deepseek-v4-pro": "openrouter",
+		"openrouter/openai/gpt-4o-mini":       "openrouter",
+		"bare-model-name":                     "bare-model-name",
 	} {
 		if got := providerFromModel(model); got != want {
 			t.Errorf("providerFromModel(%q) = %q, want %q", model, got, want)

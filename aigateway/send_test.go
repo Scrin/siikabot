@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Scrin/siikabot/config"
 )
@@ -140,5 +141,113 @@ func TestSendOnceTreatsAProviderErrorAsAFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "The model does not exist") {
 		t.Errorf("the provider's message should reach the caller, got: %v", err)
+	}
+}
+
+// TestSendOnceClassifiesNonJSONErrorBodies is the regression test for the DeepSeek failure.
+//
+// The compat endpoint forwards some provider errors through verbatim, and not every provider answers
+// in JSON. DeepSeek rejects a bad credential with the bare string "Authentication Fails (governor)"
+// and an HTTP 401. Parsing the body before checking the status turned that into a parse_error, which
+// reported the wrong metric label and hid the real cause behind a misleading message. The /ai/run
+// endpoint always wrapped errors in Cloudflare's envelope, so this only became reachable after the
+// move to the Unified API.
+func TestSendOnceClassifiesNonJSONErrorBodies(t *testing.T) {
+	cases := []struct {
+		name     string
+		status   int
+		body     string
+		wantKind ErrorKind
+	}{
+		{"deepseek auth failure", 401, "Authentication Fails (governor)", ErrorKindAuth},
+		{"plain text forbidden", 403, "Forbidden", ErrorKindAuth},
+		{"html error page", 502, "<html><body>Bad Gateway</body></html>", ErrorKindProviderError},
+		{"empty body", 500, "", ErrorKindProviderError},
+		{"plain text rate limit", 429, "rate limit exceeded", ErrorKindRateLimited},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := ctxWithSpan(t, "bad5326e2fca4bafbead818b13dc7111", "d271e004dacacb31")
+			_, resp, err := captureRequest(t, ctx, tc.body, tc.status)
+
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if resp != nil {
+				t.Errorf("expected no response alongside the error")
+			}
+
+			// The classification is what reaches the metrics, and what decides whether a retry is
+			// even attempted — an auth failure must not be retried three times
+			if got := kindOf(t, ctx, tc.body, tc.status); got != tc.wantKind {
+				t.Errorf("error kind = %q, want %q", got, tc.wantKind)
+			}
+		})
+	}
+}
+
+// kindOf runs sendOnce and returns only the classification
+func kindOf(t *testing.T, ctx context.Context, body string, status int) ErrorKind {
+	t.Helper()
+
+	config.CloudflareAccountID = "acct123"
+	config.CloudflareAIGatewayID = "siikabot"
+	config.CloudflareAPIToken = "cf-token"
+
+	original := httpClient
+	httpClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: status,
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	t.Cleanup(func() { httpClient = original })
+
+	_, kind, _ := sendOnce(ctx, "deepseek/deepseek-v4-pro", nil, []byte(`{}`), 1)
+	return kind
+}
+
+// TestSendOnceSurfacesTheProviderMessage verifies the provider's own words reach the caller, since
+// "Authentication Fails" identifies which side rejected the request where "HTTP 401" does not
+func TestSendOnceSurfacesTheProviderMessage(t *testing.T) {
+	ctx := ctxWithSpan(t, "bad5326e2fca4bafbead818b13dc7111", "d271e004dacacb31")
+
+	_, _, err := captureRequest(t, ctx, "Authentication Fails (governor)", 401)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "Authentication Fails (governor)") {
+		t.Errorf("the provider's message should reach the caller, got: %v", err)
+	}
+}
+
+// TestErrorMessageFromBodyTruncatesSafely verifies a large body cannot flood a log line, and that
+// truncation never splits a multi-byte character
+func TestErrorMessageFromBodyTruncatesSafely(t *testing.T) {
+	if got := errorMessageFromBody([]byte("  Authentication Fails (governor)\n")); got != "Authentication Fails (governor)" {
+		t.Errorf("expected the message to be trimmed, got %q", got)
+	}
+	if got := errorMessageFromBody(nil); got != "" {
+		t.Errorf("expected an empty message for an empty body, got %q", got)
+	}
+
+	long := errorMessageFromBody([]byte(strings.Repeat("ä", 500)))
+	if !utf8.ValidString(long) {
+		t.Error("truncation split a multi-byte character")
+	}
+	if len([]rune(long)) > maxBodyMessageLength+3 {
+		t.Errorf("message was not truncated: %d runes", len([]rune(long)))
+	}
+}
+
+// TestSuccessfulStatusWithBadBodyIsStillAParseError verifies the parse error path survives: a 200
+// carrying something unreadable is a genuine parse failure, not an upstream error
+func TestSuccessfulStatusWithBadBodyIsStillAParseError(t *testing.T) {
+	ctx := ctxWithSpan(t, "bad5326e2fca4bafbead818b13dc7111", "d271e004dacacb31")
+
+	if got := kindOf(t, ctx, "this is not json", 200); got != ErrorKindParseError {
+		t.Errorf("error kind = %q, want %q", got, ErrorKindParseError)
 	}
 }
