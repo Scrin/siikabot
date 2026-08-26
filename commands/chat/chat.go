@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	defaultTextModel  = "openrouter/deepseek/deepseek-v4-pro-0813"
+	defaultTextModel  = "openrouter/deepseek/deepseek-v4-flash-0731"
 	defaultImageModel = "openrouter/openai/gpt-5.6-luna"
 )
 
