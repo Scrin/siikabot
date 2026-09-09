@@ -10,12 +10,9 @@ import (
 	"github.com/Scrin/siikabot/auth"
 	authcmd "github.com/Scrin/siikabot/commands/auth"
 	"github.com/Scrin/siikabot/commands/chat"
-	configcmd "github.com/Scrin/siikabot/commands/config"
 	"github.com/Scrin/siikabot/commands/federation"
-	"github.com/Scrin/siikabot/commands/grafana"
 	"github.com/Scrin/siikabot/commands/ping"
 	"github.com/Scrin/siikabot/commands/remind"
-	"github.com/Scrin/siikabot/commands/ruuvi"
 	"github.com/Scrin/siikabot/commands/stats"
 	"github.com/Scrin/siikabot/commands/traceroute"
 	"github.com/Scrin/siikabot/config"
@@ -28,29 +25,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"maunium.net/go/mautrix/event"
 )
-
-// isCommandEnabled checks if a command is enabled for a room
-// Most commands are enabled by default, except for specific commands that need to be explicitly enabled in the database
-func isCommandEnabled(ctx context.Context, roomID string, command constants.Command) bool {
-	// These commands are disabled by default and need to be explicitly enabled
-	restrictedCommands := map[constants.Command]bool{
-		constants.CommandRuuvi:   true,
-		constants.CommandGrafana: true,
-	}
-
-	// If the command is not restricted, it's always enabled
-	if !restrictedCommands[command] {
-		return true
-	}
-
-	// For restricted commands, check if they're explicitly enabled in the database
-	enabled, err := db.IsCommandEnabled(ctx, roomID, string(command))
-	if err != nil {
-		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("command", string(command)).Msg("Failed to query enabled commands")
-		return false
-	}
-	return enabled
-}
 
 func handleTextEvent(ctx context.Context, evt *event.Event) {
 	if evt.Sender.String() == config.UserID {
@@ -98,10 +72,6 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 		cmd := constants.Command(strings.Split(msg, " ")[0])
 		isCommand := true
 
-		if !isCommandEnabled(ctx, evt.RoomID.String(), cmd) {
-			return
-		}
-
 		switch cmd {
 		case constants.CommandPing:
 			traced(ctx, "command.ping", attrs, func(ctx context.Context) {
@@ -110,14 +80,6 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 		case constants.CommandTraceroute:
 			traced(ctx, "command.traceroute", attrs, func(ctx context.Context) {
 				traceroute.Handle(ctx, evt.RoomID.String(), msg)
-			})
-		case constants.CommandRuuvi:
-			traced(ctx, "command.ruuvi", attrs, func(ctx context.Context) {
-				ruuvi.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
-			})
-		case constants.CommandGrafana:
-			traced(ctx, "command.grafana", attrs, func(ctx context.Context) {
-				grafana.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
 			})
 		case constants.CommandRemind:
 			traced(ctx, "command.remind", attrs, func(ctx context.Context) {
@@ -130,11 +92,6 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 		case constants.CommandServers:
 			traced(ctx, "command.servers", attrs, func(ctx context.Context) {
 				federation.Handle(ctx, evt.RoomID.String(), msg)
-			})
-		case constants.CommandConfig:
-			mentionedUsers := extractMentionedUsers(evt)
-			traced(ctx, "command.config", attrs, func(ctx context.Context) {
-				configcmd.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg, mentionedUsers)
 			})
 		case constants.CommandAuth:
 			traced(ctx, "command.auth", attrs, func(ctx context.Context) {
@@ -195,27 +152,6 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 			metrics.RecordCommandHandled(cmd)
 		}
 	}
-}
-
-// extractMentionedUsers extracts user IDs from the m.mentions field of an event
-func extractMentionedUsers(evt *event.Event) []string {
-	mentions, ok := evt.Content.Raw["m.mentions"].(map[string]any)
-	if !ok {
-		return nil
-	}
-
-	userIDs, ok := mentions["user_ids"].([]any)
-	if !ok {
-		return nil
-	}
-
-	result := make([]string, 0, len(userIDs))
-	for _, id := range userIDs {
-		if strID, ok := id.(string); ok {
-			result = append(result, strID)
-		}
-	}
-	return result
 }
 
 // containsBotMention checks if the message contains a mention of the bot

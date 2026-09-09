@@ -42,7 +42,6 @@ export interface MeResponse {
 
 export interface Authorizations {
   admin: boolean
-  grafana: boolean
 }
 
 export interface AuthErrorResponse {
@@ -94,26 +93,6 @@ export interface MemoriesResponse {
 
 export interface DeleteAllMemoriesResponse {
   deleted_count: number
-}
-
-// Grafana types
-export interface GrafanaDatasource {
-  name: string
-  url: string
-}
-
-export interface GrafanaTemplate {
-  name: string
-  template: string
-  datasources: GrafanaDatasource[]
-}
-
-export interface GrafanaTemplatesResponse {
-  templates: GrafanaTemplate[]
-}
-
-export interface GrafanaRenderResponse {
-  rendered: string
 }
 
 // Chat usage types

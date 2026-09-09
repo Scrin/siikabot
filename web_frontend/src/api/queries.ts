@@ -12,13 +12,6 @@ import {
   fetchMemories,
   deleteMemory,
   deleteAllMemories,
-  fetchGrafanaTemplates,
-  createGrafanaTemplate,
-  updateGrafanaTemplate,
-  deleteGrafanaTemplate,
-  setGrafanaDatasource,
-  deleteGrafanaDatasource,
-  renderGrafanaTemplate,
   fetchChatUsage,
 } from './client'
 import { useAuth } from '../context/AuthContext'
@@ -35,7 +28,6 @@ export const queryKeys = {
   roomMembers: (roomId: string) => ['roomMembers', roomId] as const,
   adminRoomMembers: (roomId: string) => ['adminRoomMembers', roomId] as const,
   memories: ['memories'] as const,
-  grafanaTemplates: ['grafanaTemplates'] as const,
   chatUsage: (days: number) => ['chatUsage', days] as const,
 }
 
@@ -148,127 +140,6 @@ export function useDeleteAllMemories() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.memories })
     },
-  })
-}
-
-/**
- * Hook to fetch Grafana templates
- * Only fetches when user is authenticated and has grafana authorization
- */
-export function useGrafanaTemplates() {
-  const { token, isAuthenticated, authorizations } = useAuth()
-
-  return useQuery({
-    queryKey: queryKeys.grafanaTemplates,
-    queryFn: () => fetchGrafanaTemplates(token!),
-    enabled: isAuthenticated && !!token && authorizations?.grafana === true,
-    refetchInterval: 30000,
-  })
-}
-
-/**
- * Hook to create a new Grafana template
- */
-export function useCreateGrafanaTemplate() {
-  const { token } = useAuth()
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: ({ name, template }: { name: string; template: string }) =>
-      createGrafanaTemplate(token!, name, template),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.grafanaTemplates })
-    },
-  })
-}
-
-/**
- * Hook to update a Grafana template
- */
-export function useUpdateGrafanaTemplate() {
-  const { token } = useAuth()
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: ({ name, template }: { name: string; template: string }) =>
-      updateGrafanaTemplate(token!, name, template),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.grafanaTemplates })
-    },
-  })
-}
-
-/**
- * Hook to delete a Grafana template
- */
-export function useDeleteGrafanaTemplate() {
-  const { token } = useAuth()
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: (name: string) => deleteGrafanaTemplate(token!, name),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.grafanaTemplates })
-    },
-  })
-}
-
-/**
- * Hook to set a datasource for a Grafana template
- */
-export function useSetGrafanaDatasource() {
-  const { token } = useAuth()
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: ({
-      templateName,
-      datasourceName,
-      url,
-    }: {
-      templateName: string
-      datasourceName: string
-      url: string
-    }) => setGrafanaDatasource(token!, templateName, datasourceName, url),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.grafanaTemplates })
-    },
-  })
-}
-
-/**
- * Hook to delete a datasource from a Grafana template
- */
-export function useDeleteGrafanaDatasource() {
-  const { token } = useAuth()
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: ({
-      templateName,
-      datasourceName,
-    }: {
-      templateName: string
-      datasourceName: string
-    }) => deleteGrafanaDatasource(token!, templateName, datasourceName),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.grafanaTemplates })
-    },
-  })
-}
-
-/**
- * Hook to render a Grafana template with real data
- * Only fetches when enabled is true (preview is visible)
- */
-export function useRenderGrafanaTemplate(templateName: string, enabled: boolean) {
-  const { token, isAuthenticated, authorizations } = useAuth()
-
-  return useQuery({
-    queryKey: ['grafanaRender', templateName] as const,
-    queryFn: () => renderGrafanaTemplate(token!, templateName),
-    enabled: enabled && isAuthenticated && !!token && authorizations?.grafana === true,
-    staleTime: 0, // Always refetch when requested
   })
 }
 

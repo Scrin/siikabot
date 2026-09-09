@@ -19,7 +19,6 @@ import { MemoriesCard } from './components/MemoriesCard'
 import { RoomsCard } from './components/RoomsCard'
 import { AdminRoomsCard } from './components/AdminRoomsCard'
 import { ChatUsageCard } from './components/ChatUsageCard'
-import { GrafanaCard } from './components/GrafanaCard'
 import { ScanlineOverlay } from './components/ui/ScanlineOverlay'
 import { TiltCard } from './components/ui/TiltCard'
 import { FadeInSection } from './components/ui/FadeInSection'
@@ -33,8 +32,7 @@ function AppContent() {
   const { data: metrics, isLoading: metricsLoading } = useMetrics()
   const isLoading = healthLoading || metricsLoading
   const interpolatedUptime = useInterpolatedUptime(health?.uptime)
-  const { isAuthenticated, isLoading: authLoading, authorizations, adminMode, isAdmin } =
-    useAuth()
+  const { isAuthenticated, isLoading: authLoading, adminMode, isAdmin } = useAuth()
   const prefersReducedMotion = useReducedMotion()
   const { isReduced, isMinimal } = useReducedEffects()
 
@@ -273,25 +271,6 @@ function AppContent() {
                           <MemoriesCard />
                         </div>
                       </FadeInSection>
-
-                      {/* Grafana Section - only if authorized */}
-                      {authorizations?.grafana && (
-                        <FadeInSection delay={0.6}>
-                          <div className="mt-6 border-t border-slate-700/50 pt-6">
-                            <motion.h3
-                              className="mb-4 font-mono text-sm tracking-wider text-slate-500 uppercase"
-                              initial={
-                                prefersReducedMotion ? {} : { opacity: 0, x: -10 }
-                              }
-                              animate={{ opacity: 1, x: 0 }}
-                              transition={{ delay: 0.7 }}
-                            >
-                              Grafana Templates
-                            </motion.h3>
-                            <GrafanaCard />
-                          </div>
-                        </FadeInSection>
-                      )}
 
                       {/* Known Rooms Section */}
                       <FadeInSection delay={0.65}>

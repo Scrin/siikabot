@@ -55,19 +55,6 @@ func initHTTP() {
 			protectedGroup.DELETE("/memories", api.DeleteAllMemoriesHandler)
 			protectedGroup.DELETE("/memories/:id", api.DeleteMemoryHandler)
 
-			// Grafana routes (require additional Grafana authorization)
-			grafanaGroup := protectedGroup.Group("/grafana/templates")
-			grafanaGroup.Use(api.GrafanaAuthMiddleware())
-			{
-				grafanaGroup.GET("", api.ListGrafanaTemplatesHandler)
-				grafanaGroup.POST("", api.CreateGrafanaTemplateHandler)
-				grafanaGroup.PUT("/:name", api.UpdateGrafanaTemplateHandler)
-				grafanaGroup.DELETE("/:name", api.DeleteGrafanaTemplateHandler)
-				grafanaGroup.GET("/:name/render", api.RenderGrafanaTemplateHandler)
-				grafanaGroup.PUT("/:name/datasources/:sourceName", api.SetGrafanaDatasourceHandler)
-				grafanaGroup.DELETE("/:name/datasources/:sourceName", api.DeleteGrafanaDatasourceHandler)
-			}
-
 			// Admin routes (require admin authorization)
 			adminGroup := protectedGroup.Group("/admin")
 			adminGroup.Use(api.AdminAuthMiddleware())

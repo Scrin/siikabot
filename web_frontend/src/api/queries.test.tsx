@@ -7,7 +7,6 @@ import {
   useMetrics,
   useReminders,
   useRooms,
-  useGrafanaTemplates,
   queryKeys,
 } from './queries'
 import { AuthProvider } from '../context/AuthContext'
@@ -18,7 +17,6 @@ vi.mock('./client', () => ({
   fetchMetrics: vi.fn(),
   fetchReminders: vi.fn(),
   fetchRooms: vi.fn(),
-  fetchGrafanaTemplates: vi.fn(),
   fetchCurrentUser: vi.fn(),
   logout: vi.fn(),
   AuthError: class AuthError extends Error {
@@ -61,7 +59,6 @@ describe('React Query Hooks', () => {
       expect(queryKeys.reminders).toEqual(['reminders'])
       expect(queryKeys.rooms).toEqual(['rooms'])
       expect(queryKeys.adminRooms).toEqual(['adminRooms'])
-      expect(queryKeys.grafanaTemplates).toEqual(['grafanaTemplates'])
 
       // Test function-based keys
       expect(queryKeys.roomMembers('room1')).toEqual(['roomMembers', 'room1'])
@@ -134,7 +131,7 @@ describe('React Query Hooks', () => {
       localStorage.setItem('siikabot_auth_token', 'valid-token')
       vi.mocked(client.fetchCurrentUser).mockResolvedValue({
         user_id: '@user:example.com',
-        authorizations: { grafana: true, admin: false },
+        authorizations: { admin: false },
       })
       vi.mocked(client.fetchReminders).mockResolvedValue({
         reminders: [
@@ -172,7 +169,7 @@ describe('React Query Hooks', () => {
       localStorage.setItem('siikabot_auth_token', 'valid-token')
       vi.mocked(client.fetchCurrentUser).mockResolvedValue({
         user_id: '@user:example.com',
-        authorizations: { grafana: true, admin: false },
+        authorizations: { admin: false },
       })
       vi.mocked(client.fetchRooms).mockResolvedValue({
         rooms: [{ room_id: '!room:example.com', room_name: 'Test Room' }],
@@ -188,51 +185,4 @@ describe('React Query Hooks', () => {
     })
   })
 
-  describe('useGrafanaTemplates', () => {
-    it('should not fetch when not authenticated', async () => {
-      const { result } = renderHook(() => useGrafanaTemplates(), { wrapper: createWrapper() })
-
-      await waitFor(() => {
-        expect(result.current.fetchStatus).toBe('idle')
-      })
-
-      expect(client.fetchGrafanaTemplates).not.toHaveBeenCalled()
-    })
-
-    it('should not fetch when user lacks grafana authorization', async () => {
-      localStorage.setItem('siikabot_auth_token', 'valid-token')
-      vi.mocked(client.fetchCurrentUser).mockResolvedValue({
-        user_id: '@user:example.com',
-        authorizations: { grafana: false, admin: false },
-      })
-
-      const { result } = renderHook(() => useGrafanaTemplates(), { wrapper: createWrapper() })
-
-      // Wait for auth to settle and authorizations to be fetched
-      await waitFor(() => {
-        expect(result.current.fetchStatus).toBe('idle')
-      })
-
-      expect(client.fetchGrafanaTemplates).not.toHaveBeenCalled()
-    })
-
-    it('should fetch when user has grafana authorization', async () => {
-      localStorage.setItem('siikabot_auth_token', 'valid-token')
-      vi.mocked(client.fetchCurrentUser).mockResolvedValue({
-        user_id: '@user:example.com',
-        authorizations: { grafana: true, admin: false },
-      })
-      vi.mocked(client.fetchGrafanaTemplates).mockResolvedValue({
-        templates: [{ name: 'test', template: '<html></html>', datasources: [] }],
-      })
-
-      const { result } = renderHook(() => useGrafanaTemplates(), { wrapper: createWrapper() })
-
-      await waitFor(() => {
-        expect(result.current.isSuccess).toBe(true)
-      })
-
-      expect(client.fetchGrafanaTemplates).toHaveBeenCalledWith('valid-token')
-    })
-  })
 })

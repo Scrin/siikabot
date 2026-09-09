@@ -10,7 +10,7 @@ This document provides context for working with SiikaBot using Claude Code CLI.
 - **AI Chat** - LLM-powered conversations with tool calling (weather, web search, GitHub, news, electricity prices)
 - **Network Utilities** - Ping and traceroute commands
 - **Reminders** - Time-based reminder system with natural language parsing
-- **Monitoring Integration** - Ruuvi sensor and Grafana metrics queries
+- **Alerting** - Alertmanager webhook relayed into Matrix rooms
 - **Federation Info** - Matrix server federation details
 - **Web Dashboard** - React-based system health monitoring UI
 
@@ -180,11 +180,10 @@ Commands should follow this pattern:
 1. **Package per command** in `./commands/<commandname>/`
 2. **Handle function** as the entry point: `Handle(ctx context.Context, roomID, msg string)`
 3. **Parse arguments** from the message string
-4. **Check command enablement** - Done automatically in `bot/bot.go` for restricted commands
-5. **Execute command logic** (may involve database, external APIs, etc.)
-6. **Send typing indicator** for long-running operations: `matrix.SendTyping(ctx, roomID, true, duration)`
-7. **Send result** back to room: `matrix.SendMessage(roomID, response)`
-8. **Log all operations** with appropriate context
+4. **Execute command logic** (may involve database, external APIs, etc.)
+5. **Send typing indicator** for long-running operations: `matrix.SendTyping(ctx, roomID, true, duration)`
+6. **Send result** back to room: `matrix.SendMessage(roomID, response)`
+7. **Log all operations** with appropriate context
 
 #### Example Command Structure
 
@@ -224,8 +223,6 @@ Add commands to the switch statement in `bot/bot.go`:
 case "!mycommand":
     go mycommand.Handle(ctx, evt.RoomID.String(), msg)
 ```
-
-For restricted commands (disabled by default), add to the `restrictedCommands` map in `bot/bot.go`.
 
 ### Go Code - LLM Tool Pattern
 

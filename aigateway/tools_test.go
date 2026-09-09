@@ -345,7 +345,7 @@ func TestGetToolDefinitionsIsDeterministicallyOrdered(t *testing.T) {
 
 	// Enough tools that a random iteration order is overwhelmingly unlikely to repeat by chance
 	names := []string{
-		"get_weather", "get_news", "web_search", "get_electricity_prices", "user_grafana",
+		"get_weather", "get_news", "web_search", "get_electricity_prices",
 		"memory", "reminder", "dns", "whois", "wikipedia", "timezone", "exchange_rates",
 		"github_issue", "github_status", "fingrid", "get_web_content", "weather_forecast",
 	}
@@ -385,35 +385,6 @@ func TestGetToolDefinitionsIsDeterministicallyOrdered(t *testing.T) {
 	// And the order is by name, so it is predictable rather than merely stable
 	if !slices.IsSorted(first) {
 		t.Errorf("expected definitions sorted by name, got %v", first)
-	}
-}
-
-// TestGetToolDefinitionsOrderSurvivesFiltering guards the assumption the caller relies on: filtering
-// tools by permission preserves the sorted order, so two users with different permissions still each
-// get a stable prefix.
-func TestGetToolDefinitionsOrderSurvivesFiltering(t *testing.T) {
-	dummyHandler := func(ctx context.Context, arguments string) (string, error) { return "", nil }
-
-	registry := NewToolRegistry()
-	for _, name := range []string{"weather", "user_grafana", "memory", "dns"} {
-		registry.RegisterTool(ToolDefinition{
-			Type:     "function",
-			Function: FunctionSchema{Name: name},
-			Handler:  dummyHandler,
-		})
-	}
-
-	// Mirrors getToolsForUser: drop one tool, keep the rest in the order they arrived
-	filtered := make([]string, 0, 4)
-	for _, def := range registry.GetToolDefinitions() {
-		if def.Function.Name == "user_grafana" {
-			continue
-		}
-		filtered = append(filtered, def.Function.Name)
-	}
-
-	if !slices.IsSorted(filtered) {
-		t.Errorf("filtering broke the ordering: %v", filtered)
 	}
 }
 

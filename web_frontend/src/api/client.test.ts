@@ -8,13 +8,6 @@ import {
   logout,
   fetchReminders,
   fetchRooms,
-  fetchGrafanaTemplates,
-  createGrafanaTemplate,
-  updateGrafanaTemplate,
-  deleteGrafanaTemplate,
-  setGrafanaDatasource,
-  deleteGrafanaDatasource,
-  renderGrafanaTemplate,
   AuthError,
 } from './client'
 
@@ -162,7 +155,7 @@ describe('API Client', () => {
       vi.mocked(fetch).mockResolvedValue({
         ok: true,
         json: () =>
-          Promise.resolve({ user_id: '@user:example.com', authorizations: { grafana: true } }),
+          Promise.resolve({ user_id: '@user:example.com', authorizations: { admin: true } }),
       } as Response)
 
       await fetchCurrentUser('my-token')
@@ -172,7 +165,7 @@ describe('API Client', () => {
     })
 
     it('should return user data on success', async () => {
-      const mockResponse = { user_id: '@user:example.com', authorizations: { grafana: true } }
+      const mockResponse = { user_id: '@user:example.com', authorizations: { admin: true } }
       vi.mocked(fetch).mockResolvedValue({
         ok: true,
         json: () => Promise.resolve(mockResponse),
@@ -304,201 +297,4 @@ describe('API Client', () => {
     })
   })
 
-  describe('fetchGrafanaTemplates', () => {
-    it('should throw AuthError on 401', async () => {
-      vi.mocked(fetch).mockResolvedValue({
-        ok: false,
-        status: 401,
-        json: () => Promise.resolve({ error: 'Unauthorized' }),
-      } as Response)
-
-      await expect(fetchGrafanaTemplates('token')).rejects.toThrow(AuthError)
-    })
-
-    it('should throw specific error for 403 Forbidden', async () => {
-      vi.mocked(fetch).mockResolvedValue({
-        ok: false,
-        status: 403,
-        json: () => Promise.resolve({ error: 'Forbidden' }),
-      } as Response)
-
-      await expect(fetchGrafanaTemplates('token')).rejects.toThrow('Grafana access not authorized')
-    })
-
-    it('should return templates on success', async () => {
-      const mockResponse = {
-        templates: [{ name: 'test', template: '<html></html>', datasources: {} }],
-      }
-      vi.mocked(fetch).mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve(mockResponse),
-      } as Response)
-
-      const result = await fetchGrafanaTemplates('token')
-      expect(result).toEqual(mockResponse)
-    })
-  })
-
-  describe('createGrafanaTemplate', () => {
-    it('should send correct payload', async () => {
-      vi.mocked(fetch).mockResolvedValue({ ok: true } as Response)
-
-      await createGrafanaTemplate('token', 'my-template', '<html></html>')
-      expect(fetch).toHaveBeenCalledWith('/api/grafana/templates', {
-        method: 'POST',
-        headers: {
-          Authorization: 'Bearer token',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ name: 'my-template', template: '<html></html>' }),
-      })
-    })
-
-    it('should throw AuthError on 401', async () => {
-      vi.mocked(fetch).mockResolvedValue({
-        ok: false,
-        status: 401,
-        json: () => Promise.resolve({ error: 'Unauthorized' }),
-      } as Response)
-
-      await expect(createGrafanaTemplate('token', 'name', 'template')).rejects.toThrow(AuthError)
-    })
-
-    it('should throw specific error for 403', async () => {
-      vi.mocked(fetch).mockResolvedValue({
-        ok: false,
-        status: 403,
-        json: () => Promise.resolve({ error: 'Forbidden' }),
-      } as Response)
-
-      await expect(createGrafanaTemplate('token', 'name', 'template')).rejects.toThrow(
-        'Grafana access not authorized'
-      )
-    })
-  })
-
-  describe('updateGrafanaTemplate', () => {
-    it('should encode template name in URL', async () => {
-      vi.mocked(fetch).mockResolvedValue({ ok: true } as Response)
-
-      await updateGrafanaTemplate('token', 'my template', '<html></html>')
-      expect(fetch).toHaveBeenCalledWith('/api/grafana/templates/my%20template', expect.any(Object))
-    })
-
-    it('should send correct payload', async () => {
-      vi.mocked(fetch).mockResolvedValue({ ok: true } as Response)
-
-      await updateGrafanaTemplate('token', 'template-name', '<html>updated</html>')
-      expect(fetch).toHaveBeenCalledWith('/api/grafana/templates/template-name', {
-        method: 'PUT',
-        headers: {
-          Authorization: 'Bearer token',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ template: '<html>updated</html>' }),
-      })
-    })
-  })
-
-  describe('deleteGrafanaTemplate', () => {
-    it('should use DELETE method', async () => {
-      vi.mocked(fetch).mockResolvedValue({ ok: true } as Response)
-
-      await deleteGrafanaTemplate('token', 'template-name')
-      expect(fetch).toHaveBeenCalledWith('/api/grafana/templates/template-name', {
-        method: 'DELETE',
-        headers: { Authorization: 'Bearer token' },
-      })
-    })
-
-    it('should encode template name in URL', async () => {
-      vi.mocked(fetch).mockResolvedValue({ ok: true } as Response)
-
-      await deleteGrafanaTemplate('token', 'my/template')
-      expect(fetch).toHaveBeenCalledWith('/api/grafana/templates/my%2Ftemplate', expect.any(Object))
-    })
-  })
-
-  describe('setGrafanaDatasource', () => {
-    it('should encode both template and datasource names', async () => {
-      vi.mocked(fetch).mockResolvedValue({ ok: true } as Response)
-
-      await setGrafanaDatasource('token', 'my template', 'my source', 'http://example.com')
-      expect(fetch).toHaveBeenCalledWith(
-        '/api/grafana/templates/my%20template/datasources/my%20source',
-        expect.any(Object)
-      )
-    })
-
-    it('should send correct payload', async () => {
-      vi.mocked(fetch).mockResolvedValue({ ok: true } as Response)
-
-      await setGrafanaDatasource('token', 'template', 'source', 'http://example.com')
-      expect(fetch).toHaveBeenCalledWith('/api/grafana/templates/template/datasources/source', {
-        method: 'PUT',
-        headers: {
-          Authorization: 'Bearer token',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ url: 'http://example.com' }),
-      })
-    })
-  })
-
-  describe('deleteGrafanaDatasource', () => {
-    it('should use DELETE method with correct path', async () => {
-      vi.mocked(fetch).mockResolvedValue({ ok: true } as Response)
-
-      await deleteGrafanaDatasource('token', 'template', 'source')
-      expect(fetch).toHaveBeenCalledWith('/api/grafana/templates/template/datasources/source', {
-        method: 'DELETE',
-        headers: { Authorization: 'Bearer token' },
-      })
-    })
-  })
-
-  describe('renderGrafanaTemplate', () => {
-    it('should fetch render endpoint', async () => {
-      vi.mocked(fetch).mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ html: '<table></table>' }),
-      } as Response)
-
-      await renderGrafanaTemplate('token', 'my-template')
-      expect(fetch).toHaveBeenCalledWith('/api/grafana/templates/my-template/render', {
-        headers: { Authorization: 'Bearer token' },
-      })
-    })
-
-    it('should return rendered HTML on success', async () => {
-      const mockResponse = { html: '<table><tr><td>Data</td></tr></table>' }
-      vi.mocked(fetch).mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve(mockResponse),
-      } as Response)
-
-      const result = await renderGrafanaTemplate('token', 'template')
-      expect(result).toEqual(mockResponse)
-    })
-
-    it('should throw specific error for 404', async () => {
-      vi.mocked(fetch).mockResolvedValue({
-        ok: false,
-        status: 404,
-        json: () => Promise.resolve({ error: 'Not found' }),
-      } as Response)
-
-      await expect(renderGrafanaTemplate('token', 'missing')).rejects.toThrow('Template not found')
-    })
-
-    it('should throw AuthError on 401', async () => {
-      vi.mocked(fetch).mockResolvedValue({
-        ok: false,
-        status: 401,
-        json: () => Promise.resolve({ error: 'Unauthorized' }),
-      } as Response)
-
-      await expect(renderGrafanaTemplate('token', 'template')).rejects.toThrow(AuthError)
-    })
-  })
 })
