@@ -2,7 +2,6 @@ package bot
 
 import (
 	"context"
-	"regexp"
 	"strings"
 
 	"github.com/Scrin/siikabot/aigateway"
@@ -124,12 +123,23 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 				}
 			}
 
-			// Check if the message contains a mention of the bot
-			if containsBotMention(msg, formattedBody) || isReplyToBot {
-				// Extract the actual message content (remove the mention part if it's a mention)
+			// Check if the message addresses the bot: an explicit mention of the bot in
+			// m.mentions, or a message that opens by naming the bot
+			isMentioned := mentionsBotExplicitly(evt.Content.Raw, config.UserID)
+			botDisplayName := matrix.GetDisplayName(ctx, config.UserID)
+			prefixedMsg, isPrefixed := stripBotNamePrefix(msg, formattedBody, config.UserID, botDisplayName)
+
+			if isMentioned || isPrefixed || isReplyToBot {
+				// Only the leading address is dropped from the message. A mention anywhere else is
+				// part of what the sender wrote and reads better left alone.
 				chatMsg := msg
-				if containsBotMention(msg, formattedBody) {
-					chatMsg = extractMessageContent(msg, formattedBody)
+				if isPrefixed {
+					chatMsg = prefixedMsg
+					// Nothing but the bot's name: the sender is getting our attention rather than
+					// asking anything, so let the model see the name it was called by
+					if chatMsg == "" {
+						chatMsg = msg
+					}
 				}
 
 				traced(ctx, "chat.mention", attrs, func(ctx context.Context) {
@@ -152,84 +162,6 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 			metrics.RecordCommandHandled(cmd)
 		}
 	}
-}
-
-// containsBotMention checks if the message contains a mention of the bot
-func containsBotMention(plainMsg, formattedMsg string) bool {
-	// Check for URLs in the message - both with and without protocol prefix
-	// This pattern matches common URL formats including those without http/https prefix
-	urlPattern := regexp.MustCompile(`(https?://|www\.)[^\s]+|[a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,}[^\s]*|[a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,}[^\s]*`)
-	urls := urlPattern.FindAllString(plainMsg, -1)
-
-	// Create a copy of plainMsg with all URLs removed
-	plainMsgWithoutUrls := plainMsg
-	for _, url := range urls {
-		plainMsgWithoutUrls = strings.Replace(plainMsgWithoutUrls, url, "", -1)
-	}
-
-	// Check for mention in plain text by display name
-	botDisplayName := matrix.GetDisplayName(context.Background(), config.UserID)
-	if botDisplayName != "" && strings.Contains(strings.ToLower(plainMsgWithoutUrls), strings.ToLower(botDisplayName)) {
-		return true
-	}
-
-	// Check for mention in formatted text (Matrix uses <a href="https://matrix.to/#/@user:domain.com">@user</a> format)
-	if formattedMsg != "" && strings.Contains(formattedMsg, "https://matrix.to/#/"+config.UserID) {
-		return true
-	}
-
-	return false
-}
-
-// extractMessageContent removes the bot mention from the message
-func extractMessageContent(plainMsg, formattedMsg string) string {
-	// Get bot identifiers
-	botUserName := strings.Split(config.UserID, ":")[0][1:] // Remove @ and domain part
-	botDisplayName := matrix.GetDisplayName(context.Background(), config.UserID)
-
-	// Try to extract content after user ID mention
-	if idx := strings.Index(strings.ToLower(plainMsg), "@"+strings.ToLower(botUserName)); idx >= 0 {
-		// Find the end of the mention (space or colon typically follows the mention)
-		endIdx := idx + len(botUserName) + 1 // +1 for the @ symbol
-		for endIdx < len(plainMsg) && plainMsg[endIdx] != ' ' && plainMsg[endIdx] != ':' {
-			endIdx++
-		}
-
-		// If there's content after the mention, extract it
-		if endIdx < len(plainMsg) {
-			// Skip any colon or space after the mention
-			for endIdx < len(plainMsg) && (plainMsg[endIdx] == ' ' || plainMsg[endIdx] == ':') {
-				endIdx++
-			}
-			return strings.TrimSpace(plainMsg[endIdx:])
-		}
-	}
-
-	// Try to extract content after display name mention
-	if botDisplayName != "" {
-		if idx := strings.Index(strings.ToLower(plainMsg), strings.ToLower(botDisplayName)); idx >= 0 {
-			// Find the end of the mention
-			endIdx := idx + len(botDisplayName)
-
-			// If there's content after the mention, extract it
-			if endIdx < len(plainMsg) {
-				// Skip any colon or space after the mention
-				for endIdx < len(plainMsg) && (plainMsg[endIdx] == ' ' || plainMsg[endIdx] == ':') {
-					endIdx++
-				}
-				return strings.TrimSpace(plainMsg[endIdx:])
-			}
-		}
-	}
-
-	// If we can't extract a clean message, try to remove the bot name from the message
-	cleanedMsg := plainMsg
-	if botDisplayName != "" {
-		cleanedMsg = strings.ReplaceAll(strings.ToLower(cleanedMsg), strings.ToLower(botDisplayName), "")
-	}
-	cleanedMsg = strings.ReplaceAll(strings.ToLower(cleanedMsg), "@"+strings.ToLower(botUserName), "")
-
-	return strings.TrimSpace(cleanedMsg)
 }
 
 func handleMemberEvent(ctx context.Context, evt *event.Event) {

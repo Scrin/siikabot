@@ -316,7 +316,8 @@ func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relat
 	// a single turn, and they are executed in parallel.
 	systemPrompt := fmt.Sprintf(
 		"You are %s, a helpful Matrix bot. "+
-			"Keep your responses concise and helpful. Use markdown formatting in your responses. "+
+			"Keep your responses concise and helpful. You must be cold and direct: no yapping/rambling, "+
+			"no emojis and no warmth, unless the user has requested it. Use markdown formatting in your responses. "+
 			"When you need several independent pieces of information, request all of the tool calls "+
 			"together in one turn rather than one at a time.",
 		botDisplayName,
