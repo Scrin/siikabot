@@ -155,18 +155,24 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 	// Accumulates everything that happens during this turn, for the summary logged at the end
 	stats := &turnStats{outcome: "ok"}
 
+	// fail ends a turn that has no answer to give: the turn is recorded with the outcome, and the
+	// room is told in place of the answer
+	fail := func(outcome, model string, hasImage bool) {
+		duration := time.Since(startTime)
+		metrics.RecordChatRequestDuration(model, hasImage, duration.Seconds())
+		stats.outcome = outcome
+		stats.finish(ctx, roomID, sender, model, hasImage, duration)
+		stats.recordOnSpan(turnSpan)
+		matrix.SendMessageTo(ctx, roomID, target, failureMessage(outcome), failureDebugData(ctx, model, outcome))
+	}
+
 	// Read once and used for the whole turn, so a change made with !chat while a turn is running
 	// cannot leave that turn on a mix of old and new settings
 	cfg, err := db.GetChatConfig(ctx)
 	if err != nil {
 		// Already logged. There is nothing to fall back to: the database is the only source of the
 		// configuration, and without it there is no model to ask.
-		stats.outcome = "config_unavailable"
-		stats.finish(ctx, roomID, sender, "", false, time.Since(startTime))
-		metrics.RecordChatRequestDuration("", false, time.Since(startTime).Seconds())
-		stats.recordOnSpan(turnSpan)
-		matrix.SendMessageTo(ctx, roomID, target, "Failed to process chat request",
-			failureDebugData(ctx, "", stats.outcome))
+		fail("config_unavailable", "", false)
 		return
 	}
 
@@ -242,22 +248,7 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 			Str("model", model).
 			Bool("has_image", hasImage).
 			Msg("Failed to send chat request")
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			stats.outcome = "turn_timeout"
-			stats.finish(ctx, roomID, sender, model, hasImage, time.Since(startTime))
-			metrics.RecordChatRequestDuration(model, hasImage, time.Since(startTime).Seconds())
-			stats.recordOnSpan(turnSpan)
-			matrix.SendMessageTo(ctx, roomID, target,
-				"That took too long to answer, so I gave up. Try again, or ask something narrower.",
-				failureDebugData(ctx, model, stats.outcome))
-			return
-		}
-		stats.outcome = "request_failed"
-		stats.finish(ctx, roomID, sender, model, hasImage, time.Since(startTime))
-		metrics.RecordChatRequestDuration(model, hasImage, time.Since(startTime).Seconds())
-		stats.recordOnSpan(turnSpan)
-		matrix.SendMessageTo(ctx, roomID, target, "Failed to process chat request",
-			failureDebugData(ctx, model, stats.outcome))
+		fail(requestFailure(ctx), model, hasImage)
 		return
 	}
 
@@ -268,12 +259,7 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 			Str("model", model).
 			Bool("has_image", hasImage).
 			Msg("Chat API returned no choices")
-		stats.outcome = "no_choices"
-		stats.finish(ctx, roomID, sender, model, hasImage, time.Since(startTime))
-		metrics.RecordChatRequestDuration(model, hasImage, time.Since(startTime).Seconds())
-		stats.recordOnSpan(turnSpan)
-		matrix.SendMessageTo(ctx, roomID, target, "No response from chat API",
-			failureDebugData(ctx, model, stats.outcome))
+		fail("no_choices", model, hasImage)
 		return
 	}
 
@@ -288,8 +274,8 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 		return db.SaveUserTurn(ctx, prompt.userTurn)
 	})
 
-	// Get the assistant's response
-	assistantResponse := extractAssistantResponse(ctx, roomID, sender, model, hasImage, chatResp)
+	// The response the answer comes from: this one, or the last one of the tool iterations
+	finalResp, failure := chatResp, ""
 
 	// Check if the model wants to use a tool
 	if chatResp.Choices[0].FinishReason == "tool_calls" && len(chatResp.Choices[0].Message.ToolCalls) > 0 {
@@ -302,12 +288,26 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 			Msg("Model requested tool calls")
 
 		// Process tool calls iteratively
-		iterationCount, messages, assistantResponse = processToolCalls(
+		iterationCount, messages, finalResp, failure = processToolCalls(
 			ctx, toolContext(ctx, trigger, prompt.room, target), turn, sender, model, hasImage, cfg,
 			chatResp, messages, tools, stats,
 		)
 	}
 	stats.iterations = iterationCount
+	metrics.RecordChatToolIterations(iterationCount)
+
+	var assistantResponse string
+	if failure == "" {
+		assistantResponse, failure = extractAssistantResponse(ctx, roomID, sender, model, hasImage, finalResp)
+	}
+
+	// A turn that fails part way keeps the question and the tool calls it stored, but what the room
+	// is told is not stored as the answer. Replayed later, it would read as something the bot had
+	// said; without it, the model sees a question that went unanswered, which is what happened.
+	if failure != "" {
+		fail(failure, model, hasImage)
+		return
+	}
 
 	// What is posted, and stored, is the answer without a header the model may have copied
 	assistantResponse = stripImitatedHeader(assistantResponse)
@@ -316,7 +316,6 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 	// the duration is taken now, although the turn is only recorded once the delivery is known.
 	turnDuration := time.Since(startTime)
 	metrics.RecordChatRequestDuration(model, hasImage, turnDuration.Seconds())
-	metrics.RecordChatToolIterations(iterationCount)
 
 	// Create debug data with model info and tool calls
 	debugData := buildDebugData(ctx, model, messages, iterationCount)
@@ -337,7 +336,10 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 	// a redaction of the answer can find it. An answer the room never saw isn't stored at all, and
 	// counts as a failed turn. The room stays locked until then, so the next turn in the room
 	// starts after this answer is out.
-	delivered := matrix.SendMarkdownFormattedNoticeTo(ctx, roomID, target, assistantResponse, debugData)
+	//
+	// The model writes members' user IDs, and the room sees pills with their names in their place.
+	// What is stored is the answer as the model wrote it.
+	delivered := matrix.SendMarkdownFormattedNoticeTo(ctx, roomID, target, assistantResponse, prompt.room.pillNames(), debugData)
 	answerEventID := awaitDelivery(delivered)
 	if answerEventID == "" {
 		stats.outcome = "not_delivered"
@@ -358,8 +360,8 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 }
 
 // answerTarget places the answer to a trigger, and any failure message with it: in the thread the
-// trigger was sent in, or the main timeline. An answer still queued when its trigger is redacted
-// is dropped.
+// trigger was sent in, or the main timeline, and as a reply to the trigger if anything was posted
+// there after it. An answer still queued when its trigger is redacted is dropped.
 func answerTarget(trigger Trigger) matrix.Target {
 	eventID := trigger.EventID
 	return matrix.Target{
@@ -385,6 +387,30 @@ func awaitDelivery(delivered <-chan string) string {
 	case <-timer.C:
 		return ""
 	}
+}
+
+// failureMessage is what the room is told, in place of an answer, when a turn fails with the
+// outcome
+func failureMessage(outcome string) string {
+	switch outcome {
+	case "turn_timeout":
+		return "That took too long to answer, so I gave up. Try again, or ask something narrower."
+	case "no_choices", "empty_response":
+		return "No response from chat API"
+	case "tool_failed":
+		return "Failed to process tool calls"
+	default:
+		return "Failed to process chat request"
+	}
+}
+
+// requestFailure is the outcome of a model call that failed: the turn ran out of time, or the call
+// itself failed
+func requestFailure(ctx context.Context) string {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return "turn_timeout"
+	}
+	return "request_failed"
 }
 
 // toolContext carries what tools need to act for the turn: the room, the sender they act for,
@@ -807,7 +833,7 @@ func usableImage(ctx context.Context, roomID, base64ImageURL string) (string, st
 // get notified. The reply already says who that is, so they only count as mentioned if they are
 // pilled as well.
 func mentionsOf(ctx context.Context, trigger Trigger, room roomInfo) []db.Mention {
-	pilled := pillUserIDs(trigger.FormattedBody)
+	pilled := matrix.PillUserIDs(trigger.FormattedBody)
 	userIDs := trigger.Mentions
 	if userIDs == nil {
 		userIDs = pilled
@@ -833,8 +859,10 @@ func mentionsOf(ctx context.Context, trigger Trigger, room roomInfo) []db.Mentio
 	return mentions
 }
 
-// extractAssistantResponse extracts the assistant's response from the API response
-func extractAssistantResponse(ctx context.Context, roomID, sender, model string, hasImage bool, chatResp *aigateway.ChatResponse) string {
+// extractAssistantResponse extracts the assistant's response from the API response. A response
+// without any text is a failure, returned as the "empty_response" outcome; the outcome is empty
+// when there is an answer.
+func extractAssistantResponse(ctx context.Context, roomID, sender, model string, hasImage bool, chatResp *aigateway.ChatResponse) (string, string) {
 	var assistantResponse string
 
 	if content, ok := chatResp.Choices[0].Message.Content.(string); ok {
@@ -858,7 +886,6 @@ func extractAssistantResponse(ctx context.Context, roomID, sender, model string,
 		if text, ok := contentMap["text"].(string); ok {
 			assistantResponse = text
 		} else {
-			assistantResponse = "I processed your image, but couldn't generate a proper response."
 			log.Warn().Ctx(ctx).
 				Str("room_id", roomID).
 				Str("sender", sender).
@@ -868,7 +895,6 @@ func extractAssistantResponse(ctx context.Context, roomID, sender, model string,
 				Msg("Response content map doesn't contain text field")
 		}
 	} else {
-		assistantResponse = "I processed your image, but couldn't generate a proper response."
 		log.Warn().Ctx(ctx).
 			Str("room_id", roomID).
 			Str("sender", sender).
@@ -878,11 +904,26 @@ func extractAssistantResponse(ctx context.Context, roomID, sender, model string,
 			Msg("Unexpected response content type")
 	}
 
-	return assistantResponse
+	// Posted, an empty answer would be an empty message in the room. A model can finish without
+	// any text, for example when it spends its whole token budget reasoning.
+	if strings.TrimSpace(assistantResponse) == "" {
+		log.Warn().Ctx(ctx).
+			Str("room_id", roomID).
+			Str("sender", sender).
+			Str("model", model).
+			Bool("has_image", hasImage).
+			Str("finish_reason", chatResp.Choices[0].FinishReason).
+			Msg("Chat API returned no answer text")
+		return "", "empty_response"
+	}
+	return assistantResponse, ""
 }
 
-// processToolCalls handles the iterative tool calling process
-// Returns the iteration count, updated messages, and final assistant response
+// processToolCalls handles the iterative tool calling process.
+//
+// Returns the iteration count, the updated messages, and the final response the answer is read
+// from. If the turn fails along the way, the response is nil and the failure outcome says why;
+// the outcome is empty otherwise.
 func processToolCalls(
 	ctx, toolCtx context.Context,
 	turn db.Turn,
@@ -893,7 +934,7 @@ func processToolCalls(
 	messages []aigateway.Message,
 	tools []aigateway.ToolDefinition,
 	stats *turnStats,
-) (int, []aigateway.Message, string) {
+) (int, []aigateway.Message, *aigateway.ChatResponse, string) {
 	roomID := turn.RoomID
 
 	// Keep calling tools until the model stops asking for them or the configured iteration limit
@@ -924,7 +965,7 @@ func processToolCalls(
 				Bool("has_image", hasImage).
 				Int("iteration", iterationCount).
 				Msg("Failed to handle tool calls")
-			return iterationCount, messages, "Failed to process tool calls"
+			return iterationCount, messages, nil, "tool_failed"
 		}
 
 		// Persist the calls together with their responses, after execution, so a call is never
@@ -970,7 +1011,7 @@ func processToolCalls(
 				Bool("has_image", hasImage).
 				Int("iteration", iterationCount).
 				Msg("Failed to send chat request for tool iteration")
-			return iterationCount, messages, "Failed to get response from chat API"
+			return iterationCount, messages, nil, requestFailure(ctx)
 		} else if len(nextResp.Choices) == 0 {
 			log.Error().Ctx(ctx).
 				Str("room_id", roomID).
@@ -978,7 +1019,7 @@ func processToolCalls(
 				Bool("has_image", hasImage).
 				Int("iteration", iterationCount).
 				Msg("Chat API returned no choices for tool iteration")
-			return iterationCount, messages, "No response from chat API"
+			return iterationCount, messages, nil, "no_choices"
 		}
 
 		// Update the current response for the next iteration
@@ -1024,19 +1065,29 @@ func processToolCalls(
 		toolStart := time.Now()
 		toolResponses, err := toolRegistry.HandleToolCallsIndividually(toolCtx, currentResp.Choices[0].Message.ToolCalls)
 		stats.recordToolExecution(currentResp.Choices[0].Message.ToolCalls, time.Since(toolStart))
-		if err == nil {
-			// Persist the calls together with their responses, after execution, so a call is never
-			// stored without the response that answers it
-			saveToolCallHistory(ctx, turn, currentResp.Choices[0].Message.ToolCalls, toolResponses, tools)
+		if err != nil {
+			// The calls are already in the messages, and a request with calls nobody answered
+			// would only be rejected
+			log.Error().Ctx(ctx).Err(err).
+				Str("room_id", roomID).
+				Str("model", model).
+				Bool("has_image", hasImage).
+				Int("iteration", iterationCount).
+				Msg("Failed to handle tool calls")
+			return iterationCount, messages, nil, "tool_failed"
+		}
 
-			// Add each tool response as a separate message
-			for _, toolResp := range toolResponses {
-				messages = append(messages, aigateway.Message{
-					Role:       "tool",
-					Content:    toolResp.Response,
-					ToolCallID: toolResp.ToolCallID,
-				})
-			}
+		// Persist the calls together with their responses, after execution, so a call is never
+		// stored without the response that answers it
+		saveToolCallHistory(ctx, turn, currentResp.Choices[0].Message.ToolCalls, toolResponses, tools)
+
+		// Add each tool response as a separate message
+		for _, toolResp := range toolResponses {
+			messages = append(messages, aigateway.Message{
+				Role:       "tool",
+				Content:    toolResp.Response,
+				ToolCallID: toolResp.ToolCallID,
+			})
 		}
 
 		// Final request without tools
@@ -1066,23 +1117,20 @@ func processToolCalls(
 				Str("model", model).
 				Bool("has_image", hasImage).
 				Msg("Failed to send final request")
-			return iterationCount, messages, "Failed to get response from chat API"
+			return iterationCount, messages, nil, requestFailure(ctx)
 		} else if len(finalResp.Choices) == 0 {
 			log.Error().Ctx(ctx).
 				Str("room_id", roomID).
 				Str("model", model).
 				Bool("has_image", hasImage).
 				Msg("Final chat API returned no choices")
-			return iterationCount, messages, "No response from chat API"
+			return iterationCount, messages, nil, "no_choices"
 		}
 
 		currentResp = finalResp
 	}
 
-	// Get the assistant's response from the final request
-	assistantResponse := extractAssistantResponse(ctx, roomID, sender, model, hasImage, currentResp)
-
-	return iterationCount, messages, assistantResponse
+	return iterationCount, messages, currentResp, ""
 }
 
 // saveToolCallHistory persists a batch of tool calls together with the responses they produced.

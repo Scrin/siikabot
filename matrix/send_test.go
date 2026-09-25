@@ -213,7 +213,7 @@ func TestMarkdownToHTML(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := markdownToHTML(tt.input)
+			result := markdownToHTML(tt.input, nil)
 			for _, want := range tt.wantContains {
 				if !strings.Contains(result, want) {
 					t.Errorf("markdownToHTML(%q) = %q, want to contain %q", tt.input, result, want)
@@ -224,7 +224,7 @@ func TestMarkdownToHTML(t *testing.T) {
 }
 
 func TestMarkdownToHTMLEmpty(t *testing.T) {
-	result := markdownToHTML("")
+	result := markdownToHTML("", nil)
 	// Empty input might produce empty output or minimal whitespace
 	if len(strings.TrimSpace(result)) > 0 {
 		// If there's content, it should be minimal

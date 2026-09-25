@@ -127,11 +127,24 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 			isReplyToBot := replyTo != nil && replyTo.Sender == config.UserID
 
 			// Check if the message addresses the bot: an explicit mention of the bot in
-			// m.mentions, or a message that opens by naming the bot
+			// m.mentions, a message that opens by naming the bot, or a reply to the bot
 			isMentioned := mentionsBotExplicitly(evt.Content.Raw, config.UserID)
 			prefixedMsg, isPrefixed := stripBotNamePrefix(msg, formattedBody, config.UserID, botNames(ctx, evt.RoomID.String())...)
+			addressed := isMentioned || isPrefixed || isReplyToBot
 
-			if isMentioned || isPrefixed || isReplyToBot {
+			// A reply to the bot that opens by addressing someone else is for them (see
+			// mention.go), and like any other message that isn't for the bot, it only counts as
+			// unseen
+			if isReplyToBot && !isPrefixed && !pillsBot(formattedBody, config.UserID) &&
+				addressesSomeoneElse(msg, formattedBody, config.UserID, evt.Sender.String(), roomMembers(ctx, evt.RoomID.String())) {
+				log.Debug().Ctx(ctx).
+					Str("room_id", evt.RoomID.String()).
+					Str("event_id", evt.ID.String()).
+					Msg("Skipping a reply to the bot that addresses someone else")
+				addressed = false
+			}
+
+			if addressed {
 				body, formatted := ownText(msg, formattedBody, rel)
 
 				// Only the leading address is dropped from the message. A mention anywhere else is
@@ -207,6 +220,16 @@ func botNames(ctx context.Context, roomID string) []string {
 		}
 	}
 	return names
+}
+
+// roomMembers returns the joined members of a room, or none if the room can't be looked up
+func roomMembers(ctx context.Context, roomID string) []matrix.Member {
+	room, err := matrix.GetRoom(ctx, roomID)
+	if err != nil {
+		// Already logged
+		return nil
+	}
+	return room.Members
 }
 
 // handleRedactionEvent removes a redacted message from the chat history. The redacted event is in

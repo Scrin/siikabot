@@ -3,6 +3,8 @@ package bot
 import (
 	"slices"
 	"testing"
+
+	"github.com/Scrin/siikabot/matrix"
 )
 
 const (
@@ -248,5 +250,83 @@ func TestStripBotNamePrefixAcceptsEveryBotName(t *testing.T) {
 		if !ok || got != "hello" {
 			t.Errorf("stripBotNamePrefix(%q) = %q, %v, want \"hello\", true", msg, got, ok)
 		}
+	}
+}
+
+var testMembers = []matrix.Member{
+	{UserID: "@alice:example.com", DisplayName: "Alice"},
+	{UserID: "@bob:example.com", DisplayName: "Bob"},
+	{UserID: "@carol:example.com", DisplayName: "Carol Smith"},
+	{UserID: "@jo:example.com", DisplayName: "Jo"},
+	{UserID: testBotUserID, DisplayName: testBotDisplayName},
+}
+
+func TestAddressesSomeoneElse(t *testing.T) {
+	const bobPill = `<a href="https://matrix.to/#/@bob:example.com">Bob</a>`
+	tests := []struct {
+		name      string
+		plain     string
+		formatted string
+		want      bool
+	}{
+		{"a name and a colon", "Bob: look at this", "", true},
+		{"a name and a comma", "bob, look at this", "", true},
+		{"a full display name", "Carol Smith: look at this", "", true},
+		{"an @ before the name", "@Bob: look at this", "", true},
+		{"a user ID", "@bob:example.com: look at this", "", true},
+		{"a pill", "Bob: look at this", bobPill + ": look at this", true},
+		{"a percent-encoded pill", "Bob look at this", `<a href="https://matrix.to/#/%40bob%3Aexample.com">Bob</a> look at this`, true},
+		{"a pill for someone who isn't here", "Dave: look", `<a href="https://matrix.to/#/@dave:example.com">Dave</a>: look`, true},
+		{"after the quote of a reply", "> <@bot:example.com> it's sunny\n\nBob: look at this", "", true},
+
+		{"the name without a separator", "Bob look at this", "", false},
+		{"a longer word", "Bobby: look at this", "", false},
+		{"a server name", "bob:example.com is down", "", false},
+		{"a name too short to tell", "Jo: look at this", "", false},
+		{"the name later on", "what do you think, Bob?", "", false},
+		{"a pill later on", "look at this Bob", "look at this " + bobPill, false},
+		{"a pill in the quote of a reply", "thanks", "<mx-reply><blockquote>" + bobPill + " said</blockquote></mx-reply>thanks", false},
+		{"a link to a room", "this room is great", `<a href="https://matrix.to/#/!room:example.com">this room</a> is great`, false},
+		{"the sender", "Alice: note to self", "", false},
+		{"the bot", "SiikaBot: are you sure?", "", false},
+		{"nobody", "are you sure?", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := addressesSomeoneElse(tt.plain, tt.formatted, testBotUserID, "@alice:example.com", testMembers); got != tt.want {
+				t.Errorf("addressesSomeoneElse(%q, %q) = %v, want %v", tt.plain, tt.formatted, got, tt.want)
+			}
+		})
+	}
+}
+
+// Without the room's members only a pill can tell who a message addresses
+func TestAddressesSomeoneElseWithoutMembers(t *testing.T) {
+	if addressesSomeoneElse("Bob: look at this", "", testBotUserID, "@alice:example.com", nil) {
+		t.Error("a name was matched with no members to match it against")
+	}
+	if !addressesSomeoneElse("Bob: look", `<a href="https://matrix.to/#/@bob:example.com">Bob</a>: look`, testBotUserID, "@alice:example.com", nil) {
+		t.Error("a pill wasn't recognised")
+	}
+}
+
+func TestPillsBot(t *testing.T) {
+	tests := []struct {
+		name      string
+		formatted string
+		want      bool
+	}{
+		{"a pill mid-sentence", `Bob: ask <a href="https://matrix.to/#/@siikabot:example.com">SiikaBot</a> about it`, true},
+		{"a percent-encoded pill", `<a href="https://matrix.to/#/%40siikabot%3Aexample.com">SiikaBot</a> hi`, true},
+		{"only in the quote of a reply", `<mx-reply><blockquote><a href="https://matrix.to/#/@siikabot:example.com">SiikaBot</a></blockquote></mx-reply>Bob: look`, false},
+		{"a pill for someone else", `<a href="https://matrix.to/#/@bob:example.com">Bob</a>: look`, false},
+		{"no formatting", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pillsBot(tt.formatted, testBotUserID); got != tt.want {
+				t.Errorf("pillsBot(%q) = %v, want %v", tt.formatted, got, tt.want)
+			}
+		})
 	}
 }

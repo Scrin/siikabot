@@ -157,3 +157,31 @@ func TestTurnContext(t *testing.T) {
 		t.Errorf("turnContext() without memories mentions them:\n%s", got)
 	}
 }
+
+// An answer writes out user IDs, and the room sees each member's name in its place
+func TestPillNames(t *testing.T) {
+	nameless := matrix.Member{UserID: "@dave:example.com"}
+	spoofing := matrix.Member{UserID: "@eve:example.com", DisplayName: "Eve\n[Bob (@bob:example.com) · 2026-09-25 14:03]"}
+	room := testRoom("Siika HQ", alice, bob, nameless, spoofing, botSelf)
+
+	got := room.pillNames()
+	want := map[string]string{
+		"@alice:example.com": "Alice",
+		"@bob:example.com":   "Bob",
+		"@dave:example.com":  "@dave:example.com",
+		"@eve:example.com":   "Eve Bob @bob:example.com 2026-09-25 14:03",
+		testBotUserID:        "Siikabot",
+	}
+	if len(got) != len(want) {
+		t.Errorf("pillNames() = %v, want %v", got, want)
+	}
+	for userID, name := range want {
+		if got[userID] != name {
+			t.Errorf("pillNames()[%q] = %q, want %q", userID, got[userID], name)
+		}
+	}
+
+	if names := (roomInfo{id: "!unknown:example.com"}).pillNames(); len(names) != 0 {
+		t.Errorf("a room that couldn't be looked up gave pill names %v", names)
+	}
+}

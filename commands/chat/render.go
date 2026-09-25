@@ -2,7 +2,6 @@ package chat
 
 import (
 	"fmt"
-	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -176,22 +175,6 @@ func capQuote(body string) string {
 		return body
 	}
 	return string([]rune(body)[:maxQuoteLength]) + " …[truncated]"
-}
-
-// pillLink matches the user a pill in a formatted body links to, with the @ written out or
-// percent-encoded
-var pillLink = regexp.MustCompile(`https://matrix\.to/#/((?:@|%40)[^"'<>\s?]+)`)
-
-// pillUserIDs returns the users pilled in a formatted body, in order
-func pillUserIDs(formattedBody string) []string {
-	var userIDs []string
-	for _, match := range pillLink.FindAllStringSubmatch(formattedBody, -1) {
-		// Some clients percent-encode the user ID in the link
-		if userID, err := url.PathUnescape(match[1]); err == nil {
-			userIDs = append(userIDs, userID)
-		}
-	}
-	return userIDs
 }
 
 func plural(n int, one, many string) string {

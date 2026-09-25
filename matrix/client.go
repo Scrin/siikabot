@@ -38,11 +38,20 @@ type outboundEvent struct {
 	ctx            context.Context
 	RoomID         string
 	EventType      string
-	Content        any
+	Content        simpleMessage
 	RetryOnFailure bool
 	done           chan<- string
-	// cancelled, when set, is asked just before sending. If it reports true the event is dropped.
-	cancelled func() bool
+	// target, when set, places the message and may cancel it, both just before it is sent
+	target *Target
+}
+
+// content returns the message to send, placed at its target if it has one
+func (e outboundEvent) content() simpleMessage {
+	msg := e.Content
+	if e.target != nil {
+		msg.RelatesTo = e.target.relatesTo(e.RoomID)
+	}
+	return msg
 }
 
 type simpleMessage struct {
@@ -178,7 +187,7 @@ func sendOutboundEvent(ctx context.Context, evt outboundEvent) {
 	defer span.End()
 
 	// Decided now rather than when the event was queued, since the queue can hold it for a while
-	if evt.cancelled != nil && evt.cancelled() {
+	if evt.target.cancelled() {
 		log.Debug().Ctx(ctx).Str("room_id", evt.RoomID).Str("event_type", evt.EventType).Msg("Dropping an outbound event that is no longer wanted")
 		span.SetAttributes(attribute.Bool("siikabot.matrix.dropped", true))
 		if evt.done != nil {
@@ -192,7 +201,21 @@ func sendOutboundEvent(ctx context.Context, evt outboundEvent) {
 
 	roomId := id.RoomID(evt.RoomID)
 	evtType := event.NewEventType(evt.EventType)
-	evtContent := evt.Content
+
+	// Placed now too, for the same reason: whether it goes out as a reply depends on what has been
+	// posted since the message it answers, which can change while it waits
+	message := evt.content()
+	var evtContent any = message
+	if evt.target != nil {
+		asReply := message.RelatesTo.GetNonFallbackReplyTo() != ""
+		span.SetAttributes(attribute.Bool("siikabot.matrix.as_reply", asReply))
+		log.Debug().Ctx(ctx).
+			Str("room_id", evt.RoomID).
+			Str("thread_root_id", evt.target.ThreadRootID).
+			Str("in_reply_to", evt.target.InReplyTo).
+			Bool("as_reply", asReply).
+			Msg("Placing an outbound message")
+	}
 
 encryptionLoop:
 	for {
@@ -256,6 +279,9 @@ retry:
 	for {
 		resp, err := client.SendMessageEvent(ctx, roomId, evtType, evtContent)
 		if err == nil {
+			// Recorded before anyone learns the message is out, so that the next message placed
+			// sees it even before its copy comes back through sync
+			recordLatest(evt.target.timeline(evt.RoomID), resp.EventID.String())
 			if evt.done != nil {
 				evt.done <- string(resp.EventID)
 			}
@@ -378,6 +404,11 @@ func Init(ctx context.Context, handleEvent func(ctx context.Context, evt *event.
 				handleEvent(ctx, decryptedEvent, true)
 			}
 		}
+	})
+	// Listeners for every event run before the ones for a type, in the order they were added, so a
+	// message is recorded in its timeline before anything handles it, decrypted or not
+	syncer.OnEvent(func(ctx context.Context, evt *event.Event) {
+		trackTimeline(evt)
 	})
 	syncer.OnEvent(func(ctx context.Context, evt *event.Event) {
 		handleEvent(ctx, evt, false)

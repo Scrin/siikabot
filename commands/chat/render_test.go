@@ -173,17 +173,6 @@ func TestCapQuote(t *testing.T) {
 	}
 }
 
-func TestPillUserIDs(t *testing.T) {
-	formatted := `hey <a href="https://matrix.to/#/@bob:example.com">Bob</a> and ` +
-		`<a href="https://matrix.to/#/%40carol%3Aexample.com">Carol</a>, see ` +
-		`<a href="https://matrix.to/#/!room:example.com/$event">this</a>`
-
-	got := pillUserIDs(formatted)
-	if len(got) != 2 || got[0] != "@bob:example.com" || got[1] != "@carol:example.com" {
-		t.Errorf("pillUserIDs() = %v, want Bob and Carol only", got)
-	}
-}
-
 func TestStripImitatedHeader(t *testing.T) {
 	tests := []struct {
 		name   string

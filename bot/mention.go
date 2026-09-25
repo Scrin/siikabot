@@ -158,3 +158,81 @@ func stripTags(fragment string) string {
 	}
 	return text.String()
 }
+
+// A reply to one of the bot's messages is taken to be for the bot, unless it opens by addressing
+// someone else, as in "Bob: look at this". The bot being in m.mentions doesn't say otherwise:
+// clients add the author of the replied-to message there, whether or not the sender meant to. Only
+// a pill for the bot, or a message that opens with the bot's name, does.
+
+// pillsBot reports whether the formatted body has a pill for the bot in what the sender wrote, as
+// opposed to the quote a reply may open with
+func pillsBot(formattedMsg, botUserID string) bool {
+	return slices.Contains(matrix.PillUserIDs(matrix.StripMxReply(formattedMsg)), botUserID)
+}
+
+// addressesSomeoneElse reports whether a message opens by addressing a member of the room other
+// than the bot and the sender: with a pill for them, or with their name or user ID followed by a
+// colon or a comma
+func addressesSomeoneElse(plainMsg, formattedMsg, botUserID, senderID string, members []matrix.Member) bool {
+	if userID, ok := leadingPillUserID(formattedMsg); ok && userID != botUserID && userID != senderID {
+		return true
+	}
+
+	body := strings.TrimSpace(matrix.StripReplyFallback(plainMsg))
+	for _, member := range members {
+		if member.UserID == botUserID || member.UserID == senderID {
+			continue
+		}
+		if opensWithAddress(body, member.DisplayName) || opensWithAddress(body, member.UserID) {
+			return true
+		}
+	}
+	return false
+}
+
+// leadingPillUserID returns the user pilled at the start of the formatted body, before any text
+func leadingPillUserID(formattedMsg string) (string, bool) {
+	body := matrix.StripMxReply(formattedMsg)
+	linkIdx := strings.Index(body, "https://matrix.to/#/")
+	if linkIdx < 0 || strings.TrimSpace(stripTags(body[:linkIdx])) != "" {
+		return "", false
+	}
+	// Only the first link counts, and it may be to a room or an event rather than a user
+	link := body[linkIdx:]
+	if end := strings.IndexAny(link, "\"'<> "); end >= 0 {
+		link = link[:end]
+	}
+	userIDs := matrix.PillUserIDs(link)
+	if len(userIDs) == 0 {
+		return "", false
+	}
+	return userIDs[0], true
+}
+
+// minAddressNameLength is the shortest name a message can address someone by. A shorter one is too
+// easily the first word of a message that addresses nobody.
+const minAddressNameLength = 3
+
+// opensWithAddress reports whether body opens by addressing someone by the name: the name, case
+// insensitively and with an optional leading "@", then a colon or a comma, as in "Bob: look at
+// this" or "bob, look at this"
+func opensWithAddress(body, name string) bool {
+	name = strings.TrimSpace(name)
+	if utf8.RuneCountInString(name) < minAddressNameLength {
+		return false
+	}
+	rest := body
+	if !strings.HasPrefix(name, "@") {
+		rest = strings.TrimPrefix(rest, "@")
+	}
+	if len(rest) < len(name) || !strings.EqualFold(rest[:len(name)], name) {
+		return false
+	}
+	rest = strings.TrimLeft(rest[len(name):], " ")
+	if rest == "" || (rest[0] != ':' && rest[0] != ',') {
+		return false
+	}
+	// "bob:example.com is down" names a server rather than addressing anyone
+	next, _ := utf8.DecodeRuneInString(rest[1:])
+	return !isWordRune(next)
+}
