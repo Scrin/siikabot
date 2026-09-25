@@ -12,66 +12,24 @@ import (
 
 	"github.com/Scrin/siikabot/config"
 	"github.com/rs/zerolog/log"
-	"maunium.net/go/mautrix/event"
-	"maunium.net/go/mautrix/id"
 )
 
-// GetEventImageURL retrieves the URL of an image from an event.
-// Returns the URL of the image as a string, or an empty string if the event is not an image.
-// For encrypted images, it also returns the encryption info needed for decryption and the full content.
-func GetEventImageURL(ctx context.Context, roomID string, eventID string) (string, map[string]any, map[string]any, error) {
-	// Get the event from the server
-	evt, err := client.GetEvent(ctx, id.RoomID(roomID), id.EventID(eventID))
-	if err != nil {
-		return "", nil, nil, err
-	}
-
-	// Check if the event is encrypted and decrypt it if necessary
-	if evt.Type == event.EventEncrypted {
-		log.Debug().Ctx(ctx).
-			Str("room_id", roomID).
-			Str("event_id", eventID).
-			Msg("Attempting to decrypt event")
-
-		err = evt.Content.ParseRaw(evt.Type)
-		if err != nil {
-			log.Error().Ctx(ctx).Err(err).
-				Str("room_id", roomID).
-				Str("event_id", eventID).
-				Msg("Failed to parse encrypted event content")
-		}
-
-		// Try to decrypt the event using OlmMachine
-		decryptedEvt, err := olmMachine.DecryptMegolmEvent(ctx, evt)
-		if err != nil {
-			// If we can't decrypt it, log the error and return a specific error
-			log.Error().Ctx(ctx).Err(err).
-				Str("room_id", roomID).
-				Str("event_id", eventID).
-				Msg("Failed to decrypt event")
-			return "", nil, nil, fmt.Errorf("cannot decrypt encrypted event: %w", err)
-		}
-
-		// Use the decrypted event
-		evt = decryptedEvt
-	}
-
-	// Check if the event is a message
-	if evt.Type != event.EventMessage {
-		return "", nil, nil, fmt.Errorf("event is not a message (type: %s)", evt.Type)
-	}
+// MessageImageURL returns the URL of the image a message carries, or an error if it carries none.
+// For an encrypted image it also returns the encryption info needed for decryption, and for any
+// image the full content.
+func MessageImageURL(ctx context.Context, msg *Message) (string, map[string]any, map[string]any, error) {
+	roomID, eventID := msg.RoomID, msg.EventID
 
 	// Check if the message is an image
-	msgtype, ok := evt.Content.Raw["msgtype"].(string)
-	if !ok || msgtype != "m.image" {
-		return "", nil, nil, fmt.Errorf("event is not an image (msgtype: %s)", msgtype)
+	if msg.MsgType != "m.image" {
+		return "", nil, nil, fmt.Errorf("event is not an image (msgtype: %s)", msg.MsgType)
 	}
 
 	// Get the full content for mimetype information
-	fullContent := evt.Content.Raw
+	fullContent := msg.content
 
 	// For encrypted images, the URL and encryption info are in the file section
-	if file, ok := evt.Content.Raw["file"].(map[string]any); ok {
+	if file, ok := fullContent["file"].(map[string]any); ok {
 		// This is an encrypted file
 		log.Debug().Ctx(ctx).
 			Str("room_id", roomID).
@@ -94,7 +52,7 @@ func GetEventImageURL(ctx context.Context, roomID string, eventID string) (strin
 	}
 
 	// Check if there's a thumbnail available for encrypted images
-	if info, ok := evt.Content.Raw["info"].(map[string]any); ok {
+	if info, ok := fullContent["info"].(map[string]any); ok {
 		if thumbnailFile, ok := info["thumbnail_file"].(map[string]any); ok {
 			// This is an encrypted thumbnail
 			log.Debug().Ctx(ctx).
@@ -117,12 +75,12 @@ func GetEventImageURL(ctx context.Context, roomID string, eventID string) (strin
 	}
 
 	// For unencrypted images, the URL is directly in the content
-	if url, ok := evt.Content.Raw["url"].(string); ok {
+	if url, ok := fullContent["url"].(string); ok {
 		return url, nil, fullContent, nil
 	}
 
 	// Check if there's a thumbnail available for unencrypted images
-	if info, ok := evt.Content.Raw["info"].(map[string]any); ok {
+	if info, ok := fullContent["info"].(map[string]any); ok {
 		if thumbnailUrl, ok := info["thumbnail_url"].(string); ok {
 			log.Debug().Ctx(ctx).
 				Str("room_id", roomID).
@@ -137,62 +95,10 @@ func GetEventImageURL(ctx context.Context, roomID string, eventID string) (strin
 	log.Debug().Ctx(ctx).
 		Str("room_id", roomID).
 		Str("event_id", eventID).
-		Interface("content", evt.Content.Raw).
+		Interface("content", fullContent).
 		Msg("Image content does not contain URL")
 
 	return "", nil, nil, fmt.Errorf("image URL not found")
-}
-
-// GetEventType retrieves the type of an event.
-// Returns the msgtype of the event as a string, or an empty string if the event doesn't have a msgtype.
-func GetEventType(ctx context.Context, roomID string, eventID string) (string, error) {
-	// Get the event from the server
-	evt, err := client.GetEvent(ctx, id.RoomID(roomID), id.EventID(eventID))
-	if err != nil {
-		return "", err
-	}
-
-	// Check if the event is encrypted and decrypt it if necessary
-	if evt.Type == event.EventEncrypted {
-		log.Debug().Ctx(ctx).
-			Str("room_id", roomID).
-			Str("event_id", eventID).
-			Msg("Attempting to decrypt event")
-
-		err = evt.Content.ParseRaw(evt.Type)
-		if err != nil {
-			log.Error().Ctx(ctx).Err(err).
-				Str("room_id", roomID).
-				Str("event_id", eventID).
-				Msg("Failed to parse encrypted event content")
-		}
-
-		// Try to decrypt the event using OlmMachine
-		decryptedEvt, err := olmMachine.DecryptMegolmEvent(ctx, evt)
-		if err != nil {
-			// If we can't decrypt it, log the error and return a specific error
-			log.Error().Ctx(ctx).Err(err).
-				Str("room_id", roomID).
-				Str("event_id", eventID).
-				Msg("Failed to decrypt event")
-			return "", fmt.Errorf("cannot decrypt encrypted event: %w", err)
-		}
-
-		// Use the decrypted event
-		evt = decryptedEvt
-	}
-
-	// Check if the event is a message
-	if evt.Type != event.EventMessage {
-		return "", fmt.Errorf("event is not a message (type: %s)", evt.Type)
-	}
-
-	// Extract the message type
-	if msgtype, ok := evt.Content.Raw["msgtype"].(string); ok {
-		return msgtype, nil
-	}
-
-	return "", fmt.Errorf("message type not found")
 }
 
 // DownloadImageAsBase64 downloads an image from a Matrix URL and returns it as a base64 data URL.

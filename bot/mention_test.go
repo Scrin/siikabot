@@ -1,6 +1,9 @@
 package bot
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 const (
 	testBotUserID      = "@siikabot:example.com"
@@ -216,44 +219,18 @@ func TestStripBotNamePrefixIgnoresLocalpart(t *testing.T) {
 	}
 }
 
-func TestStripReplyFallback(t *testing.T) {
-	tests := []struct {
-		name  string
-		plain string
-		want  string
-	}{
-		{
-			name:  "no fallback",
-			plain: "hello there",
-			want:  "hello there",
-		},
-		{
-			name:  "single quoted line",
-			plain: "> <@someone:example.com> an earlier message\n\nhello there",
-			want:  "hello there",
-		},
-		{
-			name:  "multiple quoted lines",
-			plain: "> <@someone:example.com> first line\n> second line\n\nhello there",
-			want:  "hello there",
-		},
-		{
-			name:  "quote without a reply",
-			plain: "> <@someone:example.com> an earlier message\n\n",
-			want:  "",
-		},
-		{
-			name:  "quote later in the message is left alone",
-			plain: "as they said:\n> an earlier message",
-			want:  "as they said:\n> an earlier message",
-		},
+func TestMentionedUserIDs(t *testing.T) {
+	content := map[string]any{"m.mentions": map[string]any{
+		"user_ids": []any{"@alice:example.com", 42, testBotUserID},
+	}}
+
+	got := mentionedUserIDs(content)
+	want := []string{"@alice:example.com", testBotUserID}
+	if !slices.Equal(got, want) {
+		t.Errorf("mentionedUserIDs() = %v, want %v", got, want)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := stripReplyFallback(tt.plain); got != tt.want {
-				t.Errorf("stripReplyFallback() = %q, want %q", got, tt.want)
-			}
-		})
+	if got := mentionedUserIDs(map[string]any{"body": "hello"}); got != nil {
+		t.Errorf("mentionedUserIDs() without m.mentions = %v, want nil", got)
 	}
 }

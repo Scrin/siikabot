@@ -1,9 +1,12 @@
 package bot
 
 import (
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/Scrin/siikabot/matrix"
 )
 
 // The chat feature only reacts to a message that is unambiguously aimed at the bot: an explicit
@@ -15,20 +18,26 @@ import (
 // A room-wide mention ("room": true) deliberately does not count: an @room ping is addressed to
 // everyone in the room, not a question for the bot.
 func mentionsBotExplicitly(rawContent map[string]any, botUserID string) bool {
+	return slices.Contains(mentionedUserIDs(rawContent), botUserID)
+}
+
+// mentionedUserIDs returns the users listed in the m.mentions field of the event content
+func mentionedUserIDs(rawContent map[string]any) []string {
 	mentions, ok := rawContent["m.mentions"].(map[string]any)
 	if !ok {
-		return false
+		return nil
 	}
 	userIDs, ok := mentions["user_ids"].([]any)
 	if !ok {
-		return false
+		return nil
 	}
+	ids := make([]string, 0, len(userIDs))
 	for _, userID := range userIDs {
-		if id, ok := userID.(string); ok && id == botUserID {
-			return true
+		if id, ok := userID.(string); ok {
+			ids = append(ids, id)
 		}
 	}
-	return false
+	return ids
 }
 
 // stripBotNamePrefix reports whether the message opens by addressing the bot — by display name, by
@@ -36,7 +45,9 @@ func mentionsBotExplicitly(rawContent map[string]any, botUserID string) bool {
 // removed. The bare localpart of the user ID is not accepted, since it is often something generic
 // enough ("bot") to match messages that were never meant for us.
 func stripBotNamePrefix(plainMsg, formattedMsg, botUserID, botDisplayName string) (string, bool) {
-	body := strings.TrimSpace(stripReplyFallback(plainMsg))
+	// A replying client may prepend a quote of the message it replies to. Left in, a reply that
+	// opens by naming the bot would look like it opens with the quote, and the check would miss it.
+	body := strings.TrimSpace(matrix.StripReplyFallback(plainMsg))
 
 	names := []string{botUserID}
 	if botDisplayName != "" && !strings.EqualFold(botDisplayName, botUserID) {
@@ -107,7 +118,9 @@ func isWordRune(r rune) bool {
 // body. A pill further into the message is not a match: that is the mid-sentence case this whole
 // file exists to stop reacting to.
 func leadingBotPillText(formattedMsg, botUserID string) (string, bool) {
-	body := stripMxReply(formattedMsg)
+	// Without the quote a rich reply prepends, so a pill at the start of the actual message is not
+	// hidden behind the quoted one
+	body := matrix.StripMxReply(formattedMsg)
 	linkIdx := strings.Index(body, "https://matrix.to/#/"+botUserID)
 	if linkIdx < 0 {
 		return "", false
@@ -126,35 +139,6 @@ func leadingBotPillText(formattedMsg, botUserID string) (string, bool) {
 		text = text[:closeIdx]
 	}
 	return strings.TrimSpace(stripTags(text)), true
-}
-
-// stripMxReply removes the <mx-reply> block that a rich reply prepends to the formatted body, so
-// that a pill at the start of the actual message is not hidden behind the quoted one
-func stripMxReply(formattedMsg string) string {
-	const closingTag = "</mx-reply>"
-	if idx := strings.Index(formattedMsg, closingTag); idx >= 0 {
-		return formattedMsg[idx+len(closingTag):]
-	}
-	return formattedMsg
-}
-
-// stripReplyFallback removes the rich reply fallback from a plain text body: the run of "> " quoted
-// lines a replying client prepends. Without this, a reply that opens by naming the bot looks like
-// it opens with the quoted message instead and the prefix check misses it. Nothing is lost by
-// dropping it here, as the chat feature fetches the replied-to event separately for context.
-func stripReplyFallback(plainMsg string) string {
-	lines := strings.Split(plainMsg, "\n")
-	i := 0
-	for i < len(lines) && strings.HasPrefix(lines[i], "> ") {
-		i++
-	}
-	if i == 0 {
-		return plainMsg
-	}
-	for i < len(lines) && strings.TrimSpace(lines[i]) == "" {
-		i++
-	}
-	return strings.Join(lines[i:], "\n")
 }
 
 // stripTags removes HTML tags from a fragment, leaving the text a reader would actually see

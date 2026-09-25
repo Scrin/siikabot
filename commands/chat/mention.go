@@ -99,8 +99,9 @@ func keepAlive(ctx context.Context, interval time.Duration, refresh, onStop func
 	}
 }
 
-// HandleMention handles the chat command
-func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, relatesTo map[string]any) {
+// HandleMention runs a chat turn for a message that addressed the bot
+func HandleMention(ctx context.Context, trigger Trigger) {
+	roomID, sender, msg := trigger.RoomID, trigger.Sender, trigger.Body
 	if strings.TrimSpace(msg) == "" {
 		return
 	}
@@ -118,7 +119,7 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 	ctx, turnSpan := tracer.Start(ctx, "chat.turn", trace.WithAttributes(
 		attribute.String("matrix.room_id", roomID),
 		attribute.String("matrix.sender", sender),
-		attribute.String("matrix.event_id", eventID),
+		attribute.String("matrix.event_id", trigger.EventID),
 	))
 	defer turnSpan.End()
 
@@ -157,7 +158,7 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 
 	// Build the initial messages with system prompt, history, and handle image if present
 	buildCtx, buildSpan := tracer.Start(ctx, "chat.build_context")
-	messages, hasImage, model, composition := buildInitialMessages(buildCtx, roomID, sender, msg, relatesTo, cfg)
+	messages, hasImage, model, composition := buildInitialMessages(buildCtx, trigger, cfg)
 	buildSpan.SetAttributes(
 		attribute.Int("siikabot.chat.message_count", len(messages)),
 		attribute.Int("siikabot.chat.history_tokens", composition.history),
@@ -312,7 +313,9 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 
 // buildInitialMessages creates the initial messages array with system prompt, history, and user
 // message, along with the estimated token cost of each part of it
-func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relatesTo map[string]any, cfg db.ChatConfig) ([]aigateway.Message, bool, string, promptComposition) {
+func buildInitialMessages(ctx context.Context, trigger Trigger, cfg db.ChatConfig) ([]aigateway.Message, bool, string, promptComposition) {
+	roomID, sender, msg := trigger.RoomID, trigger.Sender, trigger.Body
+
 	// Get the bot's actual display name from the Matrix server
 	botDisplayName := matrix.GetDisplayName(ctx, config.UserID)
 	if botDisplayName == "" {
@@ -374,17 +377,9 @@ func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relat
 		Content: "The current date and time is " + time.Now().In(loc).Format("Monday, January 2, 2006 15:04:05 MST"),
 	})
 
-	// Flag to track if we're handling an image
-	hasImage := false
-	var base64ImageURL string
-
-	// Check if this message is a reply to another message
-	if relatesTo != nil {
-		base64ImageURL = processRelatedMessage(ctx, roomID, relatesTo, &messages)
-		if base64ImageURL != "" {
-			hasImage = true
-		}
-	}
+	// Add the message this one refers to, if any, flagging an image
+	base64ImageURL := processRelatedMessage(ctx, trigger, &messages)
+	hasImage := base64ImageURL != ""
 
 	// Select the appropriate model based on whether we have an image
 	var model string
@@ -555,47 +550,49 @@ func truncateForReplay(response, toolName string) string {
 		"call the tool again if you need the rest]", toolName)
 }
 
-// processRelatedMessage handles messages that are replies to other messages
-// Returns base64ImageURL if the message is a reply to an image
-func processRelatedMessage(ctx context.Context, roomID string, relatesTo map[string]any, messages *[]aigateway.Message) string {
-	log.Debug().Ctx(ctx).
-		Str("room_id", roomID).
-		Interface("relates_to", relatesTo).
-		Msg("Message has relation information")
-
-	// Check for m.in_reply_to
-	if inReplyTo, ok := relatesTo["m.in_reply_to"].(map[string]any); ok {
-		if replyEventID, ok := inReplyTo["event_id"].(string); ok {
-			log.Debug().Ctx(ctx).
-				Str("room_id", roomID).
-				Str("reply_event_id", replyEventID).
-				Msg("Message is a reply to another message")
-
-			// Check if the replied-to message is an image
-			msgType, err := matrix.GetEventType(ctx, roomID, replyEventID)
-			if err != nil {
-				log.Error().Ctx(ctx).Err(err).
-					Str("room_id", roomID).
-					Str("event_id", replyEventID).
-					Msg("Failed to get replied-to message type")
-				return ""
-			}
-
-			if msgType == "m.image" {
-				return processRepliedImage(ctx, roomID, replyEventID, messages)
-			} else {
-				processRepliedText(ctx, roomID, replyEventID, messages)
-			}
-		}
+// processRelatedMessage adds the message the trigger explicitly refers to, if any, to the
+// conversation. Returns base64ImageURL if that message is an image.
+//
+// Apart from messages addressed to the bot, this is the only room content that reaches the model.
+// The event was fetched when the message was routed, so nothing here goes back to the room for more.
+func processRelatedMessage(ctx context.Context, trigger Trigger, messages *[]aigateway.Message) string {
+	if trigger.ReplyToEventID == "" {
+		return ""
 	}
+
+	log.Debug().Ctx(ctx).
+		Str("room_id", trigger.RoomID).
+		Str("reply_event_id", trigger.ReplyToEventID).
+		Msg("Message refers to another message")
+
+	if trigger.ReplyTo == nil {
+		// Already logged where the fetch failed
+		addUnreadableReplyNote(messages)
+		return ""
+	}
+
+	if trigger.ReplyTo.MsgType == "m.image" {
+		return processRepliedImage(ctx, trigger.RoomID, trigger.ReplyTo, messages)
+	}
+	processRepliedText(ctx, trigger.RoomID, trigger.ReplyTo, messages)
 	return ""
+}
+
+// addUnreadableReplyNote tells the model that the message replies to one it doesn't get to see
+func addUnreadableReplyNote(messages *[]aigateway.Message) {
+	*messages = append(*messages, aigateway.Message{
+		Role:    "system",
+		Content: "Note: This message is a reply to another message, but I couldn't retrieve the content of that message.",
+	})
 }
 
 // processRepliedImage handles replies to image messages
 // Returns the base64 encoded image URL if successful
-func processRepliedImage(ctx context.Context, roomID, replyEventID string, messages *[]aigateway.Message) string {
+func processRepliedImage(ctx context.Context, roomID string, repliedTo *matrix.Message, messages *[]aigateway.Message) string {
+	replyEventID := repliedTo.EventID
+
 	// Get the image URL, encryption info, and full content
-	imageURL, encryptionInfo, fullContent, err := matrix.GetEventImageURL(ctx, roomID, replyEventID)
+	imageURL, encryptionInfo, fullContent, err := matrix.MessageImageURL(ctx, repliedTo)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).
 			Str("room_id", roomID).
@@ -634,38 +631,31 @@ func processRepliedImage(ctx context.Context, roomID, replyEventID string, messa
 }
 
 // processRepliedText handles replies to text messages
-func processRepliedText(ctx context.Context, roomID, replyEventID string, messages *[]aigateway.Message) {
-	// Get the content of the replied-to message (text)
-	repliedToContent, err := matrix.GetEventContent(ctx, roomID, replyEventID)
-	if err != nil {
-		log.Error().Ctx(ctx).Err(err).
+func processRepliedText(ctx context.Context, roomID string, repliedTo *matrix.Message, messages *[]aigateway.Message) {
+	if repliedTo.Body == "" {
+		// Nothing readable: content that couldn't be decrypted, a deleted message, or an event
+		// that isn't a message at all
+		log.Debug().Ctx(ctx).
 			Str("room_id", roomID).
-			Str("event_id", replyEventID).
-			Msg("Failed to get replied-to message content")
-
-		// Add a note about the failed attempt to get the replied-to message
-		*messages = append(*messages, aigateway.Message{
-			Role:    "system",
-			Content: "Note: This message is a reply to another message, but I couldn't retrieve the content of that message.",
-		})
+			Str("event_id", repliedTo.EventID).
+			Msg("Replied-to message has no readable content")
+		addUnreadableReplyNote(messages)
 		return
 	}
 
-	if repliedToContent != "" {
-		// Add the replied-to message to the conversation
-		log.Debug().Ctx(ctx).
-			Str("room_id", roomID).
-			Str("event_id", replyEventID).
-			Str("content", repliedToContent).
-			Msg("Including replied-to message in conversation")
+	// Add the replied-to message to the conversation
+	log.Debug().Ctx(ctx).
+		Str("room_id", roomID).
+		Str("event_id", repliedTo.EventID).
+		Str("content", repliedTo.Body).
+		Msg("Including replied-to message in conversation")
 
-		// Add a note about the reply context
-		replyContextMsg := fmt.Sprintf("This message is a reply to: \"%s\"", repliedToContent)
-		*messages = append(*messages, aigateway.Message{
-			Role:    "system",
-			Content: replyContextMsg,
-		})
-	}
+	// Add a note about the reply context
+	replyContextMsg := fmt.Sprintf("This message is a reply to: \"%s\"", repliedTo.Body)
+	*messages = append(*messages, aigateway.Message{
+		Role:    "system",
+		Content: replyContextMsg,
+	})
 }
 
 // processImageMessage handles messages that include an image

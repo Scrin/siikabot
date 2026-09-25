@@ -48,6 +48,17 @@ In general, each command or webhook is considered a **self-contained feature** a
 4. Responses sent back through Matrix client
 5. Relevant data persisted to PostgreSQL
 
+### Chat Privacy Invariant
+
+**Non-negotiable.** The chat model may only see room content that was addressed to the bot, plus the one message that such a message explicitly replies to.
+
+- A message is addressed to the bot if it mentions the bot, opens with its name, replies to one of its messages, or is the first message of a thread on one of its messages.
+- The replied-to message is a real `m.in_reply_to`, or the thread root for the first message of a thread. A thread fallback never counts, and any nested reply fallback is stripped.
+- Nothing else from a room may be passed to the model, persisted in `chat_history` or exposed through an LLM tool, and no tool may read room events.
+- Metadata that is not message content (member list, room name, message counts) is allowed.
+
+The referenced event is resolved once, in `bot/reply.go`, and handed to the chat turn in `chat.Trigger`. The chat package never fetches room events itself.
+
 ## Code Structure
 
 ### Directory Layout

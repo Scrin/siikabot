@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/api"
@@ -23,6 +24,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"go.opentelemetry.io/otel/trace"
 	"maunium.net/go/mautrix/event"
+	"maunium.net/go/mautrix/id"
 )
 
 func handleTextEvent(ctx context.Context, evt *event.Event) {
@@ -103,25 +105,24 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 		default:
 			isCommand = false
 
-			// Extract the m.relates_to field if it exists
-			var relatesTo map[string]any
-			if relates, ok := evt.Content.Raw["m.relates_to"].(map[string]any); ok {
-				relatesTo = relates
-			}
+			// The event the message explicitly refers to decides both whether it counts as a reply
+			// to the bot and what reply context the chat turn gets, so it is worked out once, here
+			rel := evt.Content.AsMessage().RelatesTo
+			replyToID := replyTarget(rel, func(root id.EventID) bool {
+				first, err := matrix.IsFirstThreadReply(ctx, evt.RoomID.String(), root.String(), evt.ID.String())
+				// Already logged. Without an answer the root stays out of the context.
+				return err == nil && first
+			})
 
-			// Check if the message is a reply to a message sent by the bot
-			isReplyToBot := false
-			if relatesTo != nil {
-				if inReplyTo, ok := relatesTo["m.in_reply_to"].(map[string]any); ok {
-					if replyEventID, ok := inReplyTo["event_id"].(string); ok {
-						// Get the sender of the replied-to message
-						repliedToSender, err := matrix.GetEventSender(ctx, evt.RoomID.String(), replyEventID)
-						if err == nil && repliedToSender == config.UserID {
-							isReplyToBot = true
-						}
-					}
+			// Fetched once for everything that needs it: the sender for the check below, and the
+			// content for the chat turn
+			var replyTo *matrix.Message
+			if replyToID != "" {
+				if fetched, err := matrix.FetchMessage(ctx, evt.RoomID.String(), replyToID.String()); err == nil {
+					replyTo = fetched
 				}
 			}
+			isReplyToBot := replyTo != nil && replyTo.Sender == config.UserID
 
 			// Check if the message addresses the bot: an explicit mention of the bot in
 			// m.mentions, or a message that opens by naming the bot
@@ -130,20 +131,34 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 			prefixedMsg, isPrefixed := stripBotNamePrefix(msg, formattedBody, config.UserID, botDisplayName)
 
 			if isMentioned || isPrefixed || isReplyToBot {
+				body, formatted := ownText(msg, formattedBody, rel)
+
 				// Only the leading address is dropped from the message. A mention anywhere else is
 				// part of what the sender wrote and reads better left alone.
-				chatMsg := msg
+				chatMsg := body
 				if isPrefixed {
 					chatMsg = prefixedMsg
 					// Nothing but the bot's name: the sender is getting our attention rather than
 					// asking anything, so let the model see the name it was called by
 					if chatMsg == "" {
-						chatMsg = msg
+						chatMsg = body
 					}
 				}
 
+				trigger := chat.Trigger{
+					RoomID:         evt.RoomID.String(),
+					Sender:         evt.Sender.String(),
+					EventID:        evt.ID.String(),
+					Timestamp:      time.UnixMilli(evt.Timestamp),
+					Body:           chatMsg,
+					FormattedBody:  formatted,
+					Mentions:       mentionedUserIDs(evt.Content.Raw),
+					ThreadRootID:   rel.GetThreadParent().String(),
+					ReplyToEventID: replyToID.String(),
+					ReplyTo:        replyTo,
+				}
 				traced(ctx, "chat.mention", attrs, func(ctx context.Context) {
-					chat.HandleMention(ctx, evt.RoomID.String(), evt.Sender.String(), chatMsg, evt.ID.String(), relatesTo)
+					chat.HandleMention(ctx, trigger)
 				})
 				isCommand = true
 				cmd = constants.CommandMention

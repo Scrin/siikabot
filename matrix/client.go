@@ -303,7 +303,7 @@ func Init(ctx context.Context, handleEvent func(ctx context.Context, evt *event.
 		return err
 	}
 
-	// Instrument the homeserver calls. GetDisplayName and GetEventContent sit on the chat path, so
+	// Instrument the homeserver calls. GetDisplayName and FetchMessage sit on the chat path, so
 	// without this a turn's trace has unexplained gaps where it was waiting on Matrix.
 	//
 	// The sync loop is deliberately excluded: it is a single long-poll that runs for the process's
@@ -408,78 +408,6 @@ func MarkRead(ctx context.Context, roomID string, eventID string) {
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("event_id", eventID).Msg("Failed to mark message as read")
 	}
-}
-
-// GetEventContent retrieves the content of a message by its event ID.
-// Returns the body of the message as a string.
-func GetEventContent(ctx context.Context, roomID string, eventID string) (string, error) {
-	// Get the event from the server
-	evt, err := client.GetEvent(ctx, id.RoomID(roomID), id.EventID(eventID))
-	if err != nil {
-		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("event_id", eventID).Msg("Failed to get event content")
-		return "", err
-	}
-
-	// Check if the event is encrypted and decrypt it if necessary
-	if evt.Type == event.EventEncrypted {
-		log.Debug().Ctx(ctx).
-			Str("room_id", roomID).
-			Str("event_id", eventID).
-			Msg("Attempting to decrypt event")
-
-		err = evt.Content.ParseRaw(evt.Type)
-		if err != nil {
-			log.Error().Ctx(ctx).Err(err).
-				Str("room_id", roomID).
-				Str("event_id", eventID).
-				Msg("Failed to parse encrypted event content")
-		}
-
-		// Try to decrypt the event using OlmMachine
-		decryptedEvt, err := olmMachine.DecryptMegolmEvent(ctx, evt)
-		if err != nil {
-			// If we can't decrypt it, log the error and return a specific error
-			log.Error().Ctx(ctx).Err(err).
-				Str("room_id", roomID).
-				Str("event_id", eventID).
-				Msg("Failed to decrypt event")
-			return "", fmt.Errorf("cannot decrypt encrypted event: %w", err)
-		}
-
-		// Use the decrypted event
-		evt = decryptedEvt
-	}
-
-	// Check if the event is a message
-	if evt.Type != event.EventMessage {
-		return "", fmt.Errorf("event is not a message (type: %s)", evt.Type)
-	}
-
-	// Extract the message body
-	if body, ok := evt.Content.Raw["body"].(string); ok {
-		return body, nil
-	}
-
-	// Log the content for debugging
-	log.Debug().Ctx(ctx).
-		Str("room_id", roomID).
-		Str("event_id", eventID).
-		Interface("content", evt.Content.Raw).
-		Msg("Message content does not contain body")
-
-	return "", fmt.Errorf("message body not found")
-}
-
-// GetEventSender retrieves the sender of a message by its event ID.
-func GetEventSender(ctx context.Context, roomID string, eventID string) (string, error) {
-	// Get the event from the server
-	evt, err := client.GetEvent(ctx, id.RoomID(roomID), id.EventID(eventID))
-	if err != nil {
-		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("event_id", eventID).Msg("Failed to get event sender")
-		return "", err
-	}
-
-	return evt.Sender.String(), nil
 }
 
 // GetRoomMembers returns a list of user IDs for all members in a room
