@@ -288,7 +288,7 @@ func handleMyToolCall(ctx context.Context, arguments string) (string, error) {
 
 #### Registering Tools
 
-Tools are loaded in `commands/chat/chat.go` based on room configuration.
+Tools are registered in `Init` in `commands/chat/chat.go`, and every registered tool is offered to the model in every room.
 
 ### Go Code - Metrics Pattern
 
@@ -446,6 +446,8 @@ docker build -t siikabot .
 
 All configuration is via environment variables (no config files). See `config/config.go` for required variables.
 
+The exception is the chat parameters (models, context window budget, response and tool limits, web content size). They are global and live in the append-only `chat_config` table, where the latest row is the configuration in effect and older rows are its history. The admin changes them with the `!chat` subcommands, and each change appends a new row. Migration `0019__global-chat-config.sql` seeds the first row.
+
 ### Database Migrations
 
-Migrations in `db/migrations/` run automatically on startup. Create new migrations with ascending numbered filenames like `003_add_feature.sql`.
+Migrations in `db/migrations/` run automatically on startup, in filename order. Name new migrations with the next four-digit number, two underscores and a kebab-case description, like `0018__remove-grafana.sql`.

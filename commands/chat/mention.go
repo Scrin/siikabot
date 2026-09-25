@@ -140,9 +140,24 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 	// Accumulates everything that happens during this turn, for the summary logged at the end
 	stats := &turnStats{outcome: "ok"}
 
+	// Read once and used for the whole turn, so a change made with !chat while a turn is running
+	// cannot leave that turn on a mix of old and new settings
+	cfg, err := db.GetChatConfig(ctx)
+	if err != nil {
+		// Already logged. There is nothing to fall back to: the database is the only source of the
+		// configuration, and without it there is no model to ask.
+		stats.outcome = "config_unavailable"
+		stats.finish(ctx, roomID, sender, "", false, time.Since(startTime))
+		metrics.RecordChatRequestDuration("", false, time.Since(startTime).Seconds())
+		stats.recordOnSpan(turnSpan)
+		matrix.SendMessageWithDebugData(ctx, roomID, "Failed to process chat request",
+			failureDebugData(ctx, "", stats.outcome))
+		return
+	}
+
 	// Build the initial messages with system prompt, history, and handle image if present
 	buildCtx, buildSpan := tracer.Start(ctx, "chat.build_context")
-	messages, hasImage, model, composition := buildInitialMessages(buildCtx, roomID, sender, msg, relatesTo)
+	messages, hasImage, model, composition := buildInitialMessages(buildCtx, roomID, sender, msg, relatesTo, cfg)
 	buildSpan.SetAttributes(
 		attribute.Int("siikabot.chat.message_count", len(messages)),
 		attribute.Int("siikabot.chat.history_tokens", composition.history),
@@ -162,9 +177,8 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 		attribute.Int("siikabot.chat.prompt_tokens_estimated", composition.total()),
 	)
 
-	// Cap the response length. Read once and threaded through the turn so a multi-iteration turn
-	// does not re-query it per request.
-	maxTokens := getMaxTokensForRoom(ctx, roomID)
+	// Cap the response length, so a runaway generation is not billed in full
+	maxTokens := cfg.MaxTokens
 
 	// Recorded by Cloudflare as span attributes and log fields, which is the only way its side of a
 	// turn knows which room and user it belonged to
@@ -270,7 +284,7 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 
 		// Process tool calls iteratively
 		iterationCount, messages, assistantResponse = processToolCalls(
-			ctx, roomID, sender, model, hasImage, maxTokens,
+			ctx, roomID, sender, model, hasImage, cfg,
 			chatResp, messages, tools, stats,
 		)
 	}
@@ -298,7 +312,7 @@ func HandleMention(ctx context.Context, roomID, sender, msg, eventID string, rel
 
 // buildInitialMessages creates the initial messages array with system prompt, history, and user
 // message, along with the estimated token cost of each part of it
-func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relatesTo map[string]any) ([]aigateway.Message, bool, string, promptComposition) {
+func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relatesTo map[string]any, cfg db.ChatConfig) ([]aigateway.Message, bool, string, promptComposition) {
 	// Get the bot's actual display name from the Matrix server
 	botDisplayName := matrix.GetDisplayName(ctx, config.UserID)
 	if botDisplayName == "" {
@@ -337,7 +351,7 @@ func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relat
 	}
 
 	// Get the conversation history making up the current context window
-	history := buildContextWindow(ctx, roomID)
+	history := buildContextWindow(ctx, roomID, cfg.ContextHighTokens, cfg.ContextLowTokens)
 
 	// Build messages array with system prompt, history, and current message
 	messages := []aigateway.Message{{Role: "system", Content: systemPrompt}}
@@ -375,13 +389,13 @@ func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relat
 	// Select the appropriate model based on whether we have an image
 	var model string
 	if hasImage {
-		model = getImageModelForRoom(ctx, roomID)
+		model = cfg.ImageModel
 		log.Debug().Ctx(ctx).
 			Str("room_id", roomID).
 			Str("model", model).
 			Msg("Using image model for message with image")
 	} else {
-		model = getTextModelForRoom(ctx, roomID)
+		model = cfg.TextModel
 		log.Debug().Ctx(ctx).
 			Str("room_id", roomID).
 			Str("model", model).
@@ -390,7 +404,7 @@ func buildInitialMessages(ctx context.Context, roomID, sender, msg string, relat
 
 	// Add the current message, handling image if present
 	if hasImage {
-		hasImage, messages = processImageMessage(ctx, roomID, msg, base64ImageURL, &messages)
+		hasImage, messages = processImageMessage(ctx, roomID, msg, base64ImageURL, cfg.ImageDetail, &messages)
 	} else {
 		// Regular text message
 		messages = append(messages, aigateway.Message{Role: "user", Content: msg})
@@ -656,7 +670,7 @@ func processRepliedText(ctx context.Context, roomID, replyEventID string, messag
 
 // processImageMessage handles messages that include an image
 // Returns updated hasImage flag and messages
-func processImageMessage(ctx context.Context, roomID, msg, base64ImageURL string, messages *[]aigateway.Message) (bool, []aigateway.Message) {
+func processImageMessage(ctx context.Context, roomID, msg, base64ImageURL, imageDetail string, messages *[]aigateway.Message) (bool, []aigateway.Message) {
 	hasImage := true
 
 	// Ensure the base64ImageURL is properly formatted
@@ -728,7 +742,6 @@ func processImageMessage(ctx context.Context, roomID, msg, base64ImageURL string
 			*messages = append(*messages, aigateway.Message{Role: "user", Content: msg})
 			hasImage = false
 		} else {
-			detail := getImageDetailForRoom(ctx, roomID)
 			contentParts := []aigateway.ContentPart{
 				{
 					Type: "text",
@@ -738,7 +751,7 @@ func processImageMessage(ctx context.Context, roomID, msg, base64ImageURL string
 					Type: "image_url",
 					ImageURL: &aigateway.ImageURL{
 						URL:    base64ImageURL,
-						Detail: detail,
+						Detail: requestImageDetail(imageDetail),
 					},
 				},
 			}
@@ -749,7 +762,7 @@ func processImageMessage(ctx context.Context, roomID, msg, base64ImageURL string
 			})
 			log.Debug().Ctx(ctx).
 				Str("room_id", roomID).
-				Str("image_detail", detail).
+				Str("image_detail", imageDetail).
 				Msg("Attaching image to chat request")
 			metrics.RecordChatImageProcessed()
 		}
@@ -820,13 +833,14 @@ func processToolCalls(
 	ctx context.Context,
 	roomID, sender, model string,
 	hasImage bool,
-	maxTokens int,
+	cfg db.ChatConfig,
 	chatResp *aigateway.ChatResponse,
 	messages []aigateway.Message,
 	tools []aigateway.ToolDefinition,
 	stats *turnStats,
 ) (int, []aigateway.Message, string) {
-	// Implement iterative tool calling with a maximum of 5 iterations
+	// Keep calling tools until the model stops asking for them or the configured iteration limit
+	// is reached
 	currentResp := chatResp
 	iterationCount := 1 // by the time we're here, we've already made one request
 
@@ -834,7 +848,8 @@ func processToolCalls(
 	toolCtx := context.WithValue(ctx, "room_id", roomID)
 	toolCtx = context.WithValue(toolCtx, "sender", sender)
 
-	maxIterations := getMaxToolIterationsForRoom(ctx, roomID)
+	maxTokens := cfg.MaxTokens
+	maxIterations := cfg.MaxToolIterations
 	for iterationCount < maxIterations {
 		iterationCount++
 

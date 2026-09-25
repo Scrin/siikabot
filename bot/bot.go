@@ -44,9 +44,9 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 
 		attrs := messageAttrs(evt.RoomID.String(), evt.Sender.String(), evt.ID.String())
 
-		// Everything from here to the dispatch below is real work — a room-config lookup, a reply
-		// lookup against the homeserver, mention detection — and until this span existed it all
-		// happened before any span was open. That had two costs: its latency was invisible, because
+		// Everything from here to the dispatch below is real work — a reply lookup against the
+		// homeserver, mention detection — and until this span existed it all happened before any
+		// span was open. That had two costs: its latency was invisible, because
 		// the handler span only starts once the routing decision is already made, and every call it
 		// made produced a parentless span of its own. Those orphans were the bulk of the junk traces
 		// in Tempo.

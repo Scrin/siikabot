@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -210,4 +211,54 @@ func DeleteChatHistoryForRoom(ctx context.Context, roomID string) (int64, error)
 	}
 
 	return tag.RowsAffected(), nil
+}
+
+// GetChatContextAnchor retrieves the id of the chat history row a room's context window starts at.
+// Returns nil if no anchor is set, meaning the window starts at the oldest available history.
+func GetChatContextAnchor(ctx context.Context, roomID string) (*int64, error) {
+	var anchorID int64
+	err := pool.QueryRow(ctx,
+		"SELECT anchor_id FROM chat_context_anchors WHERE room_id = $1",
+		roomID).Scan(&anchorID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		log.Error().Ctx(ctx).Err(err).
+			Str("room_id", roomID).
+			Msg("Failed to get chat context anchor")
+		return nil, err
+	}
+	return &anchorID, nil
+}
+
+// SetChatContextAnchor sets the id of the chat history row a room's context window starts at
+func SetChatContextAnchor(ctx context.Context, roomID string, anchorID int64) error {
+	_, err := pool.Exec(ctx,
+		"INSERT INTO chat_context_anchors (room_id, anchor_id) VALUES ($1, $2) "+
+			"ON CONFLICT (room_id) DO UPDATE SET anchor_id = $2",
+		roomID, anchorID)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).
+			Str("room_id", roomID).
+			Int64("anchor_id", anchorID).
+			Msg("Failed to set chat context anchor")
+		return err
+	}
+	return nil
+}
+
+// ClearChatContextAnchor removes a room's context window anchor, so the window starts again at the
+// oldest available history
+func ClearChatContextAnchor(ctx context.Context, roomID string) error {
+	_, err := pool.Exec(ctx,
+		"DELETE FROM chat_context_anchors WHERE room_id = $1",
+		roomID)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).
+			Str("room_id", roomID).
+			Msg("Failed to clear chat context anchor")
+		return err
+	}
+	return nil
 }

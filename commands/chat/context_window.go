@@ -9,13 +9,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// Default context window token budget. The window grows until it exceeds the high mark, then the
-// anchor jumps forward far enough to bring it under the low mark and stays put until the next
-// overflow. Evicting one message per turn instead would change the prompt prefix on every request,
-// which both unsettles the model and makes provider-side prompt caching impossible.
-const defaultContextHighTokens = 16384
-const defaultContextLowTokens = 8192
-
 // maxContextRows caps how many history rows are read per turn. The anchor and the token budget
 // normally keep the window far below this; it exists so a pathologically stale anchor cannot turn
 // into an unbounded read.
@@ -66,32 +59,6 @@ func estimateMessageTokens(messages []aigateway.Message) int {
 	return total
 }
 
-// getContextBudgetForRoom returns the high and low token marks for a room, falling back to the
-// defaults when the room has no override
-func getContextBudgetForRoom(ctx context.Context, roomID string) (high, low int) {
-	high, low = defaultContextHighTokens, defaultContextLowTokens
-
-	configuredHigh, configuredLow, err := db.GetRoomChatContextTokens(ctx, roomID)
-	if err != nil {
-		return high, low
-	}
-	if configuredHigh != nil && *configuredHigh > 0 {
-		high = *configuredHigh
-	}
-	if configuredLow != nil && *configuredLow > 0 {
-		low = *configuredLow
-	}
-	if low >= high {
-		log.Warn().Ctx(ctx).
-			Str("room_id", roomID).
-			Int("high_tokens", high).
-			Int("low_tokens", low).
-			Msg("Room context low mark is not below the high mark, falling back to defaults")
-		return defaultContextHighTokens, defaultContextLowTokens
-	}
-	return high, low
-}
-
 // currentContextWindow returns the context window as it currently stands, without advancing the
 // anchor. Use this for reporting; buildContextWindow is the one that maintains the window.
 func currentContextWindow(ctx context.Context, roomID string) []db.ChatMessage {
@@ -115,13 +82,17 @@ func currentContextWindow(ctx context.Context, roomID string) []db.ChatMessage {
 
 // buildContextWindow returns the history rows that make up the current context window for a room,
 // advancing and persisting the anchor when the window has outgrown its token budget.
-func buildContextWindow(ctx context.Context, roomID string) []db.ChatMessage {
+//
+// The window grows until it exceeds the high mark, then the anchor jumps forward far enough to bring
+// it under the low mark and stays put until the next overflow. Evicting one message per turn instead
+// would change the prompt prefix on every request, which both unsettles the model and makes
+// provider-side prompt caching impossible.
+func buildContextWindow(ctx context.Context, roomID string, high, low int) []db.ChatMessage {
 	history := currentContextWindow(ctx, roomID)
 	if len(history) == 0 {
 		return nil
 	}
 
-	high, low := getContextBudgetForRoom(ctx, roomID)
 	windowTokens := estimateHistoryTokens(history)
 	if windowTokens <= high {
 		return history
@@ -151,7 +122,7 @@ func buildContextWindow(ctx context.Context, roomID string) []db.ChatMessage {
 
 	metrics.RecordChatContextAnchorAdvance()
 
-	if err := db.SetRoomChatContextAnchor(ctx, roomID, newAnchorID); err != nil {
+	if err := db.SetChatContextAnchor(ctx, roomID, newAnchorID); err != nil {
 		// Already logged. The window is still correct for this turn; the anchor simply is not
 		// persisted, so the next turn recomputes it.
 		return trimmed
@@ -166,7 +137,7 @@ func buildContextWindow(ctx context.Context, roomID string) []db.ChatMessage {
 // that no longer exists — the retention cleanup deletes rows older than a week — is treated the same
 // way rather than as an error, so a quiet room degrades to a shorter window instead of breaking.
 func applyAnchor(ctx context.Context, roomID string, history []db.ChatMessage) []db.ChatMessage {
-	anchorID, err := db.GetRoomChatContextAnchor(ctx, roomID)
+	anchorID, err := db.GetChatContextAnchor(ctx, roomID)
 	if err != nil || anchorID == nil {
 		return history
 	}

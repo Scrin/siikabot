@@ -16,25 +16,17 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const (
-	defaultTextModel  = "openrouter/deepseek/deepseek-v4-pro-0813"
-	defaultImageModel = "openrouter/openai/gpt-5.6-luna"
-)
-
-// Default values for configurable parameters
-const defaultMaxToolIterations = 5
-
-// defaultMaxTokens caps a single response. Generous enough that ordinary answers are unaffected —
-// the system prompt already asks for concise replies — but a backstop so a runaway generation is
-// not billed in full. Raise it per room with "!chat maxtokens" if replies get cut short.
-const defaultMaxTokens = 2048
-
-// defaultImageDetail is the fidelity images are sent at. "low" costs a flat, small number of tokens
-// per image, where the provider default tiles the image and can cost thousands for the same picture.
-const defaultImageDetail = "low"
-
 // imageDetailAuto omits the detail field, leaving the choice to the provider
 const imageDetailAuto = "auto"
+
+// requestImageDetail turns the configured image detail into the value sent with a request, where an
+// empty value omits the field
+func requestImageDetail(detail string) string {
+	if detail == imageDetailAuto {
+		return ""
+	}
+	return detail
+}
 
 // How long to keep chat history before cleaning it up
 const chatHistoryRetention = 7 * 24 * time.Hour // 7 days
@@ -115,87 +107,39 @@ func cleanupChatUsage(ctx context.Context) {
 	}
 }
 
-// getTextModelForRoom returns the model to use for text messages in a specific room
-// If no room-specific model is set, returns the default model
-func getTextModelForRoom(ctx context.Context, roomID string) string {
-	model, err := db.GetRoomChatLLMModelText(ctx, roomID)
-	if err != nil || model == nil {
-		return defaultTextModel
-	}
-	return *model
-}
-
-// getImageModelForRoom returns the model to use for image messages in a specific room
-// If no room-specific model is set, returns the default model
-func getImageModelForRoom(ctx context.Context, roomID string) string {
-	model, err := db.GetRoomChatLLMModelImage(ctx, roomID)
-	if err != nil || model == nil {
-		return defaultImageModel
-	}
-	return *model
-}
-
-// getMaxTokensForRoom returns the response length cap for a room
-// If no room-specific value is set, returns the default value
-func getMaxTokensForRoom(ctx context.Context, roomID string) int {
-	maxTokens, err := db.GetRoomChatMaxTokens(ctx, roomID)
-	if err != nil || maxTokens == nil || *maxTokens <= 0 {
-		return defaultMaxTokens
-	}
-	return *maxTokens
-}
-
-// getImageDetailForRoom returns the image detail level for a room.
-// Returns an empty string for "auto", which omits the field and lets the provider choose.
-func getImageDetailForRoom(ctx context.Context, roomID string) string {
-	detail, err := db.GetRoomChatImageDetail(ctx, roomID)
-	if err != nil || detail == nil || *detail == "" {
-		return defaultImageDetail
-	}
-	if *detail == imageDetailAuto {
-		return ""
-	}
-	return *detail
-}
-
-// describeImageDetail renders the room's image detail setting for display
-func describeImageDetail(ctx context.Context, roomID string) string {
-	if detail := getImageDetailForRoom(ctx, roomID); detail != "" {
-		return detail
-	}
-	return imageDetailAuto
-}
-
-// describeContextWindow renders the room's context window settings and the size of the window as it
+// describeContextWindow renders the context window settings and the size of the room's window as it
 // currently stands, since a token budget on its own is hard to picture.
 //
 // Deliberately reads the window without maintaining it: showing the configuration should not move
 // the anchor as a side effect.
-func describeContextWindow(ctx context.Context, roomID string) string {
-	high, low := getContextBudgetForRoom(ctx, roomID)
+func describeContextWindow(ctx context.Context, roomID string, cfg db.ChatConfig) string {
 	window := currentContextWindow(ctx, roomID)
 	return fmt.Sprintf("%d / %d tokens (currently ~%d tokens over %d messages)",
-		high, low, estimateHistoryTokens(window), len(window))
+		cfg.ContextHighTokens, cfg.ContextLowTokens, estimateHistoryTokens(window), len(window))
 }
 
-// getMaxToolIterationsForRoom returns the max tool iterations to use for a specific room
-// If no room-specific value is set, returns the default value
-func getMaxToolIterationsForRoom(ctx context.Context, roomID string) int {
-	maxIterations, err := db.GetRoomChatMaxToolIterations(ctx, roomID)
-	if err != nil || maxIterations == nil {
-		return defaultMaxToolIterations
+// updateConfig applies a change to the chat configuration and reports the outcome to the room.
+// Every change is recorded as a new configuration row, so the previous configuration stays on record.
+func updateConfig(ctx context.Context, roomID string, change func(*db.ChatConfig), changedMsg, failedMsg string) {
+	cfg, err := db.UpdateChatConfig(ctx, change)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Msg("Failed to update chat config")
+		matrix.SendMessage(ctx, roomID, failedMsg)
+		return
 	}
-	return *maxIterations
-}
-
-// getMaxWebContentSizeForRoom returns the max web content size to use for a specific room
-// If no room-specific value is set, returns the default value
-func getMaxWebContentSizeForRoom(ctx context.Context, roomID string) int {
-	maxSize, err := db.GetRoomChatMaxWebContentSize(ctx, roomID)
-	if err != nil || maxSize == nil {
-		return llmtools.DefaultMaxWebResponseSize
-	}
-	return *maxSize
+	log.Info().Ctx(ctx).
+		Str("room_id", roomID).
+		Int64("config_id", cfg.ID).
+		Str("text_model", cfg.TextModel).
+		Str("image_model", cfg.ImageModel).
+		Int("context_high_tokens", cfg.ContextHighTokens).
+		Int("context_low_tokens", cfg.ContextLowTokens).
+		Int("max_tokens", cfg.MaxTokens).
+		Str("image_detail", cfg.ImageDetail).
+		Int("max_tool_iterations", cfg.MaxToolIterations).
+		Int("max_web_content_size", cfg.MaxWebContentSize).
+		Msg("Chat config changed")
+	matrix.SendMessage(ctx, roomID, changedMsg)
 }
 
 func Handle(ctx context.Context, roomID, sender, msg string) {
@@ -213,21 +157,22 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 			return
 		}
 		// The anchor points at a row that no longer exists, so clear it along with the history
-		if err := db.ClearRoomChatContextAnchor(ctx, roomID); err != nil {
+		if err := db.ClearChatContextAnchor(ctx, roomID); err != nil {
 			log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Msg("Failed to clear context anchor on reset")
 			// Continue: a stale anchor degrades to starting from the oldest available row
 		}
 		log.Info().Ctx(ctx).Str("room_id", roomID).Int64("deleted_count", count).Msg("Chat history reset")
 		matrix.SendMessage(ctx, roomID, fmt.Sprintf("Chat history reset (%d messages deleted)", count))
 	case "config":
-		// Show current configuration for the room
-		textModel := getTextModelForRoom(ctx, roomID)
-		imageModel := getImageModelForRoom(ctx, roomID)
-		contextWindow := describeContextWindow(ctx, roomID)
-		maxToolIterations := getMaxToolIterationsForRoom(ctx, roomID)
-		maxWebContentSize := getMaxWebContentSizeForRoom(ctx, roomID)
+		// Show the current configuration
+		cfg, err := db.GetChatConfig(ctx)
+		if err != nil {
+			log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Msg("Failed to load chat config")
+			matrix.SendMessage(ctx, roomID, "Failed to load chat configuration")
+			return
+		}
 
-		matrix.SendMessage(ctx, roomID, fmt.Sprintf("Current chat configuration for this room:\n"+
+		matrix.SendMessage(ctx, roomID, fmt.Sprintf("Current chat configuration:\n"+
 			"Text model: %s\n"+
 			"Image model: %s\n"+
 			"Context window: %s\n"+
@@ -235,8 +180,8 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 			"Image detail: %s\n"+
 			"Max tool iterations: %d\n"+
 			"Max web content size: %d bytes",
-			textModel, imageModel, contextWindow, getMaxTokensForRoom(ctx, roomID),
-			describeImageDetail(ctx, roomID), maxToolIterations, maxWebContentSize))
+			cfg.TextModel, cfg.ImageModel, describeContextWindow(ctx, roomID, cfg), cfg.MaxTokens,
+			cfg.ImageDetail, cfg.MaxToolIterations, cfg.MaxWebContentSize))
 	case "model":
 		if len(split) < 4 {
 			matrix.SendMessage(ctx, roomID, "Usage: !chat model [text|image] <model_name>")
@@ -250,38 +195,18 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 
 		modelType := strings.TrimSpace(split[2])
 		newModel := strings.TrimSpace(split[3])
+		if newModel == "" {
+			matrix.SendMessage(ctx, roomID, "Usage: !chat model [text|image] <model_name>")
+			return
+		}
 
 		switch modelType {
 		case "text":
-			err := db.SetRoomChatLLMModelText(ctx, roomID, newModel)
-			if err != nil {
-				log.Error().Ctx(ctx).Err(err).
-					Str("room_id", roomID).
-					Str("model", newModel).
-					Msg("Failed to set room text chat model")
-				matrix.SendMessage(ctx, roomID, "Failed to set text chat model")
-				return
-			}
-			log.Info().Ctx(ctx).
-				Str("room_id", roomID).
-				Str("model", newModel).
-				Msg("Text chat model changed")
-			matrix.SendMessage(ctx, roomID, fmt.Sprintf("Text chat model changed to: %s", newModel))
+			updateConfig(ctx, roomID, func(cfg *db.ChatConfig) { cfg.TextModel = newModel },
+				fmt.Sprintf("Text chat model changed to: %s", newModel), "Failed to set text chat model")
 		case "image":
-			err := db.SetRoomChatLLMModelImage(ctx, roomID, newModel)
-			if err != nil {
-				log.Error().Ctx(ctx).Err(err).
-					Str("room_id", roomID).
-					Str("model", newModel).
-					Msg("Failed to set room image chat model")
-				matrix.SendMessage(ctx, roomID, "Failed to set image chat model")
-				return
-			}
-			log.Info().Ctx(ctx).
-				Str("room_id", roomID).
-				Str("model", newModel).
-				Msg("Image chat model changed")
-			matrix.SendMessage(ctx, roomID, fmt.Sprintf("Image chat model changed to: %s", newModel))
+			updateConfig(ctx, roomID, func(cfg *db.ChatConfig) { cfg.ImageModel = newModel },
+				fmt.Sprintf("Image chat model changed to: %s", newModel), "Failed to set image chat model")
 		default:
 			matrix.SendMessage(ctx, roomID, "Usage: !chat model [text|image] <model_name>")
 		}
@@ -312,21 +237,10 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 			return
 		}
 
-		if err := db.SetRoomChatContextTokens(ctx, roomID, highTokens, lowTokens); err != nil {
-			log.Error().Ctx(ctx).Err(err).
-				Str("room_id", roomID).
-				Int("high_tokens", highTokens).
-				Int("low_tokens", lowTokens).
-				Msg("Failed to set room context window")
-			matrix.SendMessage(ctx, roomID, "Failed to set context window")
-			return
-		}
-		log.Info().Ctx(ctx).
-			Str("room_id", roomID).
-			Int("high_tokens", highTokens).
-			Int("low_tokens", lowTokens).
-			Msg("Context window changed")
-		matrix.SendMessage(ctx, roomID, fmt.Sprintf("Context window changed to: %d / %d tokens", highTokens, lowTokens))
+		updateConfig(ctx, roomID, func(cfg *db.ChatConfig) {
+			cfg.ContextHighTokens = highTokens
+			cfg.ContextLowTokens = lowTokens
+		}, fmt.Sprintf("Context window changed to: %d / %d tokens", highTokens, lowTokens), "Failed to set context window")
 	case "maxtokens":
 		if len(split) < 3 {
 			matrix.SendMessage(ctx, roomID, "Usage: !chat maxtokens <tokens>")
@@ -344,19 +258,8 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 			return
 		}
 
-		if err := db.SetRoomChatMaxTokens(ctx, roomID, maxTokens); err != nil {
-			log.Error().Ctx(ctx).Err(err).
-				Str("room_id", roomID).
-				Int("max_tokens", maxTokens).
-				Msg("Failed to set room max response tokens")
-			matrix.SendMessage(ctx, roomID, "Failed to set max response tokens")
-			return
-		}
-		log.Info().Ctx(ctx).
-			Str("room_id", roomID).
-			Int("max_tokens", maxTokens).
-			Msg("Max response tokens changed")
-		matrix.SendMessage(ctx, roomID, fmt.Sprintf("Max response tokens changed to: %d", maxTokens))
+		updateConfig(ctx, roomID, func(cfg *db.ChatConfig) { cfg.MaxTokens = maxTokens },
+			fmt.Sprintf("Max response tokens changed to: %d", maxTokens), "Failed to set max response tokens")
 	case "imagedetail":
 		if len(split) < 3 {
 			matrix.SendMessage(ctx, roomID, "Usage: !chat imagedetail [low|high|auto]")
@@ -374,19 +277,8 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 			return
 		}
 
-		if err := db.SetRoomChatImageDetail(ctx, roomID, detail); err != nil {
-			log.Error().Ctx(ctx).Err(err).
-				Str("room_id", roomID).
-				Str("image_detail", detail).
-				Msg("Failed to set room image detail")
-			matrix.SendMessage(ctx, roomID, "Failed to set image detail")
-			return
-		}
-		log.Info().Ctx(ctx).
-			Str("room_id", roomID).
-			Str("image_detail", detail).
-			Msg("Image detail changed")
-		matrix.SendMessage(ctx, roomID, fmt.Sprintf("Image detail changed to: %s", detail))
+		updateConfig(ctx, roomID, func(cfg *db.ChatConfig) { cfg.ImageDetail = detail },
+			fmt.Sprintf("Image detail changed to: %s", detail), "Failed to set image detail")
 	case "tools":
 		if len(split) < 3 {
 			matrix.SendMessage(ctx, roomID, "Usage: !chat tools <max_iterations>")
@@ -405,20 +297,8 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 			return
 		}
 
-		err = db.SetRoomChatMaxToolIterations(ctx, roomID, maxIterations)
-		if err != nil {
-			log.Error().Ctx(ctx).Err(err).
-				Str("room_id", roomID).
-				Int("max_iterations", maxIterations).
-				Msg("Failed to set room max tool iterations")
-			matrix.SendMessage(ctx, roomID, "Failed to set max tool iterations")
-			return
-		}
-		log.Info().Ctx(ctx).
-			Str("room_id", roomID).
-			Int("max_iterations", maxIterations).
-			Msg("Max tool iterations changed")
-		matrix.SendMessage(ctx, roomID, fmt.Sprintf("Max tool iterations changed to: %d", maxIterations))
+		updateConfig(ctx, roomID, func(cfg *db.ChatConfig) { cfg.MaxToolIterations = maxIterations },
+			fmt.Sprintf("Max tool iterations changed to: %d", maxIterations), "Failed to set max tool iterations")
 	case "web":
 		if len(split) < 3 {
 			matrix.SendMessage(ctx, roomID, "Usage: !chat web <max_size_bytes>")
@@ -437,20 +317,8 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 			return
 		}
 
-		err = db.SetRoomChatMaxWebContentSize(ctx, roomID, maxSize)
-		if err != nil {
-			log.Error().Ctx(ctx).Err(err).
-				Str("room_id", roomID).
-				Int("max_size", maxSize).
-				Msg("Failed to set room max web content size")
-			matrix.SendMessage(ctx, roomID, "Failed to set max web content size")
-			return
-		}
-		log.Info().Ctx(ctx).
-			Str("room_id", roomID).
-			Int("max_size", maxSize).
-			Msg("Max web content size changed")
-		matrix.SendMessage(ctx, roomID, fmt.Sprintf("Max web content size changed to: %d bytes", maxSize))
+		updateConfig(ctx, roomID, func(cfg *db.ChatConfig) { cfg.MaxWebContentSize = maxSize },
+			fmt.Sprintf("Max web content size changed to: %d bytes", maxSize), "Failed to set max web content size")
 	default:
 		matrix.SendMessage(ctx, roomID, "Unknown command")
 	}

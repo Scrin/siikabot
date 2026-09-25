@@ -120,3 +120,17 @@ func TestPromptPrefixIsStableAcrossTurns(t *testing.T) {
 		t.Error("the volatile timestamp is back in the system prompt, which breaks prefix caching")
 	}
 }
+
+// TestRequestImageDetail verifies "auto" is sent as an omitted field, which is what leaves the
+// choice to the provider, while an explicit level is passed through as configured
+func TestRequestImageDetail(t *testing.T) {
+	for configured, want := range map[string]string{
+		"low":  "low",
+		"high": "high",
+		"auto": "",
+	} {
+		if got := requestImageDetail(configured); got != want {
+			t.Errorf("requestImageDetail(%q) = %q, want %q", configured, got, want)
+		}
+	}
+}

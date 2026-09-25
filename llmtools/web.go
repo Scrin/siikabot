@@ -2,7 +2,6 @@ package llmtools
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,7 +27,7 @@ var WebToolDefinition = aigateway.ToolDefinition{
 	Type: "function",
 	Function: aigateway.FunctionSchema{
 		Name:        "get_web_content",
-		Description: "Fetch the content of a web page. HTML is converted to markdown for readability. (max 10kB output by default)",
+		Description: "Fetch the content of a web page. HTML is converted to markdown for readability.",
 		Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -43,9 +42,6 @@ var WebToolDefinition = aigateway.ToolDefinition{
 	Handler:          handleWebToolCall,
 	ValidityDuration: 10 * time.Minute,
 }
-
-// Default maximum size of response body to read (10kB)
-const DefaultMaxWebResponseSize = 10 * 1024
 
 // Maximum number of redirects to follow
 const maxRedirects = 5
@@ -137,19 +133,13 @@ func handleWebToolCall(ctx context.Context, arguments string) (string, error) {
 		return "", fmt.Errorf("invalid URL: must start with http:// or https://")
 	}
 
-	// Get room ID from context
-	roomID, ok := ctx.Value("room_id").(string)
-	if !ok || roomID == "" {
-		return "", fmt.Errorf("room ID not found in context")
+	// The size cap is part of the chat configuration, which has no fallback values to use instead
+	chatConfig, err := db.GetChatConfig(ctx)
+	if err != nil {
+		// Already logged
+		return "", fmt.Errorf("failed to load chat configuration: %w", err)
 	}
-
-	// Get configured max size for the room, or use default if not set
-	maxSize := DefaultMaxWebResponseSize
-	if configuredSize, err := db.GetRoomChatMaxWebContentSize(ctx, roomID); err != nil && err != sql.ErrNoRows {
-		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Msg("Failed to get max web content size, using default")
-	} else if configuredSize != nil {
-		maxSize = *configuredSize
-	}
+	maxSize := chatConfig.MaxWebContentSize
 
 	// Create HTTP request
 	req, err := http.NewRequestWithContext(ctx, "GET", args.URL, nil)
