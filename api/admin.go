@@ -8,7 +8,6 @@ import (
 	"github.com/Scrin/siikabot/matrix"
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
-	mid "maunium.net/go/mautrix/id"
 )
 
 // AdminAuthMiddleware checks if the authenticated user is the configured admin
@@ -29,33 +28,24 @@ func AdminAuthMiddleware() gin.HandlerFunc {
 	}
 }
 
-// AdminRoomsHandler returns all rooms known to the bot (admin only)
+// AdminRoomsHandler returns every room the bot is in (admin only)
 // GET /api/admin/rooms
 func AdminRoomsHandler(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	roomIDs, err := db.GetAllRooms(ctx)
+	roomIDs, err := db.FindJoinedRooms(ctx, config.UserID)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Msg("Failed to fetch all rooms")
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "Failed to fetch rooms"})
 		return
 	}
 
-	response := RoomsResponse{
-		Rooms: make([]RoomResponse, len(roomIDs)),
-	}
-	for i, roomID := range roomIDs {
-		roomName := matrix.GetRoomName(ctx, string(roomID))
-		response.Rooms[i] = RoomResponse{
-			RoomID:   string(roomID),
-			RoomName: roomName,
-		}
-	}
-
-	c.JSON(http.StatusOK, response)
+	c.JSON(http.StatusOK, roomsResponse(roomIDs, func(roomID string) string {
+		return matrix.GetRoomName(ctx, roomID)
+	}))
 }
 
-// AdminRoomMembersHandler returns members of any room (admin only)
+// AdminRoomMembersHandler returns the joined members of any room the bot is in (admin only)
 // GET /api/admin/rooms/:roomId/members
 func AdminRoomMembersHandler(c *gin.Context) {
 	ctx := c.Request.Context()
@@ -66,21 +56,12 @@ func AdminRoomMembersHandler(c *gin.Context) {
 		return
 	}
 
-	members, err := db.GetRoomMembers(ctx, mid.RoomID(roomID))
+	members, err := db.GetJoinedMembers(ctx, roomID)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Msg("Failed to fetch room members")
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "Failed to fetch room members"})
 		return
 	}
 
-	response := RoomMembersResponse{
-		Members: make([]RoomMemberResponse, len(members)),
-	}
-	for i, member := range members {
-		response.Members[i] = RoomMemberResponse{
-			UserID: string(member),
-		}
-	}
-
-	c.JSON(http.StatusOK, response)
+	c.JSON(http.StatusOK, membersResponse(members))
 }

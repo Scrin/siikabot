@@ -72,8 +72,11 @@ export interface RoomsResponse {
 }
 
 // Room member types
+/** A member who has joined the room. Invited users aren't listed. */
 export interface RoomMemberResponse {
   user_id: string
+  /** Their display name in the room, absent if they have none */
+  display_name?: string
 }
 
 export interface RoomMembersResponse {

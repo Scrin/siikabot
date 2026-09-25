@@ -40,7 +40,7 @@ func estimateHistoryTokens(history []db.ChatMessage) int {
 // budget is measured on: a user message is replayed with its header
 func replayText(msg db.ChatMessage) string {
 	if msg.Role == "user" {
-		return renderUserTurn(msg.UserTurn(), false)
+		return renderUserTurn(msg.UserTurn(), nil)
 	}
 	return msg.Message
 }
@@ -68,10 +68,11 @@ func estimateMessageTokens(messages []aigateway.Message) int {
 	return total
 }
 
-// currentContextWindow returns the context window as it currently stands, without advancing the
-// anchor. Use this for reporting; buildContextWindow is the one that maintains the window.
-func currentContextWindow(ctx context.Context, roomID string) []db.ChatMessage {
-	history, err := db.GetChatHistory(ctx, roomID, maxContextRows)
+// currentContextWindow returns a timeline's context window as it currently stands, without
+// advancing the anchor. Use this for reporting; buildContextWindow is the one that maintains the
+// window. seedTurnEventID is the stored turn a thread was started from, empty for none.
+func currentContextWindow(ctx context.Context, timeline db.Timeline, seedTurnEventID string) []db.ChatMessage {
+	history, err := db.GetChatHistory(ctx, timeline, seedTurnEventID, maxContextRows)
 	if err != nil {
 		// Already logged. Continuing without history is better than refusing to answer.
 		return nil
@@ -81,23 +82,28 @@ func currentContextWindow(ctx context.Context, roomID string) []db.ChatMessage {
 	}
 	if len(history) == maxContextRows {
 		log.Warn().Ctx(ctx).
-			Str("room_id", roomID).
+			Str("room_id", timeline.RoomID).
+			Str("thread_root_id", timeline.ThreadRootID).
 			Int("max_rows", maxContextRows).
 			Msg("Chat history read hit the row cap, older context is not visible")
 	}
 
-	return applyAnchor(ctx, roomID, history)
+	return applyAnchor(ctx, timeline, history)
 }
 
-// buildContextWindow returns the history rows that make up the current context window for a room,
-// advancing and persisting the anchor when the window has outgrown its token budget.
+// buildContextWindow returns the history rows that make up the current context window of a
+// timeline, advancing and persisting the anchor when the window has outgrown its token budget.
 //
 // The window grows until it exceeds the high mark, then the anchor jumps forward far enough to bring
 // it under the low mark and stays put until the next overflow. Evicting one message per turn instead
 // would change the prompt prefix on every request, which both unsettles the model and makes
 // provider-side prompt caching impossible.
-func buildContextWindow(ctx context.Context, roomID string, high, low int) []db.ChatMessage {
-	history := currentContextWindow(ctx, roomID)
+//
+// A thread started from a stored turn begins with that turn. It is the oldest part of the thread's
+// window, so it is the first to go when the anchor advances.
+func buildContextWindow(ctx context.Context, timeline db.Timeline, seedTurnEventID string, high, low int) []db.ChatMessage {
+	roomID := timeline.RoomID
+	history := currentContextWindow(ctx, timeline, seedTurnEventID)
 	if len(history) == 0 {
 		return nil
 	}
@@ -113,6 +119,7 @@ func buildContextWindow(ctx context.Context, roomID string, high, low int) []db.
 		// conversation mid-turn. The next turn adds a boundary and this resolves itself.
 		log.Warn().Ctx(ctx).
 			Str("room_id", roomID).
+			Str("thread_root_id", timeline.ThreadRootID).
 			Int("window_tokens", windowTokens).
 			Int("high_tokens", high).
 			Msg("Context window is over budget but has no turn boundary to anchor to")
@@ -121,6 +128,7 @@ func buildContextWindow(ctx context.Context, roomID string, high, low int) []db.
 
 	log.Info().Ctx(ctx).
 		Str("room_id", roomID).
+		Str("thread_root_id", timeline.ThreadRootID).
 		Int("window_tokens", windowTokens).
 		Int("trimmed_tokens", estimateHistoryTokens(trimmed)).
 		Int("high_tokens", high).
@@ -131,7 +139,7 @@ func buildContextWindow(ctx context.Context, roomID string, high, low int) []db.
 
 	metrics.RecordChatContextAnchorAdvance()
 
-	if err := db.SetChatContextAnchor(ctx, roomID, newAnchorID); err != nil {
+	if err := db.SetChatContextAnchor(ctx, timeline, newAnchorID); err != nil {
 		// Already logged. The window is still correct for this turn; the anchor simply is not
 		// persisted, so the next turn recomputes it.
 		return trimmed
@@ -140,32 +148,34 @@ func buildContextWindow(ctx context.Context, roomID string, high, low int) []db.
 	return trimmed
 }
 
-// applyAnchor drops the history rows that precede the room's stored anchor.
+// applyAnchor drops the history rows that precede the timeline's stored anchor.
 //
 // A missing anchor means the window starts at the oldest available row. An anchor pointing at a row
-// that no longer exists — the retention cleanup deletes rows older than a week — is treated the same
-// way rather than as an error, so a quiet room degrades to a shorter window instead of breaking.
-func applyAnchor(ctx context.Context, roomID string, history []db.ChatMessage) []db.ChatMessage {
-	anchorID, err := db.GetChatContextAnchor(ctx, roomID)
-	if err != nil || anchorID == nil {
+// that no longer exists — the retention cleanup deletes rows older than a week — still drops only
+// the rows before it, so a quiet room degrades to a shorter window instead of breaking.
+//
+// An anchor past every row leaves the window empty. A reset puts a thread's anchor there, so that
+// the turn the thread was started from, which the reset doesn't delete, stays out of the thread.
+func applyAnchor(ctx context.Context, timeline db.Timeline, history []db.ChatMessage) []db.ChatMessage {
+	anchorID, err := db.GetChatContextAnchor(ctx, timeline)
+	if err != nil {
+		// Already logged. The window starts at the oldest row, as without an anchor.
 		return history
 	}
+	return fromAnchor(history, anchorID)
+}
 
+// fromAnchor returns the history rows from the anchor on, all of them if there is no anchor
+func fromAnchor(history []db.ChatMessage, anchorID *int64) []db.ChatMessage {
+	if anchorID == nil {
+		return history
+	}
 	for i, msg := range history {
 		if msg.ID >= *anchorID {
-			if i > 0 {
-				return history[i:]
-			}
-			return history
+			return history[i:]
 		}
 	}
-
-	// Every row predates the anchor, which means the anchored rows have since been deleted
-	log.Warn().Ctx(ctx).
-		Str("room_id", roomID).
-		Int64("anchor_id", *anchorID).
-		Msg("Context anchor points past all available history, starting from the oldest row")
-	return history
+	return nil
 }
 
 // trimToLowMark finds the earliest turn boundary that brings the window under the low mark and

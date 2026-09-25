@@ -90,3 +90,13 @@ func invalidateRoom(roomID string) {
 	delete(roomCache.entries, roomID)
 	roomCache.Unlock()
 }
+
+// ResolveRoomAlias returns the room an alias points at
+func ResolveRoomAlias(ctx context.Context, alias string) (string, error) {
+	resp, err := client.ResolveAlias(ctx, id.RoomAlias(alias))
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Str("room_alias", alias).Msg("Failed to resolve a room alias")
+		return "", fmt.Errorf("failed to resolve room alias: %w", err)
+	}
+	return resp.RoomID.String(), nil
+}

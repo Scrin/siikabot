@@ -3,7 +3,6 @@ package bot
 import (
 	"context"
 	"strings"
-	"time"
 
 	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/api"
@@ -25,7 +24,6 @@ import (
 	"github.com/rs/zerolog/log"
 	"go.opentelemetry.io/otel/trace"
 	"maunium.net/go/mautrix/event"
-	"maunium.net/go/mautrix/id"
 )
 
 func handleTextEvent(ctx context.Context, evt *event.Event) {
@@ -58,8 +56,13 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 		trace.WithAttributes(attrs...))
 	defer routeSpan.End()
 
-	routedToChat := false
-	if msgtype == "m.text" {
+	content := evt.Content.AsMessage()
+	isEdit := content.RelatesTo.GetReplaceID() != ""
+
+	// What the message was handled as, if anything
+	var handled constants.Command
+	switch msgtype {
+	case "m.text":
 		msg := evt.Content.Raw["body"].(string)
 
 		// Track message stats asynchronously
@@ -70,10 +73,16 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 			db.UpdateRoomDailyStats(ctx, evt.RoomID.String(), msg)
 		})
 
+		// An edit is never handled as a new message, not even when it reads like a command
+		if isEdit {
+			handled = routeEdit(ctx, evt, attrs)
+			break
+		}
+
 		format, _ := evt.Content.Raw["format"].(string)
 		formattedBody, _ := evt.Content.Raw["formatted_body"].(string)
 		cmd := constants.Command(strings.Split(msg, " ")[0])
-		isCommand := true
+		handled = cmd
 
 		switch cmd {
 		case constants.CommandPing:
@@ -89,8 +98,9 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 				remind.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg, format, formattedBody)
 			})
 		case constants.CommandChat:
+			threadRootID := content.RelatesTo.GetThreadParent().String()
 			traced(ctx, "command.chat", attrs, func(ctx context.Context) {
-				chat.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
+				chat.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), evt.ID.String(), threadRootID, msg)
 			})
 		case constants.CommandServers:
 			traced(ctx, "command.servers", attrs, func(ctx context.Context) {
@@ -105,104 +115,32 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 				stats.Handle(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
 			})
 		default:
-			isCommand = false
-
-			// The event the message explicitly refers to decides both whether it counts as a reply
-			// to the bot and what reply context the chat turn gets, so it is worked out once, here
-			rel := evt.Content.AsMessage().RelatesTo
-			replyToID := replyTarget(rel, func(root id.EventID) bool {
-				first, err := matrix.IsFirstThreadReply(ctx, evt.RoomID.String(), root.String(), evt.ID.String())
-				// Already logged. Without an answer the root stays out of the context.
-				return err == nil && first
-			})
-
-			// Fetched once for everything that needs it: the sender for the check below, and the
-			// content for the chat turn
-			var replyTo *matrix.Message
-			if replyToID != "" {
-				if fetched, err := matrix.FetchMessage(ctx, evt.RoomID.String(), replyToID.String()); err == nil {
-					replyTo = fetched
-				}
-			}
-			isReplyToBot := replyTo != nil && replyTo.Sender == config.UserID
-
-			// Check if the message addresses the bot: an explicit mention of the bot in
-			// m.mentions, a message that opens by naming the bot, or a reply to the bot
-			isMentioned := mentionsBotExplicitly(evt.Content.Raw, config.UserID)
-			prefixedMsg, isPrefixed := stripBotNamePrefix(msg, formattedBody, config.UserID, botNames(ctx, evt.RoomID.String())...)
-			addressed := isMentioned || isPrefixed || isReplyToBot
-
-			// A reply to the bot that opens by addressing someone else is for them (see
-			// mention.go), and like any other message that isn't for the bot, it only counts as
-			// unseen
-			if isReplyToBot && !isPrefixed && !pillsBot(formattedBody, config.UserID) &&
-				addressesSomeoneElse(msg, formattedBody, config.UserID, evt.Sender.String(), roomMembers(ctx, evt.RoomID.String())) {
-				log.Debug().Ctx(ctx).
-					Str("room_id", evt.RoomID.String()).
-					Str("event_id", evt.ID.String()).
-					Msg("Skipping a reply to the bot that addresses someone else")
-				addressed = false
-			}
-
-			if addressed {
-				body, formatted := ownText(msg, formattedBody, rel)
-
-				// Only the leading address is dropped from the message. A mention anywhere else is
-				// part of what the sender wrote and reads better left alone.
-				chatMsg := body
-				if isPrefixed {
-					chatMsg = prefixedMsg
-					// Nothing but the bot's name: the sender is getting our attention rather than
-					// asking anything, so let the model see the name it was called by
-					if chatMsg == "" {
-						chatMsg = body
-					}
-				}
-
-				trigger := chat.Trigger{
-					RoomID:         evt.RoomID.String(),
-					Sender:         evt.Sender.String(),
-					EventID:        evt.ID.String(),
-					Timestamp:      time.UnixMilli(evt.Timestamp),
-					Body:           chatMsg,
-					FormattedBody:  formatted,
-					Mentions:       mentionedUserIDs(evt.Content.Raw),
-					ThreadRootID:   rel.GetThreadParent().String(),
-					ReplyToEventID: replyToID.String(),
-					ReplyTo:        replyTo,
-				}
-
-				// How many messages the bot didn't see since the previous one addressed to it. Taken
-				// here, as messages arrive and in their order, so the count covers exactly the gap
-				// before this one; a turn waiting for the room would otherwise count what came after.
-				// A failure is already logged, and the count is only ever a hint, so it is left at 0.
-				trigger.UnseenBefore, _ = db.TakeUnseenMessages(ctx, evt.RoomID.String())
-
-				traced(ctx, "chat.mention", attrs, func(ctx context.Context) {
-					chat.HandleMention(ctx, trigger)
-				})
-				routedToChat = true
-				isCommand = true
-				cmd = constants.CommandMention
-				if isReplyToBot {
-					cmd = constants.CommandReply
-				}
-			}
+			handled = routeToChat(ctx, evt, attrs, msg, formattedBody, nil)
 		}
-		if isCommand {
-			matrix.MarkRead(ctx, evt.RoomID.String(), evt.ID.String())
-			log.Debug().
-				Str("command", string(cmd)).
-				Str("room_id", evt.RoomID.String()).
-				Str("sender", evt.Sender.String()).
-				Msg("Handled command")
-			metrics.RecordCommandHandled(cmd)
+	case "m.image":
+		// An image with a caption can address the bot like a text message does, and then the image
+		// comes with it
+		if isEdit {
+			handled = routeEdit(ctx, evt, attrs)
+		} else if caption := content.GetCaption(); caption != "" {
+			handled = routeToChat(ctx, evt, attrs, caption, content.GetFormattedCaption(), matrix.MessageFromEvent(evt))
 		}
+	}
+
+	if handled != "" {
+		matrix.MarkRead(ctx, evt.RoomID.String(), evt.ID.String())
+		log.Debug().Ctx(ctx).
+			Str("command", string(handled)).
+			Str("room_id", evt.RoomID.String()).
+			Str("sender", evt.Sender.String()).
+			Msg("Handled command")
+		metrics.RecordCommandHandled(handled)
 	}
 
 	// Every other message from someone else is one the chat model never sees, and only how many
 	// there were is kept. An edit changes a message that was already counted.
-	if !routedToChat && evt.Content.AsMessage().RelatesTo.GetReplaceID() == "" {
+	routedToChat := handled == constants.CommandMention || handled == constants.CommandReply
+	if !routedToChat && !isEdit {
 		if err := db.CountUnseenMessage(ctx, evt.RoomID.String()); err != nil {
 			// Already logged. The count is only ever a hint.
 			_ = err
@@ -296,6 +234,12 @@ func Init(ctx context.Context) error {
 		log.Info().
 			Str("room_id", roomID.String()).
 			Msg("Joined room during initial sync")
+	}
+
+	// Before anything can send a message: in an encrypted room, the room key goes to the members
+	// the state store lists
+	if err := matrix.RebuildRoomMembers(ctx); err != nil {
+		return err
 	}
 
 	remind.Init(ctx)

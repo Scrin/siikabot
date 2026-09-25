@@ -107,13 +107,14 @@ func cleanupChatUsage(ctx context.Context) {
 	}
 }
 
-// describeContextWindow renders the context window settings and the size of the room's window as it
-// currently stands, since a token budget on its own is hard to picture.
+// describeContextWindow renders the context window settings and the size of the window of the
+// timeline the command was sent in as it currently stands, since a token budget on its own is hard
+// to picture.
 //
 // Deliberately reads the window without maintaining it: showing the configuration should not move
 // the anchor as a side effect.
-func describeContextWindow(ctx context.Context, roomID string, cfg db.ChatConfig) string {
-	window := currentContextWindow(ctx, roomID)
+func describeContextWindow(ctx context.Context, timeline db.Timeline, sender string, cfg db.ChatConfig) string {
+	window := currentContextWindow(ctx, timeline, threadSeed(ctx, timeline, sender))
 	return fmt.Sprintf("%d / %d tokens (currently ~%d tokens over %d messages)",
 		cfg.ContextHighTokens, cfg.ContextLowTokens, estimateHistoryTokens(window), len(window))
 }
@@ -142,27 +143,37 @@ func updateConfig(ctx context.Context, roomID string, change func(*db.ChatConfig
 	matrix.SendMessage(ctx, roomID, changedMsg)
 }
 
-func Handle(ctx context.Context, roomID, sender, msg string) {
+// Handle handles the !chat command. The command acts on the timeline it was sent in, the main
+// timeline or a thread, which eventID and threadRootID say.
+func Handle(ctx context.Context, roomID, sender, eventID, threadRootID, msg string) {
 	split := strings.Split(msg, " ")
 	if len(split) < 2 {
 		return
 	}
 
+	timeline := db.Timeline{RoomID: roomID, ThreadRootID: threadRootID}
+	// Where the command was sent. What is about that timeline is answered there, so that a reset
+	// in a thread, say, says so in the thread.
+	here := matrix.Target{ThreadRootID: threadRootID, InReplyTo: eventID}
+
 	switch strings.TrimSpace(split[1]) {
 	case "reset":
-		count, err := db.DeleteChatHistoryForRoom(ctx, roomID)
+		count, err := db.ResetChatTimeline(ctx, timeline)
 		if err != nil {
-			log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Msg("Failed to reset chat history")
-			matrix.SendMessage(ctx, roomID, "Failed to reset chat history")
+			log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("thread_root_id", threadRootID).Msg("Failed to reset chat history")
+			matrix.SendMessageTo(ctx, roomID, here, "Failed to reset chat history", nil)
 			return
 		}
-		// The anchor points at a row that no longer exists, so clear it along with the history
-		if err := db.ClearChatContextAnchor(ctx, roomID); err != nil {
-			log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Msg("Failed to clear context anchor on reset")
-			// Continue: a stale anchor degrades to starting from the oldest available row
+		log.Info().Ctx(ctx).
+			Str("room_id", roomID).
+			Str("thread_root_id", threadRootID).
+			Int64("deleted_count", count).
+			Msg("Chat history reset")
+		what := "Chat history"
+		if threadRootID != "" {
+			what = "Chat history of this thread"
 		}
-		log.Info().Ctx(ctx).Str("room_id", roomID).Int64("deleted_count", count).Msg("Chat history reset")
-		matrix.SendMessage(ctx, roomID, fmt.Sprintf("Chat history reset (%d messages deleted)", count))
+		matrix.SendMessageTo(ctx, roomID, here, fmt.Sprintf("%s reset (%d messages deleted)", what, count), nil)
 	case "config":
 		// Show the current configuration
 		cfg, err := db.GetChatConfig(ctx)
@@ -172,7 +183,7 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 			return
 		}
 
-		matrix.SendMessage(ctx, roomID, fmt.Sprintf("Current chat configuration:\n"+
+		matrix.SendMessageTo(ctx, roomID, here, fmt.Sprintf("Current chat configuration:\n"+
 			"Text model: %s\n"+
 			"Image model: %s\n"+
 			"Context window: %s\n"+
@@ -180,8 +191,8 @@ func Handle(ctx context.Context, roomID, sender, msg string) {
 			"Image detail: %s\n"+
 			"Max tool iterations: %d\n"+
 			"Max web content size: %d bytes",
-			cfg.TextModel, cfg.ImageModel, describeContextWindow(ctx, roomID, cfg), cfg.MaxTokens,
-			cfg.ImageDetail, cfg.MaxToolIterations, cfg.MaxWebContentSize))
+			cfg.TextModel, cfg.ImageModel, describeContextWindow(ctx, timeline, sender, cfg), cfg.MaxTokens,
+			cfg.ImageDetail, cfg.MaxToolIterations, cfg.MaxWebContentSize), nil)
 	case "model":
 		if len(split) < 4 {
 			matrix.SendMessage(ctx, roomID, "Usage: !chat model [text|image] <model_name>")

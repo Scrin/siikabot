@@ -17,12 +17,13 @@ func ptr(s string) *string { return &s }
 func textMsg(role, message string, at time.Time) db.ChatMessage {
 	msg := db.ChatMessage{Role: role, Message: message, MessageType: "text", Timestamp: at}
 	if role == "user" {
-		name, unseen := "Alice", 0
+		name, unseen, hasImage := "Alice", 0, false
 		msg.UserID = "@alice:example.com"
 		msg.SenderName = &name
 		msg.SentAt = &at
 		msg.Mentions = []db.Mention{}
 		msg.UnseenBefore = &unseen
+		msg.HasImage = &hasImage
 	}
 	return msg
 }
@@ -245,7 +246,7 @@ func TestHistoryReplaysUserTurnsWithTheirHeader(t *testing.T) {
 	var messages []aigateway.Message
 	processHistoryMessages(context.Background(), []db.ChatMessage{row}, &messages)
 
-	want := renderUserTurn(row.UserTurn(), false)
+	want := renderUserTurn(row.UserTurn(), nil)
 	if got, _ := messages[0].Content.(string); got != want {
 		t.Errorf("replayed user message = %q, want %q", got, want)
 	}

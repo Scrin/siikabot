@@ -113,3 +113,45 @@ func TestMessageImageURLRejectsText(t *testing.T) {
 		t.Error("MessageImageURL() on a text message returned no error")
 	}
 }
+
+// Where the message sits is read too, so that an edit of it can be answered where it was sent
+func TestMessageFromEventReadsTheRelation(t *testing.T) {
+	msg := messageFromEvent(testRoomID, messageEvent(map[string]any{
+		"msgtype": "m.text",
+		"body":    "hi",
+		"m.relates_to": map[string]any{
+			"rel_type":        "m.thread",
+			"event_id":        "$root",
+			"is_falling_back": true,
+			"m.in_reply_to":   map[string]any{"event_id": "$latest"},
+		},
+	}))
+
+	if msg.RelatesTo.GetThreadParent() != "$root" || msg.RelatesTo.GetNonFallbackReplyTo() != "" || msg.RelatesTo.GetReplyTo() != "$latest" {
+		t.Errorf("RelatesTo = %#v, want a thread message with a fallback reply", msg.RelatesTo)
+	}
+
+	plain := messageFromEvent(testRoomID, messageEvent(map[string]any{"msgtype": "m.text", "body": "hi"}))
+	if plain.RelatesTo != nil {
+		t.Errorf("a message without a relation has %#v", plain.RelatesTo)
+	}
+}
+
+func TestMessageCaption(t *testing.T) {
+	tests := []struct {
+		name    string
+		content map[string]any
+		want    string
+	}{
+		{"a caption", map[string]any{"msgtype": "m.image", "body": "look at this", "filename": "cat.jpg"}, "look at this"},
+		{"only a file name", map[string]any{"msgtype": "m.image", "body": "cat.jpg"}, ""},
+		{"the file name twice", map[string]any{"msgtype": "m.image", "body": "cat.jpg", "filename": "cat.jpg"}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := messageFromEvent(testRoomID, messageEvent(tt.content)).Caption(); got != tt.want {
+				t.Errorf("Caption() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

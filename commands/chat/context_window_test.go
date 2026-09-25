@@ -223,3 +223,42 @@ func TestIsTurnBoundary(t *testing.T) {
 		})
 	}
 }
+
+func TestFromAnchor(t *testing.T) {
+	history := []db.ChatMessage{{ID: 3}, {ID: 5}, {ID: 8}}
+	ids := func(rows []db.ChatMessage) []int64 {
+		var got []int64
+		for _, row := range rows {
+			got = append(got, row.ID)
+		}
+		return got
+	}
+	anchor := func(id int64) *int64 { return &id }
+
+	if got := ids(fromAnchor(history, nil)); len(got) != 3 {
+		t.Errorf("without an anchor = %v, want every row", got)
+	}
+	if got := ids(fromAnchor(history, anchor(5))); len(got) != 2 || got[0] != 5 {
+		t.Errorf("anchored at a row = %v, want the rows from it on", got)
+	}
+	// The anchored row itself has gone, as the retention cleanup does to old rows
+	if got := ids(fromAnchor(history, anchor(4))); len(got) != 2 || got[0] != 5 {
+		t.Errorf("anchored at a deleted row = %v, want the rows after it", got)
+	}
+	// Where a reset of a thread leaves its anchor: past everything, the turn the thread was started
+	// from included
+	if got := fromAnchor(history, anchor(9)); len(got) != 0 {
+		t.Errorf("anchored past every row = %v, want none", ids(got))
+	}
+}
+
+func TestWindowHasTurn(t *testing.T) {
+	history := []db.ChatMessage{{TurnEventID: "$question"}, {TurnEventID: "$question"}, {TurnEventID: "$thread"}}
+
+	if !windowHasTurn(history, "$question") {
+		t.Error("a turn in the window wasn't found")
+	}
+	if windowHasTurn(history, "$other") || windowHasTurn(history, "") {
+		t.Error("a turn that isn't in the window was found")
+	}
+}

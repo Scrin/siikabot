@@ -50,15 +50,17 @@ In general, each command or webhook is considered a **self-contained feature** a
 
 ### Chat Privacy Invariant
 
-**Non-negotiable.** The chat model may only see room content that was addressed to the bot, plus the one message that such a message explicitly replies to.
+**Non-negotiable.** The chat model may only see room content that was addressed to the bot, plus the messages that such a message explicitly refers to: the one it replies to, and up to three it links to.
 
-- A message is addressed to the bot if it mentions the bot, opens with its name, replies to one of its messages, or is the first message of a thread on one of its messages.
+- A message is addressed to the bot if it mentions the bot, opens with its name, replies to one of its messages, or is the first message of a thread on one of its messages. An image's caption counts like a text message. An edit counts only when it newly mentions the bot.
 - The replied-to message is a real `m.in_reply_to`, or the thread root for the first message of a thread. A thread fallback never counts, and any nested reply fallback is stripped.
+- A linked message is a `matrix.to` link or `matrix:` URI to an event in the same room. Links inside a referenced message are not followed.
+- A referenced message is used only if the person referring to it could see it themselves. In a room that shows its history only from when people joined or were invited, anything older than their membership is left out (`matrix.VisibleTo`).
 - Nothing else from a room may be passed to the model, persisted in `chat_history` or exposed through an LLM tool, and no tool may read room events.
 - Metadata that is not message content (member list, room name, message counts) is allowed.
-- Redacted messages must leave the chat history.
+- Redacted messages must leave the chat history, and a message its sender edits is stored as edited.
 
-The referenced event is resolved once, in `bot/reply.go`, and handed to the chat turn in `chat.Trigger`. The chat package never fetches room events itself.
+The referenced events are resolved once, in `bot/reply.go`, and handed to the chat turn in `chat.Trigger`. The chat package never fetches room events itself.
 
 ## Code Structure
 
@@ -411,7 +413,7 @@ What the dashboard shows, and where the data comes from:
 |-----------|-------------|--------------------------|
 | `MemoriesCard` | `api/memories.go` | `user_memory`, written by the memory tool (`llmtools/memory.go`) |
 | `RemindersCard` | `api/reminders.go` | `reminders`, written by `!remind` and the reminder tool (`llmtools/reminder.go`) |
-| `RoomsCard`, `AdminRoomsCard` | `api/rooms.go`, `api/admin.go` | `room_members`, kept by the Matrix state store (`matrix/state_store.go`) |
+| `RoomsCard`, `AdminRoomsCard` | `api/rooms.go`, `api/admin.go` | `room_members`, kept by the Matrix state store (`matrix/state_store.go`) from sync, and rebuilt from the homeserver at startup |
 | `ChatUsageCard` | `api/chat_usage.go` | `chat_usage`, written at the end of every chat turn (`commands/chat/turn_stats.go`) |
 | `SystemStatusCard` | `api/healthcheck.go`, `api/metrics.go` | Process and connection pool stats |
 
@@ -488,4 +490,4 @@ The exception is the chat parameters (models, context window budget, response an
 
 Migrations in `db/migrations/` run automatically on startup, in filename order. Name new migrations with the next four-digit number, two underscores and a kebab-case description, like `0018__remove-grafana.sql`.
 
-A change to what `chat_history` stores empties the table (and `chat_context_anchors`, whose anchors point into it) instead of adding code that handles rows in the old format. The chat context is short-lived anyway, so every room simply starts over once. New columns can then be `NOT NULL`, or covered by CHECK constraints, so the code can rely on every row being complete. Data people save on purpose, like memories, is never dropped this way: give existing rows an explicit value in the migration instead.
+A change to what `chat_history` stores empties the table, along with `chat_references`, whose rows belong to its rows, and `chat_context_anchors`, whose anchors point into it, instead of adding code that handles rows in the old format. The chat context is short-lived anyway, so every room simply starts over once. New columns can then be `NOT NULL`, or covered by CHECK constraints, so the code can rely on every row being complete. Data people save on purpose, like memories, is never dropped this way: give existing rows an explicit value in the migration instead.

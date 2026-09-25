@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useRooms, useRoomMembers } from '../api/queries'
 import type { RoomResponse } from '../api/types'
 import { AnimatedList } from './ui/AnimatedList'
+import { RoomMemberLabel } from './RoomMemberLabel'
 import { useReducedMotion } from '../hooks/useReducedMotion'
 
 export function RoomsCard() {
@@ -136,12 +137,12 @@ function RoomItem({ room }: RoomItemProps) {
                   {members.map((member) => (
                     <motion.div
                       key={member.user_id}
-                      className="rounded border border-slate-700/30 bg-black/20 px-3 py-2 font-mono text-xs text-slate-300"
+                      className="rounded border border-slate-700/30 bg-black/20 px-3 py-2 text-xs text-slate-300"
                       initial={prefersReducedMotion ? {} : { opacity: 0, x: -10 }}
                       animate={{ opacity: 1, x: 0 }}
                       transition={{ type: 'spring', stiffness: 300, damping: 20 }}
                     >
-                      {member.user_id}
+                      <RoomMemberLabel member={member} />
                     </motion.div>
                   ))}
                 </div>

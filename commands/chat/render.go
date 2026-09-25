@@ -48,12 +48,13 @@ func localTime(t time.Time) string {
 }
 
 // renderUserTurn renders a user message as the model sees it: a header saying who wrote it and
-// when, the message it refers to if any, then the message itself.
+// when, the messages it refers to, then the message itself, with its own image if it is one.
 //
 // The same function renders the current turn and every replayed one, so a message looks the same
-// once it becomes history and the prompt prefix stays cacheable. The one difference is a reply to
-// an image, whose image is attached to the current turn only; imageAttached says whether it is.
-func renderUserTurn(turn db.UserTurn, imageAttached bool) string {
+// once it becomes history and the prompt prefix stays cacheable. The one difference is the images,
+// which are attached to the current turn only: attached says whose images are, by event ID, and is
+// nil for a replayed turn.
+func renderUserTurn(turn db.UserTurn, attached map[string]bool) string {
 	var b strings.Builder
 
 	b.WriteString("[" + person(turn.SenderName, turn.UserID) + " · " + localTime(turn.SentAt))
@@ -70,34 +71,64 @@ func renderUserTurn(turn db.UserTurn, imageAttached bool) string {
 	b.WriteString("]\n")
 
 	if turn.ReplyTo != nil {
-		b.WriteString(renderQuote(*turn.ReplyTo, imageAttached))
+		b.WriteString(renderQuote(*turn.ReplyTo, db.RelationReply, attached[turn.ReplyTo.EventID]))
+	}
+	for _, link := range turn.Links {
+		b.WriteString(renderQuote(link, db.RelationLink, attached[link.EventID]))
+	}
+
+	if turn.HasImage {
+		if attached[turn.EventID] {
+			b.WriteString("[with an image]\n")
+		} else {
+			b.WriteString("[with an image, not attached]\n")
+		}
 	}
 
 	b.WriteString(escapeHeaderLike(turn.Message))
 	return b.String()
 }
 
-// renderQuote renders the message a turn refers to, between the header and the turn's own text
-func renderQuote(quote db.QuotedMessage, imageAttached bool) string {
+// renderQuote renders a message a turn refers to, the one it replies to or one it links to,
+// between the header and the turn's own text
+func renderQuote(quote db.QuotedMessage, relation string, imageAttached bool) string {
 	from := person(quote.SenderName, quote.Sender)
 	when := localTime(quote.SentAt)
+	refersTo := "replying to"
+	if relation == db.RelationLink {
+		refersTo = "linking to"
+	}
 
 	switch quote.Kind {
 	case db.QuoteDeleted:
+		if relation == db.RelationLink {
+			return "[linking to a message that was deleted]\n"
+		}
 		return "[the replied-to message was deleted]\n"
 	case db.QuoteImage:
-		if imageAttached {
-			return "[replying to an image from " + from + " · " + when + "]\n"
+		line := "[" + refersTo + " an image from " + from + " · " + when
+		if !imageAttached {
+			line += ", not attached"
 		}
-		return "[replying to an image from " + from + " · " + when + ", not attached]\n"
+		return line + "]\n" + quoteLines(quote.Body)
 	}
 
-	if quote.Sender == config.UserID {
+	switch {
+	case quote.Sender == config.UserID:
 		from = "your message"
+	case relation == db.RelationLink:
+		from = "a message from " + from
+	}
+	return "[" + refersTo + " " + from + " · " + when + "]\n" + quoteLines(quote.Body)
+}
+
+// quoteLines renders quoted text, each line marked as a quote. An image without a caption has none.
+func quoteLines(text string) string {
+	if text == "" {
+		return ""
 	}
 	var b strings.Builder
-	b.WriteString("[replying to " + from + " · " + when + "]\n")
-	for _, line := range strings.Split(quote.Body, "\n") {
+	for _, line := range strings.Split(text, "\n") {
 		b.WriteString("> " + line + "\n")
 	}
 	return b.String()

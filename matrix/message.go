@@ -2,6 +2,7 @@ package matrix
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -24,9 +25,22 @@ type Message struct {
 	MsgType       string
 	Body          string
 	FormattedBody string
+	// RelatesTo is where the message sits: the message it replies to, and the thread it is in. Nil
+	// for a message that relates to no other, or whose content couldn't be read.
+	RelatesTo *event.RelatesTo
 
 	// content is the event content as sent, for the media details of an image
 	content map[string]any
+}
+
+// Caption returns the caption of an image: its body, when the message also names the file
+// separately. Without a separate file name, the body is the file's name.
+func (m *Message) Caption() string {
+	fileName, _ := m.content["filename"].(string)
+	if fileName == "" || m.Body == fileName {
+		return ""
+	}
+	return m.Body
 }
 
 // FetchMessage fetches a single event, decrypting it if necessary. It is one round trip however
@@ -64,6 +78,12 @@ func FetchMessage(ctx context.Context, roomID, eventID string) (*Message, error)
 	return messageFromEvent(roomID, evt), nil
 }
 
+// MessageFromEvent reads a message event as it arrived through sync, decrypted if it was encrypted,
+// such as an image whose caption addressed the bot
+func MessageFromEvent(evt *event.Event) *Message {
+	return messageFromEvent(evt.RoomID.String(), evt)
+}
+
 // messageFromEvent reads a fetched event. Anything but a readable message, such as another event
 // type or content that is still encrypted, yields only the envelope: who sent it, and when.
 func messageFromEvent(roomID string, evt *event.Event) *Message {
@@ -82,6 +102,7 @@ func messageFromEvent(roomID string, evt *event.Event) *Message {
 	msg.MsgType, _ = content["msgtype"].(string)
 	msg.Body, _ = content["body"].(string)
 	msg.FormattedBody, _ = content["formatted_body"].(string)
+	msg.RelatesTo = relationOf(content)
 
 	// A reply may open with a quote of the message it replies to. Whoever referred to this message
 	// did not refer to that one, so only this message's own words are kept.
@@ -91,6 +112,23 @@ func messageFromEvent(roomID string, evt *event.Event) *Message {
 	}
 
 	return msg
+}
+
+// relationOf reads the relation of event content, nil if it has none
+func relationOf(content map[string]any) *event.RelatesTo {
+	raw, ok := content["m.relates_to"]
+	if !ok {
+		return nil
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var rel event.RelatesTo
+	if err := json.Unmarshal(encoded, &rel); err != nil {
+		return nil
+	}
+	return &rel
 }
 
 // isReply reports whether event content carries a reply relation

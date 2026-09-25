@@ -1,6 +1,8 @@
 package bot
 
 import (
+	"context"
+	"slices"
 	"testing"
 
 	"maunium.net/go/mautrix/event"
@@ -146,6 +148,79 @@ func TestOwnText(t *testing.T) {
 			}
 			if gotFormatted != tt.wantFormatted {
 				t.Errorf("formatted = %q, want %q", gotFormatted, tt.wantFormatted)
+			}
+		})
+	}
+}
+
+const linkRoom = "!room:example.com"
+
+func TestLinkedEventIDs(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		formatted string
+		exclude   []string
+		want      []string
+	}{
+		{
+			name: "a link in the text",
+			body: "what about https://matrix.to/#/!room:example.com/$first?via=example.com",
+			want: []string{"$first"},
+		},
+		{
+			name: "punctuation after the link",
+			body: "see https://matrix.to/#/!room:example.com/$first. And (https://matrix.to/#/!room:example.com/$second)",
+			want: []string{"$first", "$second"},
+		},
+		{
+			name:      "a link in the formatted text only",
+			body:      "what about this?",
+			formatted: `what about <a href="https://matrix.to/#/!room:example.com/$first?via=a.example&amp;via=b.example">this</a>?`,
+			want:      []string{"$first"},
+		},
+		{
+			name:      "the same link in both",
+			body:      "https://matrix.to/#/!room:example.com/$first",
+			formatted: `<a href="https://matrix.to/#/!room:example.com/$first">https://matrix.to/#/!room:example.com/$first</a>`,
+			want:      []string{"$first"},
+		},
+		{
+			name: "a percent-encoded link",
+			body: "https://matrix.to/#/%21room%3Aexample.com/%24first",
+			want: []string{"$first"},
+		},
+		{
+			name: "a matrix: URI",
+			body: "matrix:roomid/room:example.com/e/first",
+			want: []string{"$first"},
+		},
+		{
+			name: "an event in another room",
+			body: "https://matrix.to/#/!other:example.com/$elsewhere",
+		},
+		{
+			name: "links that aren't to events",
+			body: "https://matrix.to/#/!room:example.com and https://matrix.to/#/@bob:example.com and https://example.com/$first",
+		},
+		{
+			name:    "the message it replies to",
+			body:    "https://matrix.to/#/!room:example.com/$replied https://matrix.to/#/!room:example.com/$first",
+			exclude: []string{"$replied"},
+			want:    []string{"$first"},
+		},
+		{
+			name: "more links than a turn gets",
+			body: "https://matrix.to/#/!room:example.com/$1 https://matrix.to/#/!room:example.com/$2 " +
+				"https://matrix.to/#/!room:example.com/$3 https://matrix.to/#/!room:example.com/$4",
+			want: []string{"$1", "$2", "$3"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := linkedEventIDs(context.Background(), linkRoom, tt.body, tt.formatted, tt.exclude...)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("linkedEventIDs() = %v, want %v", got, tt.want)
 			}
 		})
 	}

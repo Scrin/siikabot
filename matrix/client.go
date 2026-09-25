@@ -391,6 +391,9 @@ func Init(ctx context.Context, handleEvent func(ctx context.Context, evt *event.
 	syncer.OnEventType(event.StateRoomName, func(ctx context.Context, evt *event.Event) {
 		invalidateRoom(evt.RoomID.String())
 	})
+	syncer.OnEventType(event.StateHistoryVisibility, func(ctx context.Context, evt *event.Event) {
+		invalidateHistoryVisibility(evt.RoomID.String())
+	})
 	syncer.OnEventType(event.StateEncryption, func(ctx context.Context, evt *event.Event) {
 		stateStore.SetEncryptionEvent(ctx, evt)
 	})

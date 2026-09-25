@@ -187,6 +187,9 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 		attribute.Bool("siikabot.chat.is_dm", prompt.room.isDM()),
 		attribute.Int("siikabot.chat.member_count", len(prompt.room.Members)),
 		attribute.Bool("siikabot.chat.has_reply_context", prompt.userTurn.ReplyTo != nil),
+		attribute.Int("siikabot.chat.link_count", len(prompt.userTurn.Links)),
+		attribute.Bool("siikabot.chat.in_thread", trigger.ThreadRootID != ""),
+		attribute.Bool("siikabot.chat.thread_seeded", prompt.threadSeeded),
 		attribute.Int("siikabot.chat.unseen_before", trigger.UnseenBefore),
 	)
 	buildSpan.End()
@@ -431,6 +434,8 @@ type turnPrompt struct {
 	// userTurn is the trigger as it is stored, once the turn gets that far
 	userTurn db.UserTurn
 	room     roomInfo
+	// threadSeeded says the history begins with the turn the trigger's thread was started from
+	threadSeeded bool
 }
 
 // buildInitialMessages creates the initial messages array with system prompt, history, and user
@@ -446,21 +451,29 @@ func buildInitialMessages(ctx context.Context, trigger Trigger, cfg db.ChatConfi
 	// room, and everything that changes from turn to turn goes in the turn context after the history.
 	system := systemPrompt(room.nameOf(ctx, config.UserID), room)
 
-	// The trigger, as the model sees it now and as the history keeps it
-	quote, imageDataURL, notes := referencedMessage(ctx, trigger, room)
+	// The history of the timeline the trigger was sent in: the main timeline, or its thread, which
+	// begins with the turn it was started from if there is one
+	turn := db.Turn{RoomID: roomID, EventID: trigger.EventID, ThreadRootID: trigger.ThreadRootID}
+	seed := threadSeed(ctx, turn.Timeline(), sender)
+	history := buildContextWindow(ctx, turn.Timeline(), seed, cfg.ContextHighTokens, cfg.ContextLowTokens)
+
+	// The trigger, as the model sees it now and as the history keeps it. The first message of a
+	// thread started on a stored turn refers to the turn's question or answer, which the history
+	// already shows, so it isn't quoted again.
+	startsSeededThread := trigger.ReplyToEventID != "" && trigger.ReplyToEventID == trigger.ThreadRootID && windowHasTurn(history, seed)
+	refs := referencedMessages(ctx, trigger, room, !startsSeededThread)
 	userTurn := db.UserTurn{
-		Turn:         db.Turn{RoomID: roomID, EventID: trigger.EventID, ThreadRootID: trigger.ThreadRootID},
+		Turn:         turn,
 		UserID:       sender,
 		SenderName:   room.nameOf(ctx, sender),
 		SentAt:       trigger.Timestamp,
 		Message:      trigger.Body,
 		Mentions:     mentionsOf(ctx, trigger, room),
 		UnseenBefore: trigger.UnseenBefore,
-		ReplyTo:      quote,
+		HasImage:     trigger.Image != nil,
+		ReplyTo:      refs.replyTo,
+		Links:        refs.links,
 	}
-
-	// Get the conversation history making up the current context window
-	history := buildContextWindow(ctx, roomID, cfg.ContextHighTokens, cfg.ContextLowTokens)
 
 	// Build messages array with system prompt, history, and current message
 	messages := []aigateway.Message{{Role: "system", Content: system}}
@@ -476,11 +489,11 @@ func buildInitialMessages(ctx context.Context, trigger Trigger, cfg db.ChatConfi
 	currentStart := len(messages)
 
 	turnInfo := turnContext(time.Now(), person(userTurn.SenderName, sender),
-		memoriesFor(ctx, sender, room), relevantMembers(room, userTurn, history), notes)
+		memoriesFor(ctx, sender, room), relevantMembers(room, userTurn, history), refs.notes)
 	messages = append(messages, aigateway.Message{Role: "system", Content: turnInfo})
 
 	// Select the appropriate model based on whether we have an image
-	hasImage := imageDataURL != ""
+	hasImage := len(refs.images) > 0
 	model := cfg.TextModel
 	if hasImage {
 		model = cfg.ImageModel
@@ -495,36 +508,36 @@ func buildInitialMessages(ctx context.Context, trigger Trigger, cfg db.ChatConfi
 			Msg("Using text model for message without image")
 	}
 
-	// Add the current message, with the image it replies to attached if there is one
-	content := renderUserTurn(userTurn, hasImage)
+	// Add the current message, with the images it carries or refers to attached if there are any
+	content := renderUserTurn(userTurn, refs.attached)
 	if hasImage {
-		messages = append(messages, aigateway.Message{
-			Role: "user",
-			Content: []aigateway.ContentPart{
-				{Type: "text", Text: content},
-				{Type: "image_url", ImageURL: &aigateway.ImageURL{
-					URL:    imageDataURL,
-					Detail: requestImageDetail(cfg.ImageDetail),
-				}},
-			},
-		})
+		parts := []aigateway.ContentPart{{Type: "text", Text: content}}
+		for _, imageDataURL := range refs.images {
+			parts = append(parts, aigateway.ContentPart{Type: "image_url", ImageURL: &aigateway.ImageURL{
+				URL:    imageDataURL,
+				Detail: requestImageDetail(cfg.ImageDetail),
+			}})
+			metrics.RecordChatImageProcessed()
+		}
+		messages = append(messages, aigateway.Message{Role: "user", Content: parts})
 		log.Debug().Ctx(ctx).
 			Str("room_id", roomID).
 			Str("image_detail", cfg.ImageDetail).
-			Msg("Attaching image to chat request")
-		metrics.RecordChatImageProcessed()
+			Int("image_count", len(refs.images)).
+			Msg("Attaching images to chat request")
 	} else {
 		messages = append(messages, aigateway.Message{Role: "user", Content: content})
 	}
 	composition.current = estimateMessageTokens(messages[currentStart:])
 
 	return turnPrompt{
-		messages:    messages,
-		hasImage:    hasImage,
-		model:       model,
-		composition: composition,
-		userTurn:    userTurn,
-		room:        room,
+		messages:     messages,
+		hasImage:     hasImage,
+		model:        model,
+		composition:  composition,
+		userTurn:     userTurn,
+		room:         room,
+		threadSeeded: windowHasTurn(history, seed),
 	}
 }
 
@@ -655,174 +668,6 @@ func truncateForReplay(response, toolName string) string {
 
 	return response[:cut] + fmt.Sprintf("\n\n[truncated: the full %s result is not replayed in full, "+
 		"call the tool again if you need the rest]", toolName)
-}
-
-// unreadableReplyNote tells the model that the message replies to one it doesn't get to see
-const unreadableReplyNote = "Note: This message is a reply to another message, but I couldn't retrieve the content of that message."
-
-// referencedMessage works out what a turn gets of the message its trigger explicitly refers to: the
-// quote kept with the turn, an image attached to this turn only, and notes for the model when the
-// message can't be shown.
-//
-// Apart from messages addressed to the bot, this is the only room content that reaches the model.
-// The event was fetched when the message was routed, so nothing here goes back to the room for more.
-func referencedMessage(ctx context.Context, trigger Trigger, room roomInfo) (*db.QuotedMessage, string, []string) {
-	if trigger.ReplyToEventID == "" {
-		return nil, "", nil
-	}
-
-	log.Debug().Ctx(ctx).
-		Str("room_id", trigger.RoomID).
-		Str("reply_event_id", trigger.ReplyToEventID).
-		Msg("Message refers to another message")
-
-	repliedTo := trigger.ReplyTo
-	if repliedTo == nil {
-		// Already logged where the fetch failed
-		return nil, "", []string{unreadableReplyNote}
-	}
-
-	isImage := repliedTo.MsgType == "m.image"
-	if !isImage && repliedTo.Body == "" {
-		// Nothing readable: content that couldn't be decrypted, a deleted message, or an event
-		// that isn't a message at all
-		log.Debug().Ctx(ctx).
-			Str("room_id", trigger.RoomID).
-			Str("event_id", repliedTo.EventID).
-			Msg("Replied-to message has no readable content")
-		return nil, "", []string{unreadableReplyNote}
-	}
-
-	quote := &db.QuotedMessage{
-		EventID:    repliedTo.EventID,
-		Sender:     repliedTo.Sender,
-		SenderName: room.nameOf(ctx, repliedTo.Sender),
-		SentAt:     repliedTo.Timestamp,
-	}
-
-	if isImage {
-		quote.Kind = db.QuoteImage
-		imageDataURL, note := repliedImage(ctx, trigger.RoomID, repliedTo)
-		if note != "" {
-			return quote, "", []string{note}
-		}
-		return quote, imageDataURL, nil
-	}
-
-	log.Debug().Ctx(ctx).
-		Str("room_id", trigger.RoomID).
-		Str("event_id", repliedTo.EventID).
-		Str("content", repliedTo.Body).
-		Msg("Including replied-to message in conversation")
-
-	quote.Kind = db.QuoteText
-	quote.Body = capQuote(repliedTo.Body)
-	return quote, "", nil
-}
-
-// repliedImage downloads the image a message replies to, returning it as a data URL ready to
-// attach. When it can't be attached, the data URL is empty and there may be a note for the model.
-func repliedImage(ctx context.Context, roomID string, repliedTo *matrix.Message) (string, string) {
-	replyEventID := repliedTo.EventID
-
-	// Get the image URL, encryption info, and full content
-	imageURL, encryptionInfo, fullContent, err := matrix.MessageImageURL(ctx, repliedTo)
-	if err != nil {
-		log.Error().Ctx(ctx).Err(err).
-			Str("room_id", roomID).
-			Str("event_id", replyEventID).
-			Msg("Failed to get image URL from replied-to message")
-		return "", ""
-	}
-
-	// Download the image and convert to base64
-	base64ImageURL, err := matrix.DownloadImageAsBase64(ctx, imageURL, encryptionInfo, fullContent)
-	if err != nil {
-		log.Error().Ctx(ctx).Err(err).
-			Str("room_id", roomID).
-			Str("image_url", imageURL).
-			Bool("is_encrypted", encryptionInfo != nil).
-			Msg("Failed to download and convert image to base64")
-		return "", "Note: The user replied to an image, but I couldn't process it. Please make sure the image is accessible and try again."
-	}
-
-	log.Debug().Ctx(ctx).
-		Str("room_id", roomID).
-		Str("event_id", replyEventID).
-		Str("image_url", imageURL).
-		Bool("is_encrypted", encryptionInfo != nil).
-		Msg("Message is a reply to an image")
-
-	return usableImage(ctx, roomID, base64ImageURL)
-}
-
-// maxImageBytes is the largest image that is attached to a request
-const maxImageBytes = 5 * 1024 * 1024
-
-// usableImage checks that a downloaded image can be attached: a well-formed data URL of at most
-// maxImageBytes. Returns the data URL to attach, or an empty one with a note for the model.
-func usableImage(ctx context.Context, roomID, base64ImageURL string) (string, string) {
-	// Ensure the base64ImageURL is properly formatted
-	if !strings.HasPrefix(base64ImageURL, "data:image/") {
-		// Log a prefix of the URL for debugging, but be careful of index out of range
-		urlPrefix := base64ImageURL
-		if len(base64ImageURL) > 30 {
-			urlPrefix = base64ImageURL[:30] + "..."
-		}
-
-		log.Warn().Ctx(ctx).
-			Str("room_id", roomID).
-			Str("base64_url_prefix", urlPrefix).
-			Msg("Image URL is not properly formatted, attempting to fix")
-
-		// Try to extract the content type and base64 data
-		if strings.Contains(base64ImageURL, ";base64,") {
-			parts := strings.SplitN(base64ImageURL, ";base64,", 2)
-			if len(parts) == 2 {
-				contentType := parts[0]
-				if !strings.HasPrefix(contentType, "data:") {
-					contentType = "data:" + contentType
-				}
-				if !strings.HasPrefix(contentType, "data:image/") {
-					contentType = "data:image/png"
-				}
-				base64Data := parts[1]
-				base64ImageURL = contentType + ";base64," + base64Data
-
-				// Log a prefix of the fixed URL for debugging, but be careful of index out of range
-				fixedUrlPrefix := base64ImageURL
-				if len(base64ImageURL) > 30 {
-					fixedUrlPrefix = base64ImageURL[:30] + "..."
-				}
-
-				log.Debug().Ctx(ctx).
-					Str("room_id", roomID).
-					Str("fixed_url_prefix", fixedUrlPrefix).
-					Msg("Fixed image URL format")
-			}
-		}
-	}
-
-	parts := strings.SplitN(base64ImageURL, ";base64,", 2)
-	if len(parts) != 2 {
-		log.Error().Ctx(ctx).
-			Str("room_id", roomID).
-			Msg("Image URL does not contain valid base64 data, skipping image")
-		return "", ""
-	}
-
-	// Base64 encoding increases size by ~33%, so this approximates the decoded size
-	estimatedSize := len(parts[1]) * 3 / 4
-	if estimatedSize > maxImageBytes {
-		log.Warn().Ctx(ctx).
-			Str("room_id", roomID).
-			Int("estimated_size_bytes", estimatedSize).
-			Int("max_size_bytes", maxImageBytes).
-			Msg("Image is too large, skipping image attachment")
-		return "", "Note: An image was attached to this message, but it was too large to process (>5MB)."
-	}
-
-	return base64ImageURL, ""
 }
 
 // mentionsOf returns who the trigger mentions, besides the bot, with the names they have in the

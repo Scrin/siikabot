@@ -122,6 +122,16 @@ func TestRelevantMembersOfALargeRoom(t *testing.T) {
 	}
 }
 
+// Whoever wrote a message the latest one links to matters for it, like whoever it replies to
+func TestRelevantMembersIncludeLinkedAuthors(t *testing.T) {
+	turn := aliceTurn("what about this?")
+	turn.Links = []db.QuotedMessage{{EventID: "$m", Sender: "@member12:example.com", SenderName: "Member 12", Kind: db.QuoteText, Body: "hi"}}
+
+	if got := relevantMembers(bigRoom(), turn, nil); !strings.Contains(got, "Member 12 (@member12:example.com)") {
+		t.Errorf("the author of a linked message isn't listed:\n%s", got)
+	}
+}
+
 // The system prompt depends on nothing but the room, so it is the same whoever speaks
 func TestSystemPromptIsTheSameForEverySpeaker(t *testing.T) {
 	room := testRoom("Siika HQ", alice, bob, botSelf)
