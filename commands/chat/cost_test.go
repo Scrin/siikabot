@@ -1,11 +1,13 @@
 package chat
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
+	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/db"
 )
 
@@ -88,24 +90,36 @@ func TestReplayableToolResponseExpiryBeatsTruncation(t *testing.T) {
 	}
 }
 
-// TestPromptPrefixIsStableAcrossTurns is the B1 regression test. Providers cache the longest
-// unchanging prefix of a request, so every element that varies between requests has to sit after
-// every element that does not. The current time used to be in the system prompt's second sentence,
-// which changed the prefix on every request and made caching impossible.
+// TestPromptPrefixIsStableAcrossTurns is the B1 regression test, extended to several speakers.
+// Providers cache the longest unchanging prefix of a request, so every element that varies between
+// requests has to sit after every element that does not. The current time used to be in the system
+// prompt's second sentence, which changed the prefix on every request. The speaker's memories used
+// to be in the system prompt as well, so a change of speaker made the whole history miss the cache.
 func TestPromptPrefixIsStableAcrossTurns(t *testing.T) {
-	// Stand in for what buildInitialMessages assembles, at two different times
-	buildPrompt := func(now time.Time) []string {
-		return []string{
-			"system:You are Siikabot, a helpful Matrix bot. Keep your responses concise and helpful.",
-			"user:earlier question",
-			"assistant:earlier answer",
-			"system:The current date and time is " + now.Format("Monday, January 2, 2006 15:04:05 MST"),
-			"user:current question",
-		}
+	room := testRoom("Siika HQ", alice, bob, botSelf)
+	earlier := time.Date(2026, 8, 7, 11, 0, 0, 0, time.UTC)
+	history := []db.ChatMessage{
+		textMsg("user", "earlier question", earlier),
+		textMsg("assistant", "earlier answer", earlier.Add(time.Minute)),
 	}
 
-	first := buildPrompt(time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC))
-	second := buildPrompt(time.Date(2026, 8, 7, 12, 30, 0, 0, time.UTC))
+	// Assembled the way buildInitialMessages does it, for a given speaker at a given time
+	buildPrompt := func(now time.Time, author string, memories []db.UserMemory) []string {
+		messages := []aigateway.Message{{Role: "system", Content: systemPrompt("Siikabot", room)}}
+		processHistoryMessages(context.Background(), history, &messages)
+		messages = append(messages, aigateway.Message{Role: "system", Content: turnContext(now, author, memories, "", nil)})
+
+		prompt := make([]string, 0, len(messages)+1)
+		for _, msg := range messages {
+			content, _ := msg.Content.(string)
+			prompt = append(prompt, msg.Role+":"+content)
+		}
+		return append(prompt, "user:current question")
+	}
+
+	first := buildPrompt(time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC),
+		"Alice (@alice:example.com)", []db.UserMemory{{ID: 1, Memory: "likes tea"}})
+	second := buildPrompt(time.Date(2026, 8, 7, 12, 30, 0, 0, time.UTC), "Bob (@bob:example.com)", nil)
 
 	// Everything up to and including the history must match, so it can be served from cache
 	shared := 0
@@ -114,10 +128,13 @@ func TestPromptPrefixIsStableAcrossTurns(t *testing.T) {
 	}
 
 	if shared < 3 {
-		t.Errorf("only %d messages of prefix are stable, expected the system prompt and history to be", shared)
+		t.Errorf("only %d messages of prefix are stable across speakers, expected the system prompt and history to be", shared)
 	}
 	if strings.Contains(first[0], "current date and time") {
 		t.Error("the volatile timestamp is back in the system prompt, which breaks prefix caching")
+	}
+	if strings.Contains(first[0], "likes tea") {
+		t.Error("the speaker's memories are back in the system prompt, which breaks prefix caching when the speaker changes")
 	}
 }
 

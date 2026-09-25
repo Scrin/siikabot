@@ -21,7 +21,7 @@ var ReminderToolDefinition = aigateway.ToolDefinition{
 	Type: "function",
 	Function: aigateway.FunctionSchema{
 		Name:        "create_reminder",
-		Description: "Create a reminder that will trigger at a specified time or after a specified duration",
+		Description: "Create a reminder for the author of the latest message, which mentions them when it triggers at a specified time or after a specified duration. It can't remind anyone else.",
 		Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -119,7 +119,9 @@ func handleReminderToolCall(ctx context.Context, arguments string) (string, erro
 	// Get the timezone
 	loc, _ := time.LoadLocation(config.Timezone)
 
-	matrix.SendFormattedNotice(ctx, roomID, "[AI tool call] Reminding at "+reminderTime.In(loc).Format("15:04:05 on 2.1.2006")+" (in "+duration.String()+"): "+reminderText)
+	// Posted where the conversation is, in the thread if the turn is in one
+	target, _ := ctx.Value("reply_target").(matrix.Target)
+	matrix.SendFormattedNoticeTo(ctx, roomID, target, "[AI tool call] Reminding at "+reminderTime.In(loc).Format("15:04:05 on 2.1.2006")+" (in "+duration.String()+"): "+reminderText)
 
 	log.Info().
 		Str("room_id", roomID).

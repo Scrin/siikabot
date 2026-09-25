@@ -31,9 +31,18 @@ func estimateTokens(text string) int {
 func estimateHistoryTokens(history []db.ChatMessage) int {
 	total := 0
 	for _, msg := range history {
-		total += estimateTokens(msg.Message)
+		total += estimateTokens(replayText(msg))
 	}
 	return total
+}
+
+// replayText is the text a history row is replayed as, which is also what its share of the token
+// budget is measured on: a user message is replayed with its header
+func replayText(msg db.ChatMessage) string {
+	if msg.Role == "user" {
+		return renderUserTurn(msg.UserTurn(), false)
+	}
+	return msg.Message
 }
 
 // estimateMessageTokens approximates the prompt size of a built request. Image content parts are
@@ -169,7 +178,7 @@ func trimToLowMark(history []db.ChatMessage, low int) ([]db.ChatMessage, int64) 
 	tokens := 0
 	best := -1
 	for i := len(history) - 1; i >= 0; i-- {
-		tokens += estimateTokens(history[i].Message)
+		tokens += estimateTokens(replayText(history[i]))
 		if tokens > low {
 			break
 		}
@@ -197,10 +206,7 @@ func trimToLowMark(history []db.ChatMessage, low int) ([]db.ChatMessage, int64) 
 
 // isTurnBoundary reports whether a history row starts a conversation turn
 func isTurnBoundary(msg db.ChatMessage) bool {
-	if msg.Role != "user" {
-		return false
-	}
-	return msg.MessageType == "text" || msg.MessageType == ""
+	return msg.Role == "user" && msg.MessageType == "text"
 }
 
 // recordTokenEstimateDrift compares the estimated prompt size against the count the API reported,

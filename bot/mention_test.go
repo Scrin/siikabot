@@ -233,4 +233,20 @@ func TestMentionedUserIDs(t *testing.T) {
 	if got := mentionedUserIDs(map[string]any{"body": "hello"}); got != nil {
 		t.Errorf("mentionedUserIDs() without m.mentions = %v, want nil", got)
 	}
+
+	// m.mentions that names nobody says the message mentions nobody, which is not the same as a
+	// client that doesn't send m.mentions at all
+	if got := mentionedUserIDs(map[string]any{"m.mentions": map[string]any{}}); got == nil || len(got) != 0 {
+		t.Errorf("mentionedUserIDs() with an empty m.mentions = %#v, want an empty list", got)
+	}
+}
+
+// The bot can have a display name of its own in a room, and a message may address it by either
+func TestStripBotNamePrefixAcceptsEveryBotName(t *testing.T) {
+	for _, msg := range []string{"SiikaBot hello", "Siika: hello"} {
+		got, ok := stripBotNamePrefix(msg, "", testBotUserID, testBotDisplayName, "Siika")
+		if !ok || got != "hello" {
+			t.Errorf("stripBotNamePrefix(%q) = %q, %v, want \"hello\", true", msg, got, ok)
+		}
+	}
 }

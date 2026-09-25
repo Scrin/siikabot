@@ -21,6 +21,7 @@ import (
 	"github.com/Scrin/siikabot/logging"
 	"github.com/Scrin/siikabot/matrix"
 	"github.com/Scrin/siikabot/metrics"
+	"github.com/Scrin/siikabot/tracing"
 	"github.com/rs/zerolog/log"
 	"go.opentelemetry.io/otel/trace"
 	"maunium.net/go/mautrix/event"
@@ -41,24 +42,25 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 		msgtype = m
 	}
 
-	if msgtype == "m.text" && evt.Sender.String() != config.UserID {
+	attrs := messageAttrs(evt.RoomID.String(), evt.Sender.String(), evt.ID.String())
+
+	// Everything from here to the dispatch below is real work — a reply lookup against the
+	// homeserver, mention detection, counting the message — and until this span existed it all
+	// happened before any span was open. That had two costs: its latency was invisible, because
+	// the handler span only starts once the routing decision is already made, and every call it
+	// made produced a parentless span of its own. Those orphans were the bulk of the junk traces
+	// in Tempo.
+	//
+	// The handler spans started below are children of this one and outlive it, since they run
+	// asynchronously. That is legal and reads correctly: this span is the routing, not the work.
+	ctx, routeSpan := tracer.Start(ctx, "message.route",
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(attrs...))
+	defer routeSpan.End()
+
+	routedToChat := false
+	if msgtype == "m.text" {
 		msg := evt.Content.Raw["body"].(string)
-
-		attrs := messageAttrs(evt.RoomID.String(), evt.Sender.String(), evt.ID.String())
-
-		// Everything from here to the dispatch below is real work — a reply lookup against the
-		// homeserver, mention detection — and until this span existed it all happened before any
-		// span was open. That had two costs: its latency was invisible, because
-		// the handler span only starts once the routing decision is already made, and every call it
-		// made produced a parentless span of its own. Those orphans were the bulk of the junk traces
-		// in Tempo.
-		//
-		// The handler spans started below are children of this one and outlive it, since they run
-		// asynchronously. That is legal and reads correctly: this span is the routing, not the work.
-		ctx, routeSpan := tracer.Start(ctx, "message.route",
-			trace.WithSpanKind(trace.SpanKindConsumer),
-			trace.WithAttributes(attrs...))
-		defer routeSpan.End()
 
 		// Track message stats asynchronously
 		traced(ctx, "stats.message", attrs, func(ctx context.Context) {
@@ -127,8 +129,7 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 			// Check if the message addresses the bot: an explicit mention of the bot in
 			// m.mentions, or a message that opens by naming the bot
 			isMentioned := mentionsBotExplicitly(evt.Content.Raw, config.UserID)
-			botDisplayName := matrix.GetDisplayName(ctx, config.UserID)
-			prefixedMsg, isPrefixed := stripBotNamePrefix(msg, formattedBody, config.UserID, botDisplayName)
+			prefixedMsg, isPrefixed := stripBotNamePrefix(msg, formattedBody, config.UserID, botNames(ctx, evt.RoomID.String())...)
 
 			if isMentioned || isPrefixed || isReplyToBot {
 				body, formatted := ownText(msg, formattedBody, rel)
@@ -157,9 +158,17 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 					ReplyToEventID: replyToID.String(),
 					ReplyTo:        replyTo,
 				}
+
+				// How many messages the bot didn't see since the previous one addressed to it. Taken
+				// here, as messages arrive and in their order, so the count covers exactly the gap
+				// before this one; a turn waiting for the room would otherwise count what came after.
+				// A failure is already logged, and the count is only ever a hint, so it is left at 0.
+				trigger.UnseenBefore, _ = db.TakeUnseenMessages(ctx, evt.RoomID.String())
+
 				traced(ctx, "chat.mention", attrs, func(ctx context.Context) {
 					chat.HandleMention(ctx, trigger)
 				})
+				routedToChat = true
 				isCommand = true
 				cmd = constants.CommandMention
 				if isReplyToBot {
@@ -177,6 +186,48 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 			metrics.RecordCommandHandled(cmd)
 		}
 	}
+
+	// Every other message from someone else is one the chat model never sees, and only how many
+	// there were is kept. An edit changes a message that was already counted.
+	if !routedToChat && evt.Content.AsMessage().RelatesTo.GetReplaceID() == "" {
+		if err := db.CountUnseenMessage(ctx, evt.RoomID.String()); err != nil {
+			// Already logged. The count is only ever a hint.
+			_ = err
+		}
+	}
+}
+
+// botNames returns the names a message can address the bot by: its global display name, and its
+// display name in the room when it has a different one there
+func botNames(ctx context.Context, roomID string) []string {
+	names := []string{matrix.GetDisplayName(ctx, config.UserID)}
+	if room, err := matrix.GetRoom(ctx, roomID); err == nil {
+		if member, ok := room.Member(config.UserID); ok && member.DisplayName != "" {
+			names = append(names, member.DisplayName)
+		}
+	}
+	return names
+}
+
+// handleRedactionEvent removes a redacted message from the chat history. The redacted event is in
+// the content from room version 11 on, and at the top level of the event before that.
+//
+// Handled right here in the sync loop rather than in a goroutine: a chat turn for the redacted
+// message may already be running, and it stops the moment the redaction is recorded. Redactions are
+// rare enough that the wait costs nothing.
+func handleRedactionEvent(ctx context.Context, evt *event.Event) {
+	redacts := evt.Redacts
+	if redacts == "" {
+		redacts = evt.Content.AsRedaction().Redacts
+	}
+	if redacts == "" {
+		return
+	}
+
+	attrs := messageAttrs(evt.RoomID.String(), evt.Sender.String(), evt.ID.String())
+	tracing.Run(ctx, tracer, "chat.forget", func(ctx context.Context) {
+		chat.ForgetEvent(ctx, evt.RoomID.String(), redacts.String())
+	}, trace.WithSpanKind(trace.SpanKindConsumer), trace.WithAttributes(attrs...))
 }
 
 func handleMemberEvent(ctx context.Context, evt *event.Event) {
@@ -195,6 +246,8 @@ func handleEvent(ctx context.Context, evt *event.Event, wasEncrypted bool) {
 		handleTextEvent(ctx, evt)
 	case event.StateMember:
 		handleMemberEvent(ctx, evt)
+	case event.EventRedaction:
+		handleRedactionEvent(ctx, evt)
 	}
 	subtype := ""
 	if m, ok := evt.Content.Raw["msgtype"].(string); ok {

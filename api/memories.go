@@ -6,15 +6,21 @@ import (
 	"time"
 
 	"github.com/Scrin/siikabot/db"
+	"github.com/Scrin/siikabot/matrix"
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
 )
 
 // MemoryResponse represents a single memory in the API response
 type MemoryResponse struct {
-	ID        int64  `json:"id"`
-	Memory    string `json:"memory"`
-	CreatedAt string `json:"created_at"`
+	ID     int64  `json:"id"`
+	Memory string `json:"memory"`
+	// RoomID is the group room the memory was saved in, which is where it is used along with
+	// direct chats. It is null for a memory saved in a direct chat, which is used in direct chats
+	// only.
+	RoomID    *string `json:"room_id"`
+	RoomName  string  `json:"room_name,omitempty"`
+	CreatedAt string  `json:"created_at"`
 }
 
 // MemoriesResponse is the response for the memories endpoint
@@ -47,17 +53,38 @@ func MemoriesHandler(c *gin.Context) {
 	}
 
 	response := MemoriesResponse{
-		Memories: make([]MemoryResponse, len(memories)),
-	}
-	for i, mem := range memories {
-		response.Memories[i] = MemoryResponse{
-			ID:        mem.ID,
-			Memory:    mem.Memory,
-			CreatedAt: mem.CreatedAt.UTC().Format(time.RFC3339),
-		}
+		Memories: memoryResponses(memories, func(roomID string) string {
+			return matrix.GetRoomName(ctx, roomID)
+		}),
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+// memoryResponses turns memories into their API form, with the name of the room each one is
+// scoped to. A user's memories tend to come from a handful of rooms, so each room's name is looked
+// up once.
+func memoryResponses(memories []db.UserMemory, roomName func(roomID string) string) []MemoryResponse {
+	names := make(map[string]string)
+	responses := make([]MemoryResponse, len(memories))
+	for i, mem := range memories {
+		responses[i] = MemoryResponse{
+			ID:        mem.ID,
+			Memory:    mem.Memory,
+			RoomID:    mem.RoomID,
+			CreatedAt: mem.CreatedAt.UTC().Format(time.RFC3339),
+		}
+		if mem.RoomID == nil {
+			continue
+		}
+		name, ok := names[*mem.RoomID]
+		if !ok {
+			name = roomName(*mem.RoomID)
+			names[*mem.RoomID] = name
+		}
+		responses[i].RoomName = name
+	}
+	return responses
 }
 
 // DeleteMemoryHandler deletes a specific memory

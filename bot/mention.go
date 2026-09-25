@@ -21,16 +21,15 @@ func mentionsBotExplicitly(rawContent map[string]any, botUserID string) bool {
 	return slices.Contains(mentionedUserIDs(rawContent), botUserID)
 }
 
-// mentionedUserIDs returns the users listed in the m.mentions field of the event content
+// mentionedUserIDs returns the users listed in the m.mentions field of the event content. A message
+// with m.mentions that names nobody returns an empty list, and one without m.mentions at all, as
+// sent by clients that predate it, returns nil.
 func mentionedUserIDs(rawContent map[string]any) []string {
 	mentions, ok := rawContent["m.mentions"].(map[string]any)
 	if !ok {
 		return nil
 	}
-	userIDs, ok := mentions["user_ids"].([]any)
-	if !ok {
-		return nil
-	}
+	userIDs, _ := mentions["user_ids"].([]any)
 	ids := make([]string, 0, len(userIDs))
 	for _, userID := range userIDs {
 		if id, ok := userID.(string); ok {
@@ -40,18 +39,20 @@ func mentionedUserIDs(rawContent map[string]any) []string {
 	return ids
 }
 
-// stripBotNamePrefix reports whether the message opens by addressing the bot — by display name, by
-// full user ID, or with a pill in the formatted body — and returns the message with that address
-// removed. The bare localpart of the user ID is not accepted, since it is often something generic
-// enough ("bot") to match messages that were never meant for us.
-func stripBotNamePrefix(plainMsg, formattedMsg, botUserID, botDisplayName string) (string, bool) {
+// stripBotNamePrefix reports whether the message opens by addressing the bot — by one of its display
+// names, by full user ID, or with a pill in the formatted body — and returns the message with that
+// address removed. The bare localpart of the user ID is not accepted, since it is often something
+// generic enough ("bot") to match messages that were never meant for us.
+func stripBotNamePrefix(plainMsg, formattedMsg, botUserID string, botDisplayNames ...string) (string, bool) {
 	// A replying client may prepend a quote of the message it replies to. Left in, a reply that
 	// opens by naming the bot would look like it opens with the quote, and the check would miss it.
 	body := strings.TrimSpace(matrix.StripReplyFallback(plainMsg))
 
 	names := []string{botUserID}
-	if botDisplayName != "" && !strings.EqualFold(botDisplayName, botUserID) {
-		names = append(names, botDisplayName)
+	for _, displayName := range botDisplayNames {
+		if displayName != "" && !strings.EqualFold(displayName, botUserID) {
+			names = append(names, displayName)
+		}
 	}
 	for _, name := range names {
 		if rest, ok := matchNamePrefix(body, name); ok {

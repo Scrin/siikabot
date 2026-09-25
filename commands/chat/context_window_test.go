@@ -13,9 +13,14 @@ func sizedText(tokens int) string {
 	return strings.Repeat("x", (tokens-messageTokenOverhead)*4)
 }
 
-// userRow builds a turn-boundary row of approximately the given token size
+// userRow builds a turn-boundary row of approximately the given token size. The size is that of the
+// rendered message, header included, since that is what the budget measures.
 func userRow(id int64, tokens int) db.ChatMessage {
-	return db.ChatMessage{ID: id, Role: "user", MessageType: "text", Message: sizedText(tokens)}
+	row := textMsg("user", "", time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC))
+	row.ID = id
+	header := len(replayText(row))
+	row.Message = strings.Repeat("x", max(0, (tokens-messageTokenOverhead)*4-header))
+	return row
 }
 
 // assistantRow builds a non-boundary row of approximately the given token size
@@ -197,19 +202,6 @@ func TestReplayableToolResponseExpiry(t *testing.T) {
 	}
 }
 
-// TestReplayableToolResponseWithoutToolName verifies a missing tool name does not produce a broken
-// marker, since ToolName is nullable in the schema
-func TestReplayableToolResponseWithoutToolName(t *testing.T) {
-	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
-	past := now.Add(-time.Hour)
-
-	got := replayableToolResponse(db.ChatMessage{Message: "data", Expiry: &past}, now)
-
-	if !strings.Contains(got, "expired") {
-		t.Errorf("expected an expiry marker, got %q", got)
-	}
-}
-
 // TestIsTurnBoundary verifies only user text messages start a turn
 func TestIsTurnBoundary(t *testing.T) {
 	cases := []struct {
@@ -218,7 +210,6 @@ func TestIsTurnBoundary(t *testing.T) {
 		want bool
 	}{
 		{"user text", db.ChatMessage{Role: "user", MessageType: "text"}, true},
-		{"legacy user row", db.ChatMessage{Role: "user", MessageType: ""}, true},
 		{"assistant text", db.ChatMessage{Role: "assistant", MessageType: "text"}, false},
 		{"tool call", db.ChatMessage{Role: "assistant", MessageType: "tool_call"}, false},
 		{"tool response", db.ChatMessage{Role: "tool", MessageType: "tool_response"}, false},

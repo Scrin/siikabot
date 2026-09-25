@@ -56,6 +56,7 @@ In general, each command or webhook is considered a **self-contained feature** a
 - The replied-to message is a real `m.in_reply_to`, or the thread root for the first message of a thread. A thread fallback never counts, and any nested reply fallback is stripped.
 - Nothing else from a room may be passed to the model, persisted in `chat_history` or exposed through an LLM tool, and no tool may read room events.
 - Metadata that is not message content (member list, room name, message counts) is allowed.
+- Redacted messages must leave the chat history.
 
 The referenced event is resolved once, in `bot/reply.go`, and handed to the chat turn in `chat.Trigger`. The chat package never fetches room events itself.
 
@@ -392,6 +393,30 @@ Use the `matrix` package for all Matrix operations:
 
 ## Development Workflow
 
+### Keeping the Web Frontend in Step
+
+The web dashboard shows much of what the bot stores and does, so a bot change is not finished until the dashboard matches it. **Whenever a change affects data the dashboard shows, check the web side and update it in the same change.** That covers the rules behind the data as well as its fields: what gets stored, how it is scoped, what counts as a failure, and who can see or delete what. For example, when memories were scoped to rooms, the dashboard went on listing them as if every memory applied everywhere.
+
+This applies to plans as much as to code. A plan for a bot change says what changes on the web side, even when the answer is nothing.
+
+For each part of the dashboard a change touches, update:
+1. The API response in `api/`
+2. The types in `web_frontend/src/api/types.ts`
+3. The component, including its wording
+4. The tests on both sides
+
+What the dashboard shows, and where the data comes from:
+
+| Component | API handler | Data, and what writes it |
+|-----------|-------------|--------------------------|
+| `MemoriesCard` | `api/memories.go` | `user_memory`, written by the memory tool (`llmtools/memory.go`) |
+| `RemindersCard` | `api/reminders.go` | `reminders`, written by `!remind` and the reminder tool (`llmtools/reminder.go`) |
+| `RoomsCard`, `AdminRoomsCard` | `api/rooms.go`, `api/admin.go` | `room_members`, kept by the Matrix state store (`matrix/state_store.go`) |
+| `ChatUsageCard` | `api/chat_usage.go` | `chat_usage`, written at the end of every chat turn (`commands/chat/turn_stats.go`) |
+| `SystemStatusCard` | `api/healthcheck.go`, `api/metrics.go` | Process and connection pool stats |
+
+When a dashboard component or API endpoint is added, add it to this table.
+
 ### Testing
 
 **CRITICAL: Always run tests after making code changes**
@@ -462,3 +487,5 @@ The exception is the chat parameters (models, context window budget, response an
 ### Database Migrations
 
 Migrations in `db/migrations/` run automatically on startup, in filename order. Name new migrations with the next four-digit number, two underscores and a kebab-case description, like `0018__remove-grafana.sql`.
+
+A change to what `chat_history` stores empties the table (and `chat_context_anchors`, whose anchors point into it) instead of adding code that handles rows in the old format. The chat context is short-lived anyway, so every room simply starts over once. New columns can then be `NOT NULL`, or covered by CHECK constraints, so the code can rely on every row being complete. Data people save on purpose, like memories, is never dropped this way: give existing rows an explicit value in the migration instead.

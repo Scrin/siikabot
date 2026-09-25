@@ -81,7 +81,7 @@ export function MemoriesCard() {
               animate={{ opacity: 1, x: 0 }}
               exit={prefersReducedMotion ? {} : { opacity: 0, x: 10 }}
             >
-              <span className="text-xs text-slate-400">Clear all?</span>
+              <span className="text-xs text-slate-400">Clear all, in every room?</span>
               <motion.button
                 className="border border-rose-500/50 bg-rose-500/20 px-3 py-1 font-mono text-xs text-rose-300 transition-all hover:bg-rose-500/30 disabled:cursor-not-allowed disabled:opacity-50"
                 onClick={handleClearAll}
@@ -123,6 +123,11 @@ export function MemoriesCard() {
         </p>
       )}
 
+      <p className="text-xs text-slate-500">
+        A memory saved in a group room is used in that room and in direct chats. One saved in a
+        direct chat is only used in direct chats.
+      </p>
+
       {/* Memories list */}
       <AnimatedList
         items={memories}
@@ -136,6 +141,35 @@ export function MemoriesCard() {
 
 interface MemoryItemProps {
   memory: MemoryResponse
+}
+
+/**
+ * Where a memory is used: a memory saved in a group room is used there and in direct chats, one
+ * saved in a direct chat only in direct chats
+ */
+function MemoryScope({ memory }: MemoryItemProps) {
+  if (memory.room_id === null) {
+    return (
+      <div className="text-xs text-slate-500">
+        Used in: <span className="text-slate-400">direct chats only</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="text-xs text-slate-500">
+      Used in:{' '}
+      {memory.room_name ? (
+        <span className="text-slate-400">
+          {memory.room_name}{' '}
+          <span className="font-mono text-slate-500">({memory.room_id})</span>
+        </span>
+      ) : (
+        <span className="font-mono text-slate-400">{memory.room_id}</span>
+      )}
+      <span className="text-slate-400"> and direct chats</span>
+    </div>
+  )
 }
 
 function MemoryItem({ memory }: MemoryItemProps) {
@@ -161,6 +195,8 @@ function MemoryItem({ memory }: MemoryItemProps) {
     >
       <div className="space-y-2">
         <p className="whitespace-pre-wrap text-sm text-slate-200">{memory.memory}</p>
+
+        <MemoryScope memory={memory} />
 
         <div className="flex flex-wrap items-center justify-between gap-3">
           <span className="font-mono text-xs text-purple-400">{formattedDate}</span>

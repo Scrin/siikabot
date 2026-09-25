@@ -22,10 +22,14 @@ type Trigger struct {
 	Body string
 	// FormattedBody is the HTML body as sent, without a reply's quote
 	FormattedBody string
-	// Mentions are the users listed in the message's m.mentions
+	// Mentions are the users listed in the message's m.mentions. Nil means the message has no
+	// m.mentions at all, as from an older client, which leaves its pills as the only record.
 	Mentions []string
 	// ThreadRootID is the root of the thread the message was sent in, empty in the main timeline
 	ThreadRootID string
+	// UnseenBefore is how many room messages the bot did not see between the previous message
+	// addressed to it and this one
+	UnseenBefore int
 
 	// ReplyToEventID is the event the message explicitly refers to: the message it replies to, or
 	// the root of the thread it starts. Empty if it refers to none.

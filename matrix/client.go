@@ -41,14 +41,17 @@ type outboundEvent struct {
 	Content        any
 	RetryOnFailure bool
 	done           chan<- string
+	// cancelled, when set, is asked just before sending. If it reports true the event is dropped.
+	cancelled func() bool
 }
 
 type simpleMessage struct {
-	MsgType       string         `json:"msgtype"`
-	Body          string         `json:"body"`
-	Format        string         `json:"format,omitempty"`
-	FormattedBody string         `json:"formatted_body,omitempty"`
-	DebugData     map[string]any `json:"fi.2kgwf.debug,omitempty"`
+	MsgType       string           `json:"msgtype"`
+	Body          string           `json:"body"`
+	Format        string           `json:"format,omitempty"`
+	FormattedBody string           `json:"formatted_body,omitempty"`
+	RelatesTo     *event.RelatesTo `json:"m.relates_to,omitempty"`
+	DebugData     map[string]any   `json:"fi.2kgwf.debug,omitempty"`
 }
 
 type httpError struct {
@@ -173,6 +176,16 @@ func sendOutboundEvent(ctx context.Context, evt outboundEvent) {
 			attribute.String("matrix.event_type", evt.EventType),
 		))
 	defer span.End()
+
+	// Decided now rather than when the event was queued, since the queue can hold it for a while
+	if evt.cancelled != nil && evt.cancelled() {
+		log.Debug().Ctx(ctx).Str("room_id", evt.RoomID).Str("event_type", evt.EventType).Msg("Dropping an outbound event that is no longer wanted")
+		span.SetAttributes(attribute.Bool("siikabot.matrix.dropped", true))
+		if evt.done != nil {
+			evt.done <- ""
+		}
+		return
+	}
 
 	startTime := time.Now()
 	metrics.SetMatrixOutboundQueueDepth(len(outboundEvents))
@@ -347,6 +360,10 @@ func Init(ctx context.Context, handleEvent func(ctx context.Context, evt *event.
 	syncer.OnEventType(event.StateMember, func(ctx context.Context, evt *event.Event) {
 		olmMachine.HandleMemberEvent(ctx, evt)
 		stateStore.SetMembership(ctx, evt)
+		invalidateRoom(evt.RoomID.String())
+	})
+	syncer.OnEventType(event.StateRoomName, func(ctx context.Context, evt *event.Event) {
+		invalidateRoom(evt.RoomID.String())
 	})
 	syncer.OnEventType(event.StateEncryption, func(ctx context.Context, evt *event.Event) {
 		stateStore.SetEncryptionEvent(ctx, evt)

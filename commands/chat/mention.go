@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -111,6 +112,15 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 	unlockRoom := lockRoom(roomID)
 	defer unlockRoom()
 
+	// A trigger deleted while it waited for the room gets no turn at all
+	if isRedacted(trigger.EventID) {
+		log.Debug().Ctx(ctx).
+			Str("room_id", roomID).
+			Str("event_id", trigger.EventID).
+			Msg("Skipping a chat turn whose trigger was redacted")
+		return
+	}
+
 	// Bound the whole turn, so a stuck model or a long tool loop fails in a knowable time instead
 	// of grinding on invisibly. Applied after the lock so queueing does not eat into the budget.
 	ctx, cancelTurn := context.WithTimeout(ctx, turnTimeout)
@@ -130,6 +140,10 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 		Str("sender", sender).
 		Str("chat_msg", msg).
 		Msg("Processing chat command")
+
+	// The turn the history rows belong to, and where its answer and any failure message go
+	turn := db.Turn{RoomID: roomID, EventID: trigger.EventID, ThreadRootID: trigger.ThreadRootID}
+	target := answerTarget(trigger)
 
 	// Variable to track tool iterations
 	iterationCount := 0
@@ -151,18 +165,23 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 		stats.finish(ctx, roomID, sender, "", false, time.Since(startTime))
 		metrics.RecordChatRequestDuration("", false, time.Since(startTime).Seconds())
 		stats.recordOnSpan(turnSpan)
-		matrix.SendMessageWithDebugData(ctx, roomID, "Failed to process chat request",
+		matrix.SendMessageTo(ctx, roomID, target, "Failed to process chat request",
 			failureDebugData(ctx, "", stats.outcome))
 		return
 	}
 
-	// Build the initial messages with system prompt, history, and handle image if present
+	// Build the prompt: system prompt, history, and the current message with what it refers to
 	buildCtx, buildSpan := tracer.Start(ctx, "chat.build_context")
-	messages, hasImage, model, composition := buildInitialMessages(buildCtx, trigger, cfg)
+	prompt := buildInitialMessages(buildCtx, trigger, cfg)
+	messages, hasImage, model, composition := prompt.messages, prompt.hasImage, prompt.model, prompt.composition
 	buildSpan.SetAttributes(
 		attribute.Int("siikabot.chat.message_count", len(messages)),
 		attribute.Int("siikabot.chat.history_tokens", composition.history),
 		attribute.Bool("siikabot.chat.has_image", hasImage),
+		attribute.Bool("siikabot.chat.is_dm", prompt.room.isDM()),
+		attribute.Int("siikabot.chat.member_count", len(prompt.room.Members)),
+		attribute.Bool("siikabot.chat.has_reply_context", prompt.userTurn.ReplyTo != nil),
+		attribute.Int("siikabot.chat.unseen_before", trigger.UnseenBefore),
 	)
 	buildSpan.End()
 
@@ -228,7 +247,7 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 			stats.finish(ctx, roomID, sender, model, hasImage, time.Since(startTime))
 			metrics.RecordChatRequestDuration(model, hasImage, time.Since(startTime).Seconds())
 			stats.recordOnSpan(turnSpan)
-			matrix.SendMessageWithDebugData(ctx, roomID,
+			matrix.SendMessageTo(ctx, roomID, target,
 				"That took too long to answer, so I gave up. Try again, or ask something narrower.",
 				failureDebugData(ctx, model, stats.outcome))
 			return
@@ -237,7 +256,7 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 		stats.finish(ctx, roomID, sender, model, hasImage, time.Since(startTime))
 		metrics.RecordChatRequestDuration(model, hasImage, time.Since(startTime).Seconds())
 		stats.recordOnSpan(turnSpan)
-		matrix.SendMessageWithDebugData(ctx, roomID, "Failed to process chat request",
+		matrix.SendMessageTo(ctx, roomID, target, "Failed to process chat request",
 			failureDebugData(ctx, model, stats.outcome))
 		return
 	}
@@ -253,7 +272,7 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 		stats.finish(ctx, roomID, sender, model, hasImage, time.Since(startTime))
 		metrics.RecordChatRequestDuration(model, hasImage, time.Since(startTime).Seconds())
 		stats.recordOnSpan(turnSpan)
-		matrix.SendMessageWithDebugData(ctx, roomID, "No response from chat API",
+		matrix.SendMessageTo(ctx, roomID, target, "No response from chat API",
 			failureDebugData(ctx, model, stats.outcome))
 		return
 	}
@@ -265,10 +284,9 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 	}
 
 	// Save the user message to history
-	if err := db.SaveChatMessage(ctx, roomID, sender, msg, "user"); err != nil {
-		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Msg("Failed to save user message to history")
-		// Continue even if saving fails
-	}
+	persist(ctx, turn, "user_turn", func(ctx context.Context) error {
+		return db.SaveUserTurn(ctx, prompt.userTurn)
+	})
 
 	// Get the assistant's response
 	assistantResponse := extractAssistantResponse(ctx, roomID, sender, model, hasImage, chatResp)
@@ -285,80 +303,142 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 
 		// Process tool calls iteratively
 		iterationCount, messages, assistantResponse = processToolCalls(
-			ctx, roomID, sender, model, hasImage, cfg,
+			ctx, toolContext(ctx, trigger, prompt.room, target), turn, sender, model, hasImage, cfg,
 			chatResp, messages, tools, stats,
 		)
 	}
 	stats.iterations = iterationCount
 
-	// Save the assistant response to history, on a context that outlives a cancelled turn
-	persistCtx, cancelPersist := persistContext(ctx)
-	defer cancelPersist()
-	if err := db.SaveChatMessage(persistCtx, roomID, config.UserID, assistantResponse, "assistant"); err != nil {
-		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Msg("Failed to save assistant message to history")
-		// Continue even if saving fails
-	}
+	// What is posted, and stored, is the answer without a header the model may have copied
+	assistantResponse = stripImitatedHeader(assistantResponse)
 
-	stats.finish(ctx, roomID, sender, model, hasImage, time.Since(startTime))
-	stats.recordOnSpan(turnSpan)
-
-	metrics.RecordChatRequestDuration(model, hasImage, time.Since(startTime).Seconds())
+	// The turn's own work ends here. Waiting for the answer to be delivered is not part of it, so
+	// the duration is taken now, although the turn is only recorded once the delivery is known.
+	turnDuration := time.Since(startTime)
+	metrics.RecordChatRequestDuration(model, hasImage, turnDuration.Seconds())
 	metrics.RecordChatToolIterations(iterationCount)
 
 	// Create debug data with model info and tool calls
 	debugData := buildDebugData(ctx, model, messages, iterationCount)
 
-	matrix.SendMarkdownFormattedNoticeWithDebugData(ctx, roomID, assistantResponse, debugData)
+	// A trigger redacted while the turn was running gets no answer, and what the turn stored goes
+	// with it. The turn itself did its work, so it is recorded as it went.
+	if forgotten(ctx, turn) {
+		log.Debug().Ctx(ctx).
+			Str("room_id", roomID).
+			Str("turn_event_id", turn.EventID).
+			Msg("Dropping the answer to a redacted trigger")
+		stats.finish(ctx, roomID, sender, model, hasImage, turnDuration)
+		stats.recordOnSpan(turnSpan)
+		return
+	}
+
+	// The answer is stored once it has been delivered, with the event it was delivered as, so that
+	// a redaction of the answer can find it. An answer the room never saw isn't stored at all, and
+	// counts as a failed turn. The room stays locked until then, so the next turn in the room
+	// starts after this answer is out.
+	delivered := matrix.SendMarkdownFormattedNoticeTo(ctx, roomID, target, assistantResponse, debugData)
+	answerEventID := awaitDelivery(delivered)
+	if answerEventID == "" {
+		stats.outcome = "not_delivered"
+	}
+	stats.finish(ctx, roomID, sender, model, hasImage, turnDuration)
+	stats.recordOnSpan(turnSpan)
+
+	if answerEventID == "" {
+		log.Warn().Ctx(ctx).
+			Str("room_id", roomID).
+			Str("turn_event_id", turn.EventID).
+			Msg("Chat answer was not delivered, so it is not stored")
+		return
+	}
+	persist(ctx, turn, "answer", func(ctx context.Context) error {
+		return db.SaveAnswer(ctx, turn, config.UserID, assistantResponse, answerEventID)
+	})
+}
+
+// answerTarget places the answer to a trigger, and any failure message with it: in the thread the
+// trigger was sent in, or the main timeline. An answer still queued when its trigger is redacted
+// is dropped.
+func answerTarget(trigger Trigger) matrix.Target {
+	eventID := trigger.EventID
+	return matrix.Target{
+		ThreadRootID: trigger.ThreadRootID,
+		InReplyTo:    eventID,
+		Cancelled:    func() bool { return isRedacted(eventID) },
+	}
+}
+
+// deliveryTimeout bounds how long a turn waits for its answer to be delivered. The room stays
+// locked meanwhile, so a send that is stuck must not hold it for long.
+const deliveryTimeout = 30 * time.Second
+
+// awaitDelivery waits for a queued message to be sent, returning its event ID, or an empty one if
+// it wasn't sent in time or at all
+func awaitDelivery(delivered <-chan string) string {
+	timer := time.NewTimer(deliveryTimeout)
+	defer timer.Stop()
+
+	select {
+	case eventID := <-delivered:
+		return eventID
+	case <-timer.C:
+		return ""
+	}
+}
+
+// toolContext carries what tools need to act for the turn: the room, the sender they act for,
+// whether the room is a DM (which scopes memories), and where anything they post goes
+func toolContext(ctx context.Context, trigger Trigger, room roomInfo, target matrix.Target) context.Context {
+	ctx = context.WithValue(ctx, "room_id", trigger.RoomID)
+	ctx = context.WithValue(ctx, "sender", trigger.Sender)
+	ctx = context.WithValue(ctx, "room_is_dm", room.isDM())
+	return context.WithValue(ctx, "reply_target", target)
+}
+
+// turnPrompt is the prompt built for a turn, with what the rest of the turn needs from building it
+type turnPrompt struct {
+	messages    []aigateway.Message
+	hasImage    bool
+	model       string
+	composition promptComposition
+	// userTurn is the trigger as it is stored, once the turn gets that far
+	userTurn db.UserTurn
+	room     roomInfo
 }
 
 // buildInitialMessages creates the initial messages array with system prompt, history, and user
 // message, along with the estimated token cost of each part of it
-func buildInitialMessages(ctx context.Context, trigger Trigger, cfg db.ChatConfig) ([]aigateway.Message, bool, string, promptComposition) {
-	roomID, sender, msg := trigger.RoomID, trigger.Sender, trigger.Body
-
-	// Get the bot's actual display name from the Matrix server
-	botDisplayName := matrix.GetDisplayName(ctx, config.UserID)
-	if botDisplayName == "" {
-		// Fallback to user ID if display name can't be retrieved
-		botDisplayName = strings.Split(config.UserID, ":")[0][1:] // Remove @ and domain part
-	}
+func buildInitialMessages(ctx context.Context, trigger Trigger, cfg db.ChatConfig) turnPrompt {
+	roomID, sender := trigger.RoomID, trigger.Sender
+	room := lookUpRoom(ctx, roomID)
 
 	// The system prompt is ordered most stable first. Providers cache the longest unchanging prefix
 	// of a request, so anything that varies between requests has to come after everything that does
 	// not: the current time in particular used to sit in the second sentence, which changed the
-	// prefix every second and made caching impossible. It is now appended after the history instead.
-	// The instruction to batch tool calls is the cheapest latency win available: each tool iteration
-	// is a separate round trip carrying the whole conversation, so three facts fetched one at a time
-	// cost three of them where one would do. Both supported providers can emit several tool calls in
-	// a single turn, and they are executed in parallel.
-	systemPrompt := fmt.Sprintf(
-		"You are %s, a helpful Matrix bot. "+
-			"Keep your responses concise and helpful. You must be cold and direct: no yapping/rambling, "+
-			"no emojis and no warmth, unless the user has requested it. Use markdown formatting in your responses. "+
-			"When you need several independent pieces of information, request all of the tool calls "+
-			"together in one turn rather than one at a time.",
-		botDisplayName,
-	)
+	// prefix every second and made caching impossible. The system prompt now depends only on the
+	// room, and everything that changes from turn to turn goes in the turn context after the history.
+	system := systemPrompt(room.nameOf(ctx, config.UserID), room)
 
-	// Fetch and append user memories to system prompt
-	memories, err := db.GetUserMemories(ctx, sender)
-	if err != nil {
-		log.Error().Ctx(ctx).Err(err).Str("user_id", sender).Msg("Failed to get user memories")
-		// Continue without memories if there's an error
-	} else if len(memories) > 0 {
-		systemPrompt += "\n\n## User Memories\nThe following things have been remembered about this user:\n"
-		for _, mem := range memories {
-			systemPrompt += fmt.Sprintf("- [ID: %d] %s\n", mem.ID, mem.Memory)
-		}
-		systemPrompt += "\nUse the memory tool to save new memories or manage existing ones when the user asks you to remember or forget something."
+	// The trigger, as the model sees it now and as the history keeps it
+	quote, imageDataURL, notes := referencedMessage(ctx, trigger, room)
+	userTurn := db.UserTurn{
+		Turn:         db.Turn{RoomID: roomID, EventID: trigger.EventID, ThreadRootID: trigger.ThreadRootID},
+		UserID:       sender,
+		SenderName:   room.nameOf(ctx, sender),
+		SentAt:       trigger.Timestamp,
+		Message:      trigger.Body,
+		Mentions:     mentionsOf(ctx, trigger, room),
+		UnseenBefore: trigger.UnseenBefore,
+		ReplyTo:      quote,
 	}
 
 	// Get the conversation history making up the current context window
 	history := buildContextWindow(ctx, roomID, cfg.ContextHighTokens, cfg.ContextLowTokens)
 
 	// Build messages array with system prompt, history, and current message
-	messages := []aigateway.Message{{Role: "system", Content: systemPrompt}}
-	composition := promptComposition{system: estimateTokens(systemPrompt)}
+	messages := []aigateway.Message{{Role: "system", Content: system}}
+	composition := promptComposition{system: estimateTokens(system)}
 
 	// Process history to include tool calls and tool responses
 	historyStart := len(messages)
@@ -366,23 +446,16 @@ func buildInitialMessages(ctx context.Context, trigger Trigger, cfg db.ChatConfi
 	composition.history = estimateMessageTokens(messages[historyStart:])
 
 	// Everything from here on belongs to this specific turn rather than to the replayed history, so
-	// it is all accounted for as "current": the timestamp, any reply context, and the user's message
+	// it is all accounted for as "current": the turn context and the user's message
 	currentStart := len(messages)
 
-	// The current time goes after the history, not in the system prompt, so that everything before
-	// it stays byte-identical between requests and can be served from the provider's prompt cache
-	loc, _ := time.LoadLocation(config.Timezone)
-	messages = append(messages, aigateway.Message{
-		Role:    "system",
-		Content: "The current date and time is " + time.Now().In(loc).Format("Monday, January 2, 2006 15:04:05 MST"),
-	})
-
-	// Add the message this one refers to, if any, flagging an image
-	base64ImageURL := processRelatedMessage(ctx, trigger, &messages)
-	hasImage := base64ImageURL != ""
+	turnInfo := turnContext(time.Now(), person(userTurn.SenderName, sender),
+		memoriesFor(ctx, sender, room), relevantMembers(room, userTurn, history), notes)
+	messages = append(messages, aigateway.Message{Role: "system", Content: turnInfo})
 
 	// Select the appropriate model based on whether we have an image
-	var model string
+	hasImage := imageDataURL != ""
+	model := cfg.TextModel
 	if hasImage {
 		model = cfg.ImageModel
 		log.Debug().Ctx(ctx).
@@ -390,23 +463,54 @@ func buildInitialMessages(ctx context.Context, trigger Trigger, cfg db.ChatConfi
 			Str("model", model).
 			Msg("Using image model for message with image")
 	} else {
-		model = cfg.TextModel
 		log.Debug().Ctx(ctx).
 			Str("room_id", roomID).
 			Str("model", model).
 			Msg("Using text model for message without image")
 	}
 
-	// Add the current message, handling image if present
+	// Add the current message, with the image it replies to attached if there is one
+	content := renderUserTurn(userTurn, hasImage)
 	if hasImage {
-		hasImage, messages = processImageMessage(ctx, roomID, msg, base64ImageURL, cfg.ImageDetail, &messages)
+		messages = append(messages, aigateway.Message{
+			Role: "user",
+			Content: []aigateway.ContentPart{
+				{Type: "text", Text: content},
+				{Type: "image_url", ImageURL: &aigateway.ImageURL{
+					URL:    imageDataURL,
+					Detail: requestImageDetail(cfg.ImageDetail),
+				}},
+			},
+		})
+		log.Debug().Ctx(ctx).
+			Str("room_id", roomID).
+			Str("image_detail", cfg.ImageDetail).
+			Msg("Attaching image to chat request")
+		metrics.RecordChatImageProcessed()
 	} else {
-		// Regular text message
-		messages = append(messages, aigateway.Message{Role: "user", Content: msg})
+		messages = append(messages, aigateway.Message{Role: "user", Content: content})
 	}
 	composition.current = estimateMessageTokens(messages[currentStart:])
 
-	return messages, hasImage, model, composition
+	return turnPrompt{
+		messages:    messages,
+		hasImage:    hasImage,
+		model:       model,
+		composition: composition,
+		userTurn:    userTurn,
+		room:        room,
+	}
+}
+
+// memoriesFor returns the memories of whoever is speaking that this room gets to see: all of them
+// in a DM, only the ones saved here in a group room
+func memoriesFor(ctx context.Context, sender string, room roomInfo) []db.UserMemory {
+	memories, err := db.GetMemoriesIn(ctx, sender, room.memoryView())
+	if err != nil {
+		// Already logged. Continue without memories.
+		return nil
+	}
+	return memories
 }
 
 // processHistoryMessages processes the chat history and adds it to the messages array.
@@ -416,57 +520,40 @@ func buildInitialMessages(ctx context.Context, trigger Trigger, cfg db.ChatConfi
 // where it actually happened. Interleaving matters — replaying text and tool calls in separate
 // groups presents the model with a conversation that never took place.
 //
-// Tool calls with no matching response are dropped. Such a pair should never be written now that
-// they are persisted atomically, but history predating that change can contain them, and the chat
-// API rejects an assistant message whose tool_calls are not all answered — which would otherwise
-// break every request in the room until the rows expired.
+// A user message is replayed with its header, exactly as it was shown when it was the current turn.
 func processHistoryMessages(ctx context.Context, history []db.ChatMessage, messages *[]aigateway.Message) {
 	for i := 0; i < len(history); {
 		historyMsg := history[i]
 
 		switch historyMsg.MessageType {
 		case "tool_call":
-			// Collect the consecutive run of calls making up this batch, then the responses
-			// answering them, which the writer always stores immediately afterwards
+			// Collect the run of calls making up this batch, then the responses answering them,
+			// which the writer stores right after the calls in the same transaction
 			calls, next := collectToolCalls(history, i)
 			responses, next := collectToolResponses(history, next)
 
-			answered := make([]aigateway.ToolCall, 0, len(calls))
+			*messages = append(*messages, aigateway.Message{
+				Role:      "assistant",
+				Content:   "", // Content must be empty when there are tool calls
+				ToolCalls: calls,
+			})
 			for _, call := range calls {
-				if _, ok := responses[call.ID]; ok {
-					answered = append(answered, call)
-					continue
-				}
-				log.Warn().Ctx(ctx).
-					Str("room_id", historyMsg.RoomID).
-					Str("tool_call_id", call.ID).
-					Str("tool_name", call.Function.Name).
-					Msg("Dropping orphaned tool call from chat history")
-			}
-
-			if len(answered) > 0 {
 				*messages = append(*messages, aigateway.Message{
-					Role:      "assistant",
-					Content:   "", // Content must be empty when there are tool calls
-					ToolCalls: answered,
+					Role:       "tool",
+					Content:    responses[call.ID],
+					ToolCallID: call.ID,
 				})
-				for _, call := range answered {
-					*messages = append(*messages, aigateway.Message{
-						Role:       "tool",
-						Content:    responses[call.ID],
-						ToolCallID: call.ID,
-					})
-				}
 			}
 
 			i = next
 		case "tool_response":
-			// A response whose call is not in the window, so there is nothing to attach it to
+			// A response whose call is not in the window: the read cap cut between the two, so
+			// there is nothing to attach it to
 			i++
-		default: // "text", or empty for rows predating the message_type column
+		case "text":
 			*messages = append(*messages, aigateway.Message{
 				Role:    historyMsg.Role,
-				Content: historyMsg.Message,
+				Content: replayText(historyMsg),
 			})
 			i++
 		}
@@ -479,9 +566,8 @@ func collectToolCalls(history []db.ChatMessage, start int) ([]aigateway.ToolCall
 	var calls []aigateway.ToolCall
 	i := start
 	for ; i < len(history) && history[i].MessageType == "tool_call"; i++ {
-		if history[i].ToolCallID == nil || history[i].ToolName == nil {
-			continue
-		}
+		// Both are set on every tool row, which the chat_history_tool_row_complete constraint
+		// guarantees
 		calls = append(calls, aigateway.ToolCall{
 			ID:   *history[i].ToolCallID,
 			Type: "function",
@@ -505,9 +591,6 @@ func collectToolResponses(history []db.ChatMessage, start int) (map[string]strin
 	now := time.Now()
 	i := start
 	for ; i < len(history) && history[i].MessageType == "tool_response"; i++ {
-		if history[i].ToolCallID == nil {
-			continue
-		}
 		responses[*history[i].ToolCallID] = replayableToolResponse(history[i], now)
 	}
 	return responses, i
@@ -521,10 +604,8 @@ const maxReplayedToolResponseBytes = 4096
 // replayableToolResponse returns the content to replay for a stored tool response, substituting a
 // marker once the result has expired and truncating results too large to be worth replaying whole
 func replayableToolResponse(msg db.ChatMessage, now time.Time) string {
-	toolName := "tool"
-	if msg.ToolName != nil {
-		toolName = *msg.ToolName
-	}
+	// Set on every tool row, which the chat_history_tool_row_complete constraint guarantees
+	toolName := *msg.ToolName
 
 	if msg.Expiry != nil && !msg.Expiry.After(now) {
 		return fmt.Sprintf("[expired: the %s result from this point in the conversation is no longer "+
@@ -550,14 +631,18 @@ func truncateForReplay(response, toolName string) string {
 		"call the tool again if you need the rest]", toolName)
 }
 
-// processRelatedMessage adds the message the trigger explicitly refers to, if any, to the
-// conversation. Returns base64ImageURL if that message is an image.
+// unreadableReplyNote tells the model that the message replies to one it doesn't get to see
+const unreadableReplyNote = "Note: This message is a reply to another message, but I couldn't retrieve the content of that message."
+
+// referencedMessage works out what a turn gets of the message its trigger explicitly refers to: the
+// quote kept with the turn, an image attached to this turn only, and notes for the model when the
+// message can't be shown.
 //
 // Apart from messages addressed to the bot, this is the only room content that reaches the model.
 // The event was fetched when the message was routed, so nothing here goes back to the room for more.
-func processRelatedMessage(ctx context.Context, trigger Trigger, messages *[]aigateway.Message) string {
+func referencedMessage(ctx context.Context, trigger Trigger, room roomInfo) (*db.QuotedMessage, string, []string) {
 	if trigger.ReplyToEventID == "" {
-		return ""
+		return nil, "", nil
 	}
 
 	log.Debug().Ctx(ctx).
@@ -565,30 +650,53 @@ func processRelatedMessage(ctx context.Context, trigger Trigger, messages *[]aig
 		Str("reply_event_id", trigger.ReplyToEventID).
 		Msg("Message refers to another message")
 
-	if trigger.ReplyTo == nil {
+	repliedTo := trigger.ReplyTo
+	if repliedTo == nil {
 		// Already logged where the fetch failed
-		addUnreadableReplyNote(messages)
-		return ""
+		return nil, "", []string{unreadableReplyNote}
 	}
 
-	if trigger.ReplyTo.MsgType == "m.image" {
-		return processRepliedImage(ctx, trigger.RoomID, trigger.ReplyTo, messages)
+	isImage := repliedTo.MsgType == "m.image"
+	if !isImage && repliedTo.Body == "" {
+		// Nothing readable: content that couldn't be decrypted, a deleted message, or an event
+		// that isn't a message at all
+		log.Debug().Ctx(ctx).
+			Str("room_id", trigger.RoomID).
+			Str("event_id", repliedTo.EventID).
+			Msg("Replied-to message has no readable content")
+		return nil, "", []string{unreadableReplyNote}
 	}
-	processRepliedText(ctx, trigger.RoomID, trigger.ReplyTo, messages)
-	return ""
+
+	quote := &db.QuotedMessage{
+		EventID:    repliedTo.EventID,
+		Sender:     repliedTo.Sender,
+		SenderName: room.nameOf(ctx, repliedTo.Sender),
+		SentAt:     repliedTo.Timestamp,
+	}
+
+	if isImage {
+		quote.Kind = db.QuoteImage
+		imageDataURL, note := repliedImage(ctx, trigger.RoomID, repliedTo)
+		if note != "" {
+			return quote, "", []string{note}
+		}
+		return quote, imageDataURL, nil
+	}
+
+	log.Debug().Ctx(ctx).
+		Str("room_id", trigger.RoomID).
+		Str("event_id", repliedTo.EventID).
+		Str("content", repliedTo.Body).
+		Msg("Including replied-to message in conversation")
+
+	quote.Kind = db.QuoteText
+	quote.Body = capQuote(repliedTo.Body)
+	return quote, "", nil
 }
 
-// addUnreadableReplyNote tells the model that the message replies to one it doesn't get to see
-func addUnreadableReplyNote(messages *[]aigateway.Message) {
-	*messages = append(*messages, aigateway.Message{
-		Role:    "system",
-		Content: "Note: This message is a reply to another message, but I couldn't retrieve the content of that message.",
-	})
-}
-
-// processRepliedImage handles replies to image messages
-// Returns the base64 encoded image URL if successful
-func processRepliedImage(ctx context.Context, roomID string, repliedTo *matrix.Message, messages *[]aigateway.Message) string {
+// repliedImage downloads the image a message replies to, returning it as a data URL ready to
+// attach. When it can't be attached, the data URL is empty and there may be a note for the model.
+func repliedImage(ctx context.Context, roomID string, repliedTo *matrix.Message) (string, string) {
 	replyEventID := repliedTo.EventID
 
 	// Get the image URL, encryption info, and full content
@@ -598,7 +706,7 @@ func processRepliedImage(ctx context.Context, roomID string, repliedTo *matrix.M
 			Str("room_id", roomID).
 			Str("event_id", replyEventID).
 			Msg("Failed to get image URL from replied-to message")
-		return ""
+		return "", ""
 	}
 
 	// Download the image and convert to base64
@@ -609,15 +717,7 @@ func processRepliedImage(ctx context.Context, roomID string, repliedTo *matrix.M
 			Str("image_url", imageURL).
 			Bool("is_encrypted", encryptionInfo != nil).
 			Msg("Failed to download and convert image to base64")
-
-		// Add a note about the failed attempt to process the image
-		errorMsg := "Note: The user replied to an image, but I couldn't process it. Please make sure the image is accessible and try again."
-
-		*messages = append(*messages, aigateway.Message{
-			Role:    "system",
-			Content: errorMsg,
-		})
-		return ""
+		return "", "Note: The user replied to an image, but I couldn't process it. Please make sure the image is accessible and try again."
 	}
 
 	log.Debug().Ctx(ctx).
@@ -627,42 +727,15 @@ func processRepliedImage(ctx context.Context, roomID string, repliedTo *matrix.M
 		Bool("is_encrypted", encryptionInfo != nil).
 		Msg("Message is a reply to an image")
 
-	return base64ImageURL
+	return usableImage(ctx, roomID, base64ImageURL)
 }
 
-// processRepliedText handles replies to text messages
-func processRepliedText(ctx context.Context, roomID string, repliedTo *matrix.Message, messages *[]aigateway.Message) {
-	if repliedTo.Body == "" {
-		// Nothing readable: content that couldn't be decrypted, a deleted message, or an event
-		// that isn't a message at all
-		log.Debug().Ctx(ctx).
-			Str("room_id", roomID).
-			Str("event_id", repliedTo.EventID).
-			Msg("Replied-to message has no readable content")
-		addUnreadableReplyNote(messages)
-		return
-	}
+// maxImageBytes is the largest image that is attached to a request
+const maxImageBytes = 5 * 1024 * 1024
 
-	// Add the replied-to message to the conversation
-	log.Debug().Ctx(ctx).
-		Str("room_id", roomID).
-		Str("event_id", repliedTo.EventID).
-		Str("content", repliedTo.Body).
-		Msg("Including replied-to message in conversation")
-
-	// Add a note about the reply context
-	replyContextMsg := fmt.Sprintf("This message is a reply to: \"%s\"", repliedTo.Body)
-	*messages = append(*messages, aigateway.Message{
-		Role:    "system",
-		Content: replyContextMsg,
-	})
-}
-
-// processImageMessage handles messages that include an image
-// Returns updated hasImage flag and messages
-func processImageMessage(ctx context.Context, roomID, msg, base64ImageURL, imageDetail string, messages *[]aigateway.Message) (bool, []aigateway.Message) {
-	hasImage := true
-
+// usableImage checks that a downloaded image can be attached: a well-formed data URL of at most
+// maxImageBytes. Returns the data URL to attach, or an empty one with a note for the model.
+func usableImage(ctx context.Context, roomID, base64ImageURL string) (string, string) {
 	// Ensure the base64ImageURL is properly formatted
 	if !strings.HasPrefix(base64ImageURL, "data:image/") {
 		// Log a prefix of the URL for debugging, but be careful of index out of range
@@ -704,69 +777,60 @@ func processImageMessage(ctx context.Context, roomID, msg, base64ImageURL, image
 		}
 	}
 
-	// Check if the base64 image URL is too large (>5MB)
 	parts := strings.SplitN(base64ImageURL, ";base64,", 2)
-	if len(parts) == 2 {
-		// Calculate approximate size of the decoded data
-		// Base64 encoding increases size by ~33%, so we can estimate the decoded size
-		base64Data := parts[1]
-		estimatedSize := len(base64Data) * 3 / 4 // Approximate size after decoding
-
-		// 5MB = 5 * 1024 * 1024 bytes
-		const maxSizeBytes = 5 * 1024 * 1024
-
-		if estimatedSize > maxSizeBytes {
-			log.Warn().Ctx(ctx).
-				Str("room_id", roomID).
-				Int("estimated_size_bytes", estimatedSize).
-				Int("max_size_bytes", maxSizeBytes).
-				Msg("Image is too large, skipping image attachment")
-
-			// Add a note about the image being too large
-			*messages = append(*messages, aigateway.Message{
-				Role:    "system",
-				Content: "Note: An image was attached to this message, but it was too large to process (>5MB).",
-			})
-
-			// Fall back to text-only message
-			*messages = append(*messages, aigateway.Message{Role: "user", Content: msg})
-			hasImage = false
-		} else {
-			contentParts := []aigateway.ContentPart{
-				{
-					Type: "text",
-					Text: msg,
-				},
-				{
-					Type: "image_url",
-					ImageURL: &aigateway.ImageURL{
-						URL:    base64ImageURL,
-						Detail: requestImageDetail(imageDetail),
-					},
-				},
-			}
-
-			*messages = append(*messages, aigateway.Message{
-				Role:    "user",
-				Content: contentParts,
-			})
-			log.Debug().Ctx(ctx).
-				Str("room_id", roomID).
-				Str("image_detail", imageDetail).
-				Msg("Attaching image to chat request")
-			metrics.RecordChatImageProcessed()
-		}
-	} else {
+	if len(parts) != 2 {
 		log.Error().Ctx(ctx).
 			Str("room_id", roomID).
 			Msg("Image URL does not contain valid base64 data, skipping image")
-
-		// Fall back to text-only message
-		*messages = append(*messages, aigateway.Message{Role: "user", Content: msg})
-		hasImage = false
+		return "", ""
 	}
 
-	return hasImage, *messages
+	// Base64 encoding increases size by ~33%, so this approximates the decoded size
+	estimatedSize := len(parts[1]) * 3 / 4
+	if estimatedSize > maxImageBytes {
+		log.Warn().Ctx(ctx).
+			Str("room_id", roomID).
+			Int("estimated_size_bytes", estimatedSize).
+			Int("max_size_bytes", maxImageBytes).
+			Msg("Image is too large, skipping image attachment")
+		return "", "Note: An image was attached to this message, but it was too large to process (>5MB)."
+	}
+
+	return base64ImageURL, ""
+}
+
+// mentionsOf returns who the trigger mentions, besides the bot, with the names they have in the
+// room. m.mentions is the record if the message has one; for clients that don't send it, the pills
+// in the formatted body are.
+//
+// A client adds the sender of the message being replied to into m.mentions as well, so that they
+// get notified. The reply already says who that is, so they only count as mentioned if they are
+// pilled as well.
+func mentionsOf(ctx context.Context, trigger Trigger, room roomInfo) []db.Mention {
+	pilled := pillUserIDs(trigger.FormattedBody)
+	userIDs := trigger.Mentions
+	if userIDs == nil {
+		userIDs = pilled
+	}
+
+	var replyAuthor string
+	if trigger.ReplyTo != nil {
+		replyAuthor = trigger.ReplyTo.Sender
+	}
+
+	var mentions []db.Mention
+	seen := make(map[string]bool)
+	for _, userID := range userIDs {
+		if userID == config.UserID || seen[userID] {
+			continue
+		}
+		if userID == replyAuthor && !slices.Contains(pilled, userID) {
+			continue
+		}
+		seen[userID] = true
+		mentions = append(mentions, db.Mention{UserID: userID, Name: room.nameOf(ctx, userID)})
+	}
+	return mentions
 }
 
 // extractAssistantResponse extracts the assistant's response from the API response
@@ -820,8 +884,9 @@ func extractAssistantResponse(ctx context.Context, roomID, sender, model string,
 // processToolCalls handles the iterative tool calling process
 // Returns the iteration count, updated messages, and final assistant response
 func processToolCalls(
-	ctx context.Context,
-	roomID, sender, model string,
+	ctx, toolCtx context.Context,
+	turn db.Turn,
+	sender, model string,
 	hasImage bool,
 	cfg db.ChatConfig,
 	chatResp *aigateway.ChatResponse,
@@ -829,14 +894,12 @@ func processToolCalls(
 	tools []aigateway.ToolDefinition,
 	stats *turnStats,
 ) (int, []aigateway.Message, string) {
+	roomID := turn.RoomID
+
 	// Keep calling tools until the model stops asking for them or the configured iteration limit
 	// is reached
 	currentResp := chatResp
 	iterationCount := 1 // by the time we're here, we've already made one request
-
-	// Create a new context with room ID and sender for tool calls
-	toolCtx := context.WithValue(ctx, "room_id", roomID)
-	toolCtx = context.WithValue(toolCtx, "sender", sender)
 
 	maxTokens := cfg.MaxTokens
 	maxIterations := cfg.MaxToolIterations
@@ -866,7 +929,7 @@ func processToolCalls(
 
 		// Persist the calls together with their responses, after execution, so a call is never
 		// stored without the response that answers it
-		saveToolCallHistory(ctx, roomID, currentResp.Choices[0].Message.ToolCalls, toolResponses, tools)
+		saveToolCallHistory(ctx, turn, currentResp.Choices[0].Message.ToolCalls, toolResponses, tools)
 
 		// Add each tool response as a separate message
 		for _, toolResp := range toolResponses {
@@ -964,7 +1027,7 @@ func processToolCalls(
 		if err == nil {
 			// Persist the calls together with their responses, after execution, so a call is never
 			// stored without the response that answers it
-			saveToolCallHistory(ctx, roomID, currentResp.Choices[0].Message.ToolCalls, toolResponses, tools)
+			saveToolCallHistory(ctx, turn, currentResp.Choices[0].Message.ToolCalls, toolResponses, tools)
 
 			// Add each tool response as a separate message
 			for _, toolResp := range toolResponses {
@@ -1028,7 +1091,7 @@ func processToolCalls(
 // the responses later leaves a window — a failed write, a cancelled context, a restart — in which
 // history holds a call with no response, which the chat API then rejects on every later request in
 // the room.
-func saveToolCallHistory(ctx context.Context, roomID string, toolCalls []aigateway.ToolCall, toolResponses []aigateway.ToolResponse, tools []aigateway.ToolDefinition) {
+func saveToolCallHistory(ctx context.Context, turn db.Turn, toolCalls []aigateway.ToolCall, toolResponses []aigateway.ToolResponse, tools []aigateway.ToolDefinition) {
 	if len(toolCalls) == 0 {
 		return
 	}
@@ -1050,7 +1113,7 @@ func saveToolCallHistory(ctx context.Context, roomID string, toolCalls []aigatew
 			// No response means nothing to pair the call with, so storing it would recreate the
 			// orphan this function exists to prevent
 			log.Warn().Ctx(ctx).
-				Str("room_id", roomID).
+				Str("room_id", turn.RoomID).
 				Str("tool_call_id", toolCall.ID).
 				Str("tool_name", toolCall.Function.Name).
 				Msg("Skipping tool call with no response when saving history")
@@ -1066,16 +1129,10 @@ func saveToolCallHistory(ctx context.Context, roomID string, toolCalls []aigatew
 		})
 	}
 
-	persistCtx, cancel := persistContext(ctx)
-	defer cancel()
-
-	if err := db.SaveToolCallsWithResponses(persistCtx, roomID, config.UserID, records); err != nil {
-		log.Error().Ctx(ctx).Err(err).
-			Str("room_id", roomID).
-			Int("record_count", len(records)).
-			Msg("Failed to save tool call history")
-		// Continue even if saving fails: the transaction is atomic, so history is left consistent
-	}
+	// The transaction is atomic, so history is left consistent even if saving fails
+	persist(ctx, turn, "tool_calls", func(ctx context.Context) error {
+		return db.SaveToolCallsWithResponses(ctx, turn, config.UserID, records)
+	})
 }
 
 // buildDebugData creates debug data for the response

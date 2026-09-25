@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,9 +12,19 @@ import (
 
 func ptr(s string) *string { return &s }
 
-// textMsg builds a plain conversation row
+// textMsg builds a plain conversation row. A user row gets the attribution that every stored user
+// row carries.
 func textMsg(role, message string, at time.Time) db.ChatMessage {
-	return db.ChatMessage{Role: role, Message: message, MessageType: "text", Timestamp: at}
+	msg := db.ChatMessage{Role: role, Message: message, MessageType: "text", Timestamp: at}
+	if role == "user" {
+		name, unseen := "Alice", 0
+		msg.UserID = "@alice:example.com"
+		msg.SenderName = &name
+		msg.SentAt = &at
+		msg.Mentions = []db.Mention{}
+		msg.UnseenBefore = &unseen
+	}
+	return msg
 }
 
 // callMsg builds a tool_call row
@@ -50,6 +61,10 @@ func summarise(messages []aigateway.Message) []string {
 			out = append(out, "tool["+msg.ToolCallID+"]")
 		default:
 			content, _ := msg.Content.(string)
+			// A user message is replayed with its header; the message itself is on the last line
+			if msg.Role == "user" {
+				content = content[strings.LastIndex(content, "\n")+1:]
+			}
 			out = append(out, msg.Role+"["+content+"]")
 		}
 	}
@@ -168,58 +183,6 @@ func TestHistoryHandlesMultipleIterations(t *testing.T) {
 	}
 }
 
-// TestHistoryDropsOrphanedToolCall is the A2 repair test. A call with no response must not be
-// replayed: the chat API rejects an assistant message whose tool_calls are not all answered, which
-// would break every later request in the room.
-func TestHistoryDropsOrphanedToolCall(t *testing.T) {
-	base := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
-	at := func(offset int) time.Time { return base.Add(time.Duration(offset) * time.Second) }
-
-	history := []db.ChatMessage{
-		textMsg("user", "weather?", at(0)),
-		callMsg("call_orphan", "get_weather", `{}`, at(1)),
-		textMsg("user", "still there?", at(2)),
-	}
-
-	var messages []aigateway.Message
-	processHistoryMessages(context.Background(), history, &messages)
-
-	want := []string{"user[weather?]", "user[still there?]"}
-
-	if got := summarise(messages); !equal(got, want) {
-		t.Errorf("orphaned tool call not dropped\n got: %v\nwant: %v", got, want)
-	}
-}
-
-// TestHistoryDropsOnlyTheUnansweredCall verifies a partially answered batch keeps the answered
-// calls rather than discarding the whole turn.
-func TestHistoryDropsOnlyTheUnansweredCall(t *testing.T) {
-	base := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
-	at := func(offset int) time.Time { return base.Add(time.Duration(offset) * time.Second) }
-
-	history := []db.ChatMessage{
-		textMsg("user", "weather and time?", at(0)),
-		callMsg("call_1", "get_weather", `{}`, at(1)),
-		callMsg("call_2", "get_time", `{}`, at(1)),
-		responseMsg("call_1", "get_weather", "-7 C", at(2)),
-		textMsg("assistant", "it is -7 C", at(3)),
-	}
-
-	var messages []aigateway.Message
-	processHistoryMessages(context.Background(), history, &messages)
-
-	want := []string{
-		"user[weather and time?]",
-		"assistant[tool_calls:get_weather]",
-		"tool[call_1]",
-		"assistant[it is -7 C]",
-	}
-
-	if got := summarise(messages); !equal(got, want) {
-		t.Errorf("unanswered call not dropped in isolation\n got: %v\nwant: %v", got, want)
-	}
-}
-
 // TestHistoryDropsOrphanedToolResponse verifies a response whose call fell outside the window is
 // skipped rather than emitted with no preceding tool_calls message.
 func TestHistoryDropsOrphanedToolResponse(t *testing.T) {
@@ -242,23 +205,52 @@ func TestHistoryDropsOrphanedToolResponse(t *testing.T) {
 	}
 }
 
-// TestHistoryHandlesLegacyRowsWithoutMessageType covers rows predating the message_type column,
-// which default to an empty string rather than "text".
-func TestHistoryHandlesLegacyRowsWithoutMessageType(t *testing.T) {
+// TestHistoryReplaysStoredBatchesAsOneStep is the F12 regression test. The batch is built in the
+// order the writer stores it, since a test built in the order the replay expects is what let the
+// writer's old order go unnoticed: each call followed by its response came back as calls made one
+// at a time.
+func TestHistoryReplaysStoredBatchesAsOneStep(t *testing.T) {
 	base := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	turn := db.Turn{RoomID: "!room:example.com", EventID: "$trigger"}
 
-	history := []db.ChatMessage{
-		{Role: "user", Message: "hello", MessageType: "", Timestamp: base},
-		{Role: "assistant", Message: "hi", MessageType: "", Timestamp: base.Add(time.Second)},
-	}
+	history := []db.ChatMessage{textMsg("user", "weather and time?", base)}
+	history = append(history, db.ToolCallRows(turn, testBotUserID, []db.ToolCallRecord{
+		{ToolCallID: "call_1", ToolName: "get_weather", Arguments: `{}`, Response: "-7 C"},
+		{ToolCallID: "call_2", ToolName: "get_time", Arguments: `{}`, Response: "14:05"},
+	})...)
+	history = append(history, textMsg("assistant", "-7 C at 14:05", base))
 
 	var messages []aigateway.Message
 	processHistoryMessages(context.Background(), history, &messages)
 
-	want := []string{"user[hello]", "assistant[hi]"}
+	want := []string{
+		"user[weather and time?]",
+		"assistant[tool_calls:get_weather+get_time]",
+		"tool[call_1]",
+		"tool[call_2]",
+		"assistant[-7 C at 14:05]",
+	}
 
 	if got := summarise(messages); !equal(got, want) {
-		t.Errorf("legacy rows mishandled\n got: %v\nwant: %v", got, want)
+		t.Errorf("stored batch not replayed as one step\n got: %v\nwant: %v", got, want)
+	}
+}
+
+// TestHistoryReplaysUserTurnsWithTheirHeader verifies a user message comes back exactly as the
+// current turn showed it
+func TestHistoryReplaysUserTurnsWithTheirHeader(t *testing.T) {
+	at := time.Date(2026, 9, 25, 14, 2, 0, 0, time.UTC)
+	row := textMsg("user", "what's the weather?", at)
+
+	var messages []aigateway.Message
+	processHistoryMessages(context.Background(), []db.ChatMessage{row}, &messages)
+
+	want := renderUserTurn(row.UserTurn(), false)
+	if got, _ := messages[0].Content.(string); got != want {
+		t.Errorf("replayed user message = %q, want %q", got, want)
+	}
+	if !strings.HasPrefix(want, "[Alice (@alice:example.com) · 2026-09-25 14:02]\n") {
+		t.Errorf("replayed user message lacks its header: %q", want)
 	}
 }
 

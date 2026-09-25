@@ -84,6 +84,12 @@ export interface RoomMembersResponse {
 export interface MemoryResponse {
   id: number
   memory: string
+  /**
+   * The group room the memory was saved in, which is where it is used along with direct chats.
+   * Null for a memory saved in a direct chat, which is used in direct chats only.
+   */
+  room_id: string | null
+  room_name?: string
   created_at: string
 }
 
