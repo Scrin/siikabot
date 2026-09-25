@@ -8,6 +8,7 @@ import (
 
 	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/db"
+	"github.com/Scrin/siikabot/llmtools"
 	"github.com/Scrin/siikabot/matrix"
 )
 
@@ -82,18 +83,35 @@ func (r roomInfo) nameOf(ctx context.Context, userID string) string {
 	return userID
 }
 
-// pillNames gives the name each member is shown by where an answer writes out their user ID: their
-// display name in this room, or their user ID if they have none
+// memberName is the name a member goes by in the room, as the model sees it: their display name,
+// cleaned, or their user ID if they have none
+func memberName(member matrix.Member) string {
+	if name := cleanName(member.DisplayName); name != "" {
+		return name
+	}
+	return member.UserID
+}
+
+// pillNames gives the name each member is shown by where an answer writes out their user ID
 func (r roomInfo) pillNames() map[string]string {
 	names := make(map[string]string, len(r.Members))
 	for _, member := range r.Members {
-		name := cleanName(member.DisplayName)
-		if name == "" {
-			name = member.UserID
-		}
-		names[member.UserID] = name
+		names[member.UserID] = memberName(member)
 	}
 	return names
+}
+
+// toolMembers is the room's members as the member lookup tool finds them
+func (r roomInfo) toolMembers() []llmtools.RoomMember {
+	members := make([]llmtools.RoomMember, 0, len(r.Members))
+	for _, member := range r.Members {
+		members = append(members, llmtools.RoomMember{
+			UserID: member.UserID,
+			Name:   memberName(member),
+			IsBot:  member.UserID == config.UserID,
+		})
+	}
+	return members
 }
 
 // systemPrompt builds the system prompt: who the bot is, how it behaves, how to read the
@@ -133,7 +151,7 @@ func roomSection(room roomInfo) string {
 
 	count := len(room.Members)
 	if count > maxListedMembers {
-		return fmt.Sprintf("## This room\n%sgroup room, %d members. The ones relevant to the latest message are listed with it.",
+		return fmt.Sprintf("## This room\n%sgroup room, %d members. The ones relevant to the latest message are listed with it, and find_room_members finds the others.",
 			name, count)
 	}
 	return fmt.Sprintf("## This room\n%sgroup room, %d %s:\n%s",

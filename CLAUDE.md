@@ -57,7 +57,7 @@ In general, each command or webhook is considered a **self-contained feature** a
 - A linked message is a `matrix.to` link or `matrix:` URI to an event in the same room. Links inside a referenced message are not followed.
 - A referenced message is used only if the person referring to it could see it themselves. In a room that shows its history only from when people joined or were invited, anything older than their membership is left out (`matrix.VisibleTo`).
 - Nothing else from a room may be passed to the model, persisted in `chat_history` or exposed through an LLM tool, and no tool may read room events.
-- Metadata that is not message content (member list, room name, message counts) is allowed.
+- Metadata that is not message content (member list, room name, message counts) is allowed, for the room the turn happens in only. A tool that looks such things up, like `find_room_members`, gets them from the chat turn instead of fetching them for itself.
 - Redacted messages must leave the chat history, and a message its sender edits is stored as edited.
 
 The referenced events are resolved once, in `bot/reply.go`, and handed to the chat turn in `chat.Trigger`. The chat package never fetches room events itself.

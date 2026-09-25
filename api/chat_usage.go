@@ -29,6 +29,8 @@ type ChatUsageEntry struct {
 	CacheHitRate       float64 `json:"cache_hit_rate"`
 	ToolIterations     int     `json:"tool_iterations"`
 	Failures           int     `json:"failures"`
+	// Silent are the turns that ended without an answer because the message needed none
+	Silent int `json:"silent"`
 }
 
 // ChatUsageResponse is the chat usage report
@@ -66,12 +68,27 @@ func ChatUsageHandler(c *gin.Context) {
 		return
 	}
 
+	entries, totals := usageEntries(summaries, func(roomID string) string {
+		return matrix.GetRoomName(ctx, roomID)
+	})
+
+	c.JSON(http.StatusOK, ChatUsageResponse{
+		Since:   since,
+		Days:    days,
+		Entries: entries,
+		Totals:  totals,
+	})
+}
+
+// usageEntries turns the usage summaries into the report's entries, one per room and model, and
+// adds them up into its totals
+func usageEntries(summaries []db.ChatUsageSummary, roomName func(roomID string) string) ([]ChatUsageEntry, ChatUsageEntry) {
 	entries := make([]ChatUsageEntry, 0, len(summaries))
 	totals := ChatUsageEntry{Model: "all"}
 	for _, summary := range summaries {
 		entries = append(entries, ChatUsageEntry{
 			RoomID:             summary.RoomID,
-			RoomName:           matrix.GetRoomName(ctx, summary.RoomID),
+			RoomName:           roomName(summary.RoomID),
 			Model:              summary.Model,
 			Turns:              summary.Turns,
 			PromptTokens:       summary.PromptTokens,
@@ -80,6 +97,7 @@ func ChatUsageHandler(c *gin.Context) {
 			CacheHitRate:       cacheHitRate(summary.CachedPromptTokens, summary.PromptTokens),
 			ToolIterations:     summary.ToolIterations,
 			Failures:           summary.Failures,
+			Silent:             summary.Silent,
 		})
 
 		totals.Turns += summary.Turns
@@ -88,15 +106,10 @@ func ChatUsageHandler(c *gin.Context) {
 		totals.CachedPromptTokens += summary.CachedPromptTokens
 		totals.ToolIterations += summary.ToolIterations
 		totals.Failures += summary.Failures
+		totals.Silent += summary.Silent
 	}
 	totals.CacheHitRate = cacheHitRate(totals.CachedPromptTokens, totals.PromptTokens)
-
-	c.JSON(http.StatusOK, ChatUsageResponse{
-		Since:   since,
-		Days:    days,
-		Entries: entries,
-		Totals:  totals,
-	})
+	return entries, totals
 }
 
 // cacheHitRate returns the share of prompt tokens served from the provider's cache

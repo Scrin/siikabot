@@ -4,6 +4,7 @@ import (
 	"context"
 	"html"
 	"strings"
+	"time"
 
 	"github.com/Scrin/siikabot/metrics"
 	"github.com/gomarkdown/markdown"
@@ -112,9 +113,13 @@ type Target struct {
 	ThreadRootID string
 	// InReplyTo is the message this one answers, in the same timeline
 	InReplyTo string
-	// Cancelled is asked just before the message is sent. If it reports true, the message is
-	// dropped and the returned channel receives an empty event ID.
+	// Cancelled is asked just before the message is sent, and again before any retry. If it
+	// reports true, the message is dropped and the returned channel receives an empty event ID.
 	Cancelled func() bool
+	// Timeout, when set, gives the message up if it hasn't gone out this long after it was queued,
+	// in place of the usual defaultSendTimeout. Someone waiting for the message sets it to how long
+	// they wait, so that it never goes out after they have given up on it.
+	Timeout time.Duration
 }
 
 // cancelled reports whether a message for the target is no longer wanted. A message without a
@@ -199,15 +204,7 @@ func sendMessage(ctx context.Context, roomID string, message simpleMessage, targ
 	done := make(chan string, 1)
 	// The context travels with the event so the worker goroutine that actually talks to the
 	// homeserver can continue the caller's trace rather than starting an unrelated one
-	outboundEvents <- outboundEvent{
-		ctx:            ctx,
-		RoomID:         roomID,
-		EventType:      "m.room.message",
-		Content:        message,
-		RetryOnFailure: true,
-		done:           done,
-		target:         target,
-	}
+	outboundEvents <- newOutboundEvent(ctx, roomID, message, target, done)
 	metrics.SetMatrixOutboundQueueDepth(len(outboundEvents))
 	return done
 }

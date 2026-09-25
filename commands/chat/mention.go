@@ -312,6 +312,21 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 		return
 	}
 
+	// A reply to the bot that needs no answer gets none, when the model says so. Its question stays
+	// in the history, unanswered, and nothing is posted.
+	if trigger.ByReplyOnly && isNoReply(assistantResponse) {
+		log.Debug().Ctx(ctx).
+			Str("room_id", roomID).
+			Str("turn_event_id", turn.EventID).
+			Msg("Staying silent on a reply that needs no answer")
+		duration := time.Since(startTime)
+		metrics.RecordChatRequestDuration(model, hasImage, duration.Seconds())
+		stats.outcome = outcomeSilent
+		stats.finish(ctx, roomID, sender, model, hasImage, duration)
+		stats.recordOnSpan(turnSpan)
+		return
+	}
+
 	// What is posted, and stored, is the answer without a header the model may have copied
 	assistantResponse = stripImitatedHeader(assistantResponse)
 
@@ -342,7 +357,9 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 	//
 	// The model writes members' user IDs, and the room sees pills with their names in their place.
 	// What is stored is the answer as the model wrote it.
-	delivered := matrix.SendMarkdownFormattedNoticeTo(ctx, roomID, target, assistantResponse, prompt.room.pillNames(), debugData)
+	answer := target
+	answer.Timeout = deliveryTimeout
+	delivered := matrix.SendMarkdownFormattedNoticeTo(ctx, roomID, answer, assistantResponse, prompt.room.pillNames(), debugData)
 	answerEventID := awaitDelivery(delivered)
 	if answerEventID == "" {
 		stats.outcome = "not_delivered"
@@ -374,14 +391,19 @@ func answerTarget(trigger Trigger) matrix.Target {
 	}
 }
 
-// deliveryTimeout bounds how long a turn waits for its answer to be delivered. The room stays
-// locked meanwhile, so a send that is stuck must not hold it for long.
+// deliveryTimeout is how long an answer may take to go out once it is queued. The room stays locked
+// until it has, so a send that is stuck must not hold it for long. An answer that misses it is
+// dropped rather than sent: its turn has recorded it as undelivered by then, and doesn't store it.
 const deliveryTimeout = 30 * time.Second
 
-// awaitDelivery waits for a queued message to be sent, returning its event ID, or an empty one if
-// it wasn't sent in time or at all
+// deliveryGrace is how much longer than deliveryTimeout a turn waits to hear how the send went. The
+// send worker reports right after its last attempt, which the deadline cuts short.
+const deliveryGrace = 5 * time.Second
+
+// awaitDelivery waits for a queued answer to be sent, returning its event ID, or an empty one if it
+// wasn't sent in time or at all
 func awaitDelivery(delivered <-chan string) string {
-	timer := time.NewTimer(deliveryTimeout)
+	timer := time.NewTimer(deliveryTimeout + deliveryGrace)
 	defer timer.Stop()
 
 	select {
@@ -390,6 +412,20 @@ func awaitDelivery(delivered <-chan string) string {
 	case <-timer.C:
 		return ""
 	}
+}
+
+// noReply is what the model answers with to stay silent
+const noReply = "NO_REPLY"
+
+// noReplyNote offers the model to stay silent, for a message that only replies to the bot
+const noReplyNote = "Note: This message only replies to one of your messages, without mentioning you. If it needs no answer, " +
+	"for example because it only thanks you or reacts to what you said, answer with exactly " + noReply +
+	" and nothing else, and nothing is posted."
+
+// isNoReply reports whether an answer is the model staying silent. The word may come with some
+// markdown or punctuation around it, but nothing else.
+func isNoReply(answer string) bool {
+	return strings.EqualFold(strings.Trim(answer, " \t\r\n`*_\"'.!"), noReply)
 }
 
 // failureMessage is what the room is told, in place of an answer, when a turn fails with the
@@ -417,11 +453,15 @@ func requestFailure(ctx context.Context) string {
 }
 
 // toolContext carries what tools need to act for the turn: the room, the sender they act for,
-// whether the room is a DM (which scopes memories), and where anything they post goes
+// whether the room is a DM (which scopes memories), where anything they post goes, and the room's
+// members for the member lookup, when the room could be looked up
 func toolContext(ctx context.Context, trigger Trigger, room roomInfo, target matrix.Target) context.Context {
 	ctx = context.WithValue(ctx, "room_id", trigger.RoomID)
 	ctx = context.WithValue(ctx, "sender", trigger.Sender)
 	ctx = context.WithValue(ctx, "room_is_dm", room.isDM())
+	if room.known {
+		ctx = context.WithValue(ctx, "room_members", room.toolMembers())
+	}
 	return context.WithValue(ctx, "reply_target", target)
 }
 
@@ -488,8 +528,15 @@ func buildInitialMessages(ctx context.Context, trigger Trigger, cfg db.ChatConfi
 	// it is all accounted for as "current": the turn context and the user's message
 	currentStart := len(messages)
 
+	// A message that only replies to the bot may need no answer, and the model may then say so. It
+	// is told here rather than in the system prompt, which is the same for every turn.
+	notes := refs.notes
+	if trigger.ByReplyOnly {
+		notes = append(notes, noReplyNote)
+	}
+
 	turnInfo := turnContext(time.Now(), person(userTurn.SenderName, sender),
-		memoriesFor(ctx, sender, room), relevantMembers(room, userTurn, history), refs.notes)
+		memoriesFor(ctx, sender, room), relevantMembers(room, userTurn, history), notes)
 	messages = append(messages, aigateway.Message{Role: "system", Content: turnInfo})
 
 	// Select the appropriate model based on whether we have an image

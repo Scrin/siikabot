@@ -29,6 +29,11 @@ const (
 	componentCurrent = "current"
 )
 
+// outcomeSilent is a turn that ended without an answer because none was needed: the model stayed
+// silent on a reply that didn't call for one. Unlike every other outcome but "ok", it isn't a
+// failure.
+const outcomeSilent = "silent"
+
 // turnStats accumulates what happened during a single chat turn.
 //
 // A turn can span several API calls and several rounds of tool execution, and until now the only
@@ -182,7 +187,7 @@ func (s *turnStats) recordOnSpan(span trace.Span) {
 		attribute.Int("siikabot.chat.cached_prompt_tokens", s.cachedTokens),
 		attribute.Float64("siikabot.chat.cache_hit_rate", s.cacheHitRate()),
 	)
-	if s.outcome != "ok" {
+	if s.outcome != "ok" && s.outcome != outcomeSilent {
 		span.SetStatus(codes.Error, s.outcome)
 	}
 }

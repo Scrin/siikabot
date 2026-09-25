@@ -117,6 +117,12 @@ function UsageTotals({ totals }: UsageTotalsProps) {
           {totals.failures} failed {totals.failures === 1 ? 'turn' : 'turns'}
         </div>
       )}
+      {totals.silent > 0 && (
+        <div className="mt-3 font-mono text-xs text-slate-400">
+          {totals.silent} silent {totals.silent === 1 ? 'turn' : 'turns'} (replies that needed no
+          answer)
+        </div>
+      )}
     </div>
   )
 }
@@ -175,6 +181,12 @@ function UsageItem({ entry }: UsageItemProps) {
             <>
               <span className="text-slate-500">|</span>
               <span className="text-rose-400">{entry.failures} failed</span>
+            </>
+          )}
+          {entry.silent > 0 && (
+            <>
+              <span className="text-slate-500">|</span>
+              <span className="text-slate-400">{entry.silent} silent</span>
             </>
           )}
         </div>

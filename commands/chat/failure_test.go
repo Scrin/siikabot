@@ -6,6 +6,9 @@ import (
 	"time"
 
 	"github.com/Scrin/siikabot/aigateway"
+	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func responseWith(content any) *aigateway.ChatResponse {
@@ -71,5 +74,37 @@ func TestRequestFailure(t *testing.T) {
 	cancelNow()
 	if got := requestFailure(cancelled); got != "request_failed" {
 		t.Errorf("requestFailure() of a cancelled turn = %q, want request_failed", got)
+	}
+}
+
+func TestIsNoReply(t *testing.T) {
+	silent := []string{"NO_REPLY", "no_reply", " NO_REPLY\n", "`NO_REPLY`", "**NO_REPLY**", "NO_REPLY."}
+	for _, answer := range silent {
+		if !isNoReply(answer) {
+			t.Errorf("isNoReply(%q) = false, want the model staying silent", answer)
+		}
+	}
+
+	answers := []string{"You're welcome!", "NO_REPLY, you're welcome", "Sure. NO_REPLY", "", "NO REPLY needed here"}
+	for _, answer := range answers {
+		if isNoReply(answer) {
+			t.Errorf("isNoReply(%q) = true, want an answer", answer)
+		}
+	}
+}
+
+// Staying silent is a turn that went as it should, so its span isn't marked as failed
+func TestSilentTurnIsNotAFailure(t *testing.T) {
+	for outcome, wantError := range map[string]bool{"ok": false, outcomeSilent: false, "request_failed": true} {
+		recorder := tracetest.NewSpanRecorder()
+		provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+		_, span := provider.Tracer("test").Start(context.Background(), "chat.turn")
+
+		(&turnStats{outcome: outcome}).recordOnSpan(span)
+		span.End()
+
+		if isError := recorder.Ended()[0].Status().Code == codes.Error; isError != wantError {
+			t.Errorf("a %q turn marks its span as an error: %v, want %v", outcome, isError, wantError)
+		}
 	}
 }

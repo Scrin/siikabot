@@ -34,10 +34,13 @@ func routeToChat(ctx context.Context, evt *event.Event, attrs []attribute.KeyVal
 	prefixedMsg, isPrefixed := stripBotNamePrefix(body, formattedBody, config.UserID, botNames(ctx, roomID)...)
 	addressed := isMentioned || isPrefixed || isReplyToBot
 
-	// A reply to the bot that opens by addressing someone else is for them (see mention.go), and
-	// like any other message that isn't for the bot, it only counts as unseen
-	if isReplyToBot && !isPrefixed && !pillsBot(formattedBody, config.UserID) &&
-		addressesSomeoneElse(body, formattedBody, config.UserID, sender, roomMembers(ctx, roomID)) {
+	// A reply to the bot that neither pills it nor opens with its name addresses it only by being a
+	// reply. The bot being in its m.mentions doesn't say otherwise (see mention.go).
+	byReplyOnly := isReplyToBot && !isPrefixed && !pillsBot(formattedBody, config.UserID)
+
+	// Such a reply that opens by addressing someone else is for them, and like any other message
+	// that isn't for the bot, it only counts as unseen
+	if byReplyOnly && addressesSomeoneElse(body, formattedBody, config.UserID, sender, roomMembers(ctx, roomID)) {
 		log.Debug().Ctx(ctx).
 			Str("room_id", roomID).
 			Str("event_id", eventID).
@@ -75,6 +78,7 @@ func routeToChat(ctx context.Context, evt *event.Event, attrs []attribute.KeyVal
 		replyToID:    replyToID,
 		replyTo:      replyTo,
 		image:        image,
+		byReplyOnly:  byReplyOnly,
 	})
 	if isReplyToBot {
 		return constants.CommandReply
@@ -198,6 +202,8 @@ type chatStart struct {
 	// wasUnseen says the message was counted as unseen when it was sent, as a message that only
 	// addressed the bot once it was edited was
 	wasUnseen bool
+	// byReplyOnly says the message addressed the bot only by replying to it
+	byReplyOnly bool
 }
 
 // startChatTurn hands a message that addressed the bot to the chat, which answers it in a turn of
@@ -216,6 +222,7 @@ func startChatTurn(ctx context.Context, attrs []attribute.KeyValue, msg chatStar
 		ReplyTo:        msg.replyTo,
 		Links:          linkedMessages(ctx, msg.roomID, msg.sender, msg.ownBody, msg.ownFormatted, msg.eventID, msg.replyToID.String()),
 		Image:          msg.image,
+		ByReplyOnly:    msg.byReplyOnly,
 	}
 
 	// How many messages the bot didn't see since the previous one addressed to it. Taken here, as

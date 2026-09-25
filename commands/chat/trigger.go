@@ -41,6 +41,11 @@ type Trigger struct {
 
 	// Image is the message itself when it is an image, with Body as its caption. Nil for text.
 	Image *matrix.Message
+
+	// ByReplyOnly says the message addressed the bot only by replying to one of its messages, or
+	// by starting a thread on one: it neither mentions the bot nor opens with its name. Such a
+	// message may need no answer at all, like a thanks, and the model may then stay silent.
+	ByReplyOnly bool
 }
 
 // Link is a message in the room that a message addressed to the bot links to

@@ -92,7 +92,7 @@ func bigRoom() roomInfo {
 func TestRoomSectionOfALargeRoomListsNoOne(t *testing.T) {
 	got := roomSection(bigRoom())
 
-	want := `## This room` + "\n" + `"Big Room", group room, 29 members. The ones relevant to the latest message are listed with it.`
+	want := `## This room` + "\n" + `"Big Room", group room, 29 members. The ones relevant to the latest message are listed with it, and find_room_members finds the others.`
 	if got != want {
 		t.Errorf("roomSection() =\n%s\nwant\n%s", got, want)
 	}
@@ -193,5 +193,24 @@ func TestPillNames(t *testing.T) {
 
 	if names := (roomInfo{id: "!unknown:example.com"}).pillNames(); len(names) != 0 {
 		t.Errorf("a room that couldn't be looked up gave pill names %v", names)
+	}
+}
+
+// The member lookup tool finds members by the names the model knows them by
+func TestToolMembers(t *testing.T) {
+	nameless := matrix.Member{UserID: "@dave:example.com"}
+	members := testRoom("Siika HQ", alice, nameless, botSelf).toolMembers()
+
+	if len(members) != 3 {
+		t.Fatalf("toolMembers() = %#v", members)
+	}
+	if members[0].Name != "Alice" || members[0].IsBot {
+		t.Errorf("toolMembers()[0] = %#v, want Alice", members[0])
+	}
+	if members[1].Name != "@dave:example.com" {
+		t.Errorf("a member without a name is found as %q, want their user ID", members[1].Name)
+	}
+	if !members[2].IsBot {
+		t.Errorf("the bot isn't marked: %#v", members[2])
 	}
 }

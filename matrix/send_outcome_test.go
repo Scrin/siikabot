@@ -22,6 +22,7 @@ func TestSendOutcomeMarksFailuresOnTheSpan(t *testing.T) {
 		constants.MatrixSendFailedEncryption,
 		constants.MatrixSendFailedSend,
 		constants.MatrixSendFailedForbidden,
+		constants.MatrixSendTimedOut,
 	}
 
 	for _, status := range failures {
@@ -69,8 +70,9 @@ func TestAllSendStatusesAreCovered(t *testing.T) {
 		recordSendOutcome(span, status)
 		span.End()
 
+		// A message nobody wanted any more wasn't a failure to send it
 		isError := recorder.Ended()[0].Status().Code == codes.Error
-		if want := status != constants.MatrixSendSuccess; isError != want {
+		if want := status != constants.MatrixSendSuccess && status != constants.MatrixSendDropped; isError != want {
 			t.Errorf("%s: error status = %v, want %v", status, isError, want)
 		}
 	}

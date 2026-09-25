@@ -2,7 +2,6 @@ package matrix
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -10,14 +9,9 @@ import (
 	"time"
 
 	"github.com/Scrin/siikabot/config"
-	"github.com/Scrin/siikabot/constants"
 	"github.com/Scrin/siikabot/logging"
-	"github.com/Scrin/siikabot/metrics"
 	"github.com/rs/zerolog/log"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/crypto"
 	"maunium.net/go/mautrix/event"
@@ -34,26 +28,6 @@ var (
 	outboundEvents chan outboundEvent
 )
 
-type outboundEvent struct {
-	ctx            context.Context
-	RoomID         string
-	EventType      string
-	Content        simpleMessage
-	RetryOnFailure bool
-	done           chan<- string
-	// target, when set, places the message and may cancel it, both just before it is sent
-	target *Target
-}
-
-// content returns the message to send, placed at its target if it has one
-func (e outboundEvent) content() simpleMessage {
-	msg := e.Content
-	if e.target != nil {
-		msg.RelatesTo = e.target.relatesTo(e.RoomID)
-	}
-	return msg
-}
-
 type simpleMessage struct {
 	MsgType       string           `json:"msgtype"`
 	Body          string           `json:"body"`
@@ -61,12 +35,6 @@ type simpleMessage struct {
 	FormattedBody string           `json:"formatted_body,omitempty"`
 	RelatesTo     *event.RelatesTo `json:"m.relates_to,omitempty"`
 	DebugData     map[string]any   `json:"fi.2kgwf.debug,omitempty"`
-}
-
-type httpError struct {
-	Errcode      string `json:"errcode"`
-	Err          string `json:"error"`
-	RetryAfterMs int    `json:"retry_after_ms"`
 }
 
 func JoinRoom(ctx context.Context, roomID string) {
@@ -146,189 +114,6 @@ func GetRoomName(ctx context.Context, roomID string) string {
 		return ""
 	}
 	return nameContent.Name
-}
-
-func processOutboundEvents(ctx context.Context) {
-	for evt := range outboundEvents {
-		sendOutboundEvent(ctx, evt)
-	}
-}
-
-// recordSendOutcome records how a send ended, on the metric and on the span alike.
-//
-// The failure paths all recorded the metric and left the span untouched, so a reply that was never
-// delivered produced a span with an unset status — rendered exactly like a success. That made
-// matrix.send the most misleading span in the system, sitting as it does at the end of the path a
-// user complains about.
-func recordSendOutcome(span trace.Span, status constants.MatrixSendStatus) {
-	metrics.RecordMatrixMessageSent(status)
-	if status != constants.MatrixSendSuccess {
-		span.SetStatus(codes.Error, string(status))
-	}
-}
-
-// sendOutboundEvent delivers a single queued event to the homeserver.
-//
-// Split out from the loop so the span can be ended with a defer: the body has several early exits,
-// and inside a loop those were labelled continues that no defer would cover.
-func sendOutboundEvent(ctx context.Context, evt outboundEvent) {
-	// Continue the caller's trace rather than starting a fresh one. Sends are queued and delivered
-	// on this goroutine, so without carrying the context across the channel a reply would be traced
-	// separately from the work that produced it.
-	//
-	// Cancellation is deliberately dropped: the turn that queued a message is often finished by the
-	// time it goes out, and a cancelled context must not stop a reply being delivered.
-	ctx, span := tracer.Start(context.WithoutCancel(evt.ctx), "matrix.send",
-		trace.WithSpanKind(trace.SpanKindProducer),
-		trace.WithAttributes(
-			attribute.String("matrix.room_id", evt.RoomID),
-			attribute.String("matrix.event_type", evt.EventType),
-		))
-	defer span.End()
-
-	// Decided now rather than when the event was queued, since the queue can hold it for a while
-	if evt.target.cancelled() {
-		log.Debug().Ctx(ctx).Str("room_id", evt.RoomID).Str("event_type", evt.EventType).Msg("Dropping an outbound event that is no longer wanted")
-		span.SetAttributes(attribute.Bool("siikabot.matrix.dropped", true))
-		if evt.done != nil {
-			evt.done <- ""
-		}
-		return
-	}
-
-	startTime := time.Now()
-	metrics.SetMatrixOutboundQueueDepth(len(outboundEvents))
-
-	roomId := id.RoomID(evt.RoomID)
-	evtType := event.NewEventType(evt.EventType)
-
-	// Placed now too, for the same reason: whether it goes out as a reply depends on what has been
-	// posted since the message it answers, which can change while it waits
-	message := evt.content()
-	var evtContent any = message
-	if evt.target != nil {
-		asReply := message.RelatesTo.GetNonFallbackReplyTo() != ""
-		span.SetAttributes(attribute.Bool("siikabot.matrix.as_reply", asReply))
-		log.Debug().Ctx(ctx).
-			Str("room_id", evt.RoomID).
-			Str("thread_root_id", evt.target.ThreadRootID).
-			Str("in_reply_to", evt.target.InReplyTo).
-			Bool("as_reply", asReply).
-			Msg("Placing an outbound message")
-	}
-
-encryptionLoop:
-	for {
-		isEncrypted, err := stateStore.IsEncrypted(ctx, roomId)
-
-		if err != nil {
-			log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to check if room is encrypted")
-			if !evt.RetryOnFailure {
-				recordSendOutcome(span, constants.MatrixSendFailedEncryption)
-				return
-			}
-			time.Sleep(100 * time.Millisecond)
-			continue encryptionLoop
-		}
-
-		if isEncrypted {
-			encrypted, err := olmMachine.EncryptMegolmEvent(ctx, roomId, evtType, evtContent)
-			// These three errors mean we have to make a new Megolm session
-			if err == crypto.SessionExpired || err == crypto.SessionNotShared || err == crypto.NoGroupSession {
-				members, err := stateStore.GetRoomMembers(ctx, roomId)
-				if err != nil {
-					log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to get room members")
-					if !evt.RetryOnFailure {
-						recordSendOutcome(span, constants.MatrixSendFailedEncryption)
-						return
-					}
-					time.Sleep(100 * time.Millisecond)
-					continue encryptionLoop
-				}
-				err = olmMachine.ShareGroupSession(ctx, roomId, members)
-				if err != nil {
-					log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to share group session")
-					if !evt.RetryOnFailure {
-						recordSendOutcome(span, constants.MatrixSendFailedEncryption)
-						return
-					}
-					time.Sleep(100 * time.Millisecond)
-					continue encryptionLoop
-				}
-				encrypted, err = olmMachine.EncryptMegolmEvent(ctx, roomId, evtType, evtContent)
-			}
-
-			if err != nil {
-				log.Error().Ctx(ctx).Err(err).Str("room_id", evt.RoomID).Msg("Failed to encrypt message")
-				if !evt.RetryOnFailure {
-					recordSendOutcome(span, constants.MatrixSendFailedEncryption)
-					return
-				}
-				time.Sleep(100 * time.Millisecond)
-				continue encryptionLoop
-			}
-			evtType = event.EventEncrypted
-			evtContent = encrypted
-			break
-		} else {
-			break
-		}
-	}
-
-retry:
-	for {
-		resp, err := client.SendMessageEvent(ctx, roomId, evtType, evtContent)
-		if err == nil {
-			// Recorded before anyone learns the message is out, so that the next message placed
-			// sees it even before its copy comes back through sync
-			recordLatest(evt.target.timeline(evt.RoomID), resp.EventID.String())
-			if evt.done != nil {
-				evt.done <- string(resp.EventID)
-			}
-			recordSendOutcome(span, constants.MatrixSendSuccess)
-			metrics.RecordMatrixMessageLatency(time.Since(startTime).Seconds())
-			break // Success, break the retry loop
-		}
-		var httpErr httpError
-		httpError, isHttpError := err.(mautrix.HTTPError)
-		if !isHttpError {
-			log.Error().Ctx(ctx).Err(err).Msg("Failed to parse error response of unexpected type")
-			recordSendOutcome(span, constants.MatrixSendFailedSend)
-			evt.done <- ""
-			break
-		}
-		if jsonErr := json.Unmarshal([]byte(httpError.ResponseBody), &httpErr); jsonErr != nil {
-			log.Error().Ctx(ctx).Err(jsonErr).Msg("Failed to parse error response")
-		}
-
-		switch e := httpErr.Errcode; e {
-		case "M_LIMIT_EXCEEDED":
-			metrics.RecordMatrixRateLimitRetry()
-			time.Sleep(time.Duration(httpErr.RetryAfterMs) * time.Millisecond)
-		case "M_FORBIDDEN":
-			log.Error().
-				Ctx(ctx).
-				Err(err).
-				Str("room_id", evt.RoomID).
-				Str("error_code", e).
-				Msg("Failed to send message due to permissions")
-			recordSendOutcome(span, constants.MatrixSendFailedForbidden)
-			evt.done <- ""
-			break retry
-		default:
-			log.Error().
-				Ctx(ctx).
-				Err(err).
-				Str("room_id", evt.RoomID).
-				Str("error_code", e).
-				Msg("Failed to send message")
-		}
-		if !evt.RetryOnFailure {
-			recordSendOutcome(span, constants.MatrixSendFailedSend)
-			evt.done <- ""
-			break
-		}
-	}
 }
 
 func Init(ctx context.Context, handleEvent func(ctx context.Context, evt *event.Event, wasEncrypted bool)) error {

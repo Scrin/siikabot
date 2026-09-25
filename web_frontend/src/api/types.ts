@@ -116,6 +116,8 @@ export interface ChatUsageEntry {
   cache_hit_rate: number
   tool_iterations: number
   failures: number
+  /** Turns that ended without an answer because the message was a reply that needed none */
+  silent: number
 }
 
 export interface ChatUsageResponse {

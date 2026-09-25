@@ -34,6 +34,8 @@ type ChatUsageSummary struct {
 	CachedPromptTokens int    `db:"cached_prompt_tokens"`
 	ToolIterations     int    `db:"tool_iterations"`
 	Failures           int    `db:"failures"`
+	// Silent are the turns that ended without an answer because none was needed
+	Silent int `db:"silent"`
 }
 
 // SaveChatUsage records the cost of a completed chat turn
@@ -65,7 +67,8 @@ func GetChatUsageSummary(ctx context.Context, since time.Time) ([]ChatUsageSumma
 			COALESCE(SUM(completion_tokens), 0)::int AS completion_tokens,
 			COALESCE(SUM(cached_prompt_tokens), 0)::int AS cached_prompt_tokens,
 			COALESCE(SUM(tool_iterations), 0)::int AS tool_iterations,
-			COUNT(*) FILTER (WHERE outcome <> 'ok')::int AS failures
+			COUNT(*) FILTER (WHERE outcome NOT IN ('ok', 'silent'))::int AS failures,
+			COUNT(*) FILTER (WHERE outcome = 'silent')::int AS silent
 		FROM chat_usage
 		WHERE timestamp >= $1
 		GROUP BY room_id, model

@@ -25,6 +25,7 @@ function entry(overrides: Partial<ChatUsageEntry> = {}): ChatUsageEntry {
     cache_hit_rate: 0.75,
     tool_iterations: 20,
     failures: 0,
+    silent: 0,
     ...overrides,
   }
 }
@@ -133,6 +134,19 @@ describe('ChatUsageCard', () => {
       render(<ChatUsageCard />)
       expect(screen.getByText('3 failed')).toBeInTheDocument()
     })
+
+    // A turn the bot stayed silent on went as it should, so it isn't shown as a failure
+    it('should show silent turns apart from failures', () => {
+      mockUsage({
+        isLoading: false,
+        data: response({ entries: [entry({ silent: 2 })] }),
+        error: null,
+      })
+
+      render(<ChatUsageCard />)
+      expect(screen.getByText('2 silent')).not.toHaveClass('text-rose-400')
+      expect(screen.queryByText(/failed/)).not.toBeInTheDocument()
+    })
   })
 
   describe('cache hit rate', () => {
@@ -189,6 +203,28 @@ describe('ChatUsageCard', () => {
 
       render(<ChatUsageCard />)
       expect(screen.getByText('1 failed turn')).toBeInTheDocument()
+    })
+
+    it('should count the silent turns and say what they are', () => {
+      mockUsage({
+        isLoading: false,
+        data: response({ totals: entry({ model: 'all', silent: 1 }) }),
+        error: null,
+      })
+
+      render(<ChatUsageCard />)
+      expect(screen.getByText('1 silent turn (replies that needed no answer)')).toBeInTheDocument()
+    })
+
+    it('should say nothing about silent turns when there were none', () => {
+      mockUsage({
+        isLoading: false,
+        data: response({ totals: entry({ model: 'all', silent: 0 }) }),
+        error: null,
+      })
+
+      render(<ChatUsageCard />)
+      expect(screen.queryByText(/silent turn/)).not.toBeInTheDocument()
     })
 
     it('should say nothing about failures when there were none', () => {
