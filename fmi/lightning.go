@@ -22,11 +22,13 @@ func Lightning(ctx context.Context, place Place, since time.Time, radiusKm float
 	format := func(f float64) string { return strconv.FormatFloat(f, 'f', 4, 64) }
 
 	// The strike data ignores the place and distance parameters, so the query narrows it down with a bounding
-	// box, and the exact distance is checked here
+	// box, and the exact distance is checked here. Without an end time, FMI answers with only the 24 hours after
+	// the start.
 	rows, err := timeseries(ctx, url.Values{
 		"producer":  {"flash"},
 		"bbox":      {format(minLon) + "," + format(minLat) + "," + format(maxLon) + "," + format(maxLat)},
 		"starttime": {isoTime(since)},
+		"endtime":   {isoTime(time.Now())},
 		"param":     {"utctime,latitude,longitude,peak_current"},
 	})
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Scrin/siikabot/aigateway"
+	"github.com/Scrin/siikabot/webfetch"
 	"github.com/rs/zerolog/log"
 )
 
@@ -159,6 +160,8 @@ func formatWikipediaSummary(summary *wikipediaSummaryResponse, lang string) stri
 
 	var sb strings.Builder
 
+	// Anyone can edit Wikipedia
+	sb.WriteString(webfetch.UntrustedLabel + "\n\n")
 	sb.WriteString(fmt.Sprintf("**%s**\n\n", summary.Title))
 
 	if summary.Description != "" {

@@ -140,7 +140,7 @@ func TestSystemPromptIsTheSameForEverySpeaker(t *testing.T) {
 	if !strings.HasPrefix(prompt, "You are Siikabot (@siikabot:example.com), a helpful Matrix bot.") {
 		t.Errorf("the system prompt opens with %q", prompt[:60])
 	}
-	for _, want := range []string{"## Conversation format", "## What you can see", "## This room"} {
+	for _, want := range []string{"## Conversation format", "## What you can see", "## The web", "## This room"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the system prompt lacks %q", want)
 		}

@@ -99,6 +99,10 @@ The referenced events are resolved once, in `bot/reply.go`, and handed to the ch
   - Most data comes from FMI's timeseries API (JSON), warnings from its CAP feed, and only the wave buoys from WFS
   - FMI's open data is CC BY 4.0, so anything that presents it credits FMI
 
+- **`./webfetch/`** - Reads web pages for the `get_web_content` LLM tool (`llmtools/web.go`): fetches a URL, extracts the main content with readability, reads PDFs, and judges how the fetch went (`judge.go`), so a failure reaches the model as an explanation rather than an error
+  - `guard.go` refuses connections to addresses that aren't public, checked when connecting so redirects are covered
+  - `provenance.go` holds the provenance rule: once a chat turn holds a result from a tool that isn't `Trusted`, it may fetch only URLs that appeared in the room's messages or in tool results. The chat turn passes the rule to the tools through the context
+
 - **`./api/`** - HTTP API endpoints
   - `healthcheck.go` - `/api/healthcheck` endpoint
 
@@ -253,6 +257,7 @@ LLM tools allow the AI chatbot to call functions. Follow this pattern:
 5. **Fetch data** from external APIs or database
 6. **Format response** as markdown string for the LLM
 7. **Use caching** where appropriate (with mutex for thread safety)
+8. **Set `Trusted: true`** only if the tool's results can't hold text a stranger wrote: they come from the bot, the room, or a source the bot relies on, such as FMI. A tool that returns web pages, search results, issues or other text from the internet stays untrusted, and labels that text with `webfetch.UntrustedLabel`
 
 #### Example Tool Structure
 

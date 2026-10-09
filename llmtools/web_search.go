@@ -12,6 +12,7 @@ import (
 	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/tracing"
+	"github.com/Scrin/siikabot/webfetch"
 	"github.com/rs/zerolog/log"
 )
 
@@ -19,8 +20,9 @@ import (
 var WebSearchToolDefinition = aigateway.ToolDefinition{
 	Type: "function",
 	Function: aigateway.FunctionSchema{
-		Name:        "web_search",
-		Description: "Search the web for information using Google. Use this tool to find up-to-date information about topics, definitions, or facts that you might not know about.",
+		Name: "web_search",
+		Description: "Search the web for information using Google. Use this tool to find up-to-date information about topics, definitions, or facts that you might not know about, " +
+			"and to find the URL of a page instead of guessing it. Snippets are short and can be out of date: when the details matter, read the page with get_web_content.",
 		Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -220,6 +222,7 @@ func formatSearchResults(data *GoogleSearchResponse, query string) string {
 	var result strings.Builder
 
 	result.WriteString(fmt.Sprintf("## Web Search Results for: %s\n\n", query))
+	result.WriteString(webfetch.UntrustedLabel + "\n\n")
 
 	// Add search information
 	if data.SearchInformation.TotalResults != "0" {

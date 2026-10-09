@@ -40,6 +40,7 @@ var MemoryToolDefinition = aigateway.ToolDefinition{
 		}`),
 	},
 	Handler: handleMemoryToolCall,
+	Trusted: true,
 }
 
 // handleMemoryToolCall handles memory tool calls

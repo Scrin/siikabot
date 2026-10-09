@@ -34,6 +34,7 @@ var FingridToolDefinition = aigateway.ToolDefinition{
 	},
 	Handler:          handleFingridToolCall,
 	ValidityDuration: 3 * time.Minute,
+	Trusted:          true,
 }
 
 // handleFingridToolCall handles Fingrid power production statistics tool calls

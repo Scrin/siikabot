@@ -103,7 +103,7 @@ func nearestSeaLevelStation(ctx context.Context, place Place) (*SeaLevelStation,
 	rows, err := timeseries(ctx, url.Values{
 		"producer":         {"opendata_mareograph"},
 		"latlon":           {latLon(place.Lat, place.Lon)},
-		"numberofstations": {"1"},
+		"numberofstations": {strconv.Itoa(stationCandidates)},
 		"starttime":        {"-3h"},
 		"param":            {"stationname,distance,lat,lon,utctime," + strings.Join(params, ",")},
 	})

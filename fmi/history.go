@@ -18,6 +18,17 @@ type DailyWeather struct {
 	SnowDepth     *float64  // cm, 0 when there's no snow
 }
 
+// statisticsComplete is how long after a day starts, in UTC, FMI has all of its statistics. The mean temperature
+// is over the day itself, and the lowest and highest over the 24 hours to 18 UTC, but the precipitation sum runs
+// to 06 UTC the next day, and FMI publishes it a little after that.
+const statisticsComplete = 32 * time.Hour
+
+// Complete reports whether FMI has finished a day's statistics. Until then, it publishes them as they stand, so
+// they can still change, and the precipitation is missing.
+func (d DailyWeather) Complete(now time.Time) bool {
+	return !now.Before(d.Date.Add(statisticsComplete))
+}
+
 // MonthlyNormal is a month's 1991–2020 average at a station
 type MonthlyNormal struct {
 	MeanTemperature *float64 // °C
@@ -34,9 +45,9 @@ type History struct {
 
 var dailyParams = []string{"ta_p1d_avg", "ta_pt24h_min", "ta_pt24h_max", "pra_pt24h_sum", "snd_p1d_instant"}
 
-// WeatherHistory returns daily statistics from first to last, inclusive, at the station nearest a place, with
-// the station's 1991–2020 monthly normals to compare them against. FMI publishes a day's statistics a while
-// after it ends, so the latest days can be missing.
+// WeatherHistory returns daily statistics from first to last, inclusive, at the station nearest a place that has
+// them, with the station's 1991–2020 monthly normals to compare them against. FMI publishes a day's statistics a
+// while after it ends, so the latest days can be missing.
 func WeatherHistory(ctx context.Context, place Place, first, last time.Time) (History, error) {
 	firstDay := time.Date(first.Year(), first.Month(), first.Day(), 0, 0, 0, 0, time.UTC)
 	lastDay := time.Date(last.Year(), last.Month(), last.Day(), 0, 0, 0, 0, time.UTC)
@@ -45,7 +56,7 @@ func WeatherHistory(ctx context.Context, place Place, first, last time.Time) (Hi
 	rows, err := timeseries(ctx, url.Values{
 		"producer":         {"opendata_daily"},
 		"latlon":           {latLon(place.Lat, place.Lon)},
-		"numberofstations": {"1"},
+		"numberofstations": {strconv.Itoa(stationCandidates)},
 		"starttime":        {isoTime(firstDay)},
 		"endtime":          {isoTime(lastDay)},
 		"timestep":         {"data"},
@@ -57,20 +68,14 @@ func WeatherHistory(ctx context.Context, place Place, first, last time.Time) (Hi
 
 	history := History{Normals: map[time.Month]MonthlyNormal{}}
 	fmisid := 0
-	for _, r := range rows {
-		at, ok := r.utcTime()
+	hasStatistics := func(r row) bool {
+		_, ok := dailyWeather(r)
+		return ok
+	}
+	for _, r := range nearestReporting(rows, hasStatistics) {
+		day, ok := dailyWeather(r)
 		if !ok {
-			continue
-		}
-		day := DailyWeather{
-			Date:          at,
-			Mean:          optional(r, "ta_p1d_avg"),
-			Min:           optional(r, "ta_pt24h_min"),
-			Max:           optional(r, "ta_pt24h_max"),
-			Precipitation: noneAsZero(optional(r, "pra_pt24h_sum")),
-			SnowDepth:     noneAsZero(optional(r, "snd_p1d_instant")),
-		}
-		if day.Mean == nil && day.Min == nil && day.Max == nil && day.Precipitation == nil {
+			// No statistics for the day yet
 			continue
 		}
 		if history.Station == "" {
@@ -91,6 +96,26 @@ func WeatherHistory(ctx context.Context, place Place, first, last time.Time) (Hi
 		// Without normals the history is still worth returning; the error was logged where it happened
 	}
 	return history, nil
+}
+
+// dailyWeather reads a day's statistics from a row. ok is false when the row has none of them yet.
+func dailyWeather(r row) (DailyWeather, bool) {
+	at, ok := r.utcTime()
+	if !ok {
+		return DailyWeather{}, false
+	}
+	day := DailyWeather{
+		Date:          at,
+		Mean:          optional(r, "ta_p1d_avg"),
+		Min:           optional(r, "ta_pt24h_min"),
+		Max:           optional(r, "ta_pt24h_max"),
+		Precipitation: noneAsZero(optional(r, "pra_pt24h_sum")),
+		SnowDepth:     noneAsZero(optional(r, "snd_p1d_instant")),
+	}
+	if day.Mean == nil && day.Min == nil && day.Max == nil && day.Precipitation == nil {
+		return DailyWeather{}, false
+	}
+	return day, true
 }
 
 // monthlyNormals returns a station's 1991–2020 monthly normals. FMI stores them as the twelve months of 1991.

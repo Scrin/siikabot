@@ -50,6 +50,7 @@ var RoomMembersToolDefinition = aigateway.ToolDefinition{
 	Handler: handleRoomMembersToolCall,
 	// Membership changes, but slowly
 	ValidityDuration: time.Hour,
+	Trusted:          true,
 }
 
 func handleRoomMembersToolCall(ctx context.Context, arguments string) (string, error) {

@@ -694,11 +694,16 @@ func replayableToolResponse(msg db.ChatMessage, now time.Time) string {
 	toolName := *msg.ToolName
 
 	if msg.Expiry != nil && !msg.Expiry.After(now) {
-		return fmt.Sprintf("[expired: the %s result from this point in the conversation is no longer "+
-			"current, call the tool again if you need this information]", toolName)
+		return expiredToolResult(toolName)
 	}
 
 	return truncateForReplay(msg.Message, toolName)
+}
+
+// expiredToolResult is the marker that replaces an expired tool result in the history
+func expiredToolResult(toolName string) string {
+	return fmt.Sprintf("[expired: the %s result from this point in the conversation is no longer "+
+		"current, call the tool again if you need this information]", toolName)
 }
 
 // truncateForReplay shortens an oversized tool result, cutting on a rune boundary so the result
@@ -846,9 +851,10 @@ func processToolCalls(
 			ToolCalls: currentResp.Choices[0].Message.ToolCalls,
 		})
 
-		// Process tool calls
+		// Process tool calls, with the fetches they make held to what the turn has seen so far
 		toolStart := time.Now()
-		toolResponses, err := toolRegistry.HandleToolCallsIndividually(toolCtx, currentResp.Choices[0].Message.ToolCalls)
+		toolResponses, err := toolRegistry.HandleToolCallsIndividually(withFetchProvenance(toolCtx, messages, tools),
+			currentResp.Choices[0].Message.ToolCalls)
 		stats.recordToolExecution(currentResp.Choices[0].Message.ToolCalls, time.Since(toolStart))
 		if err != nil {
 			log.Error().Ctx(ctx).Err(err).
@@ -953,9 +959,10 @@ func processToolCalls(
 			ToolCalls: currentResp.Choices[0].Message.ToolCalls,
 		})
 
-		// Process the final tool calls
+		// Process the final tool calls, with the fetches they make held to what the turn has seen so far
 		toolStart := time.Now()
-		toolResponses, err := toolRegistry.HandleToolCallsIndividually(toolCtx, currentResp.Choices[0].Message.ToolCalls)
+		toolResponses, err := toolRegistry.HandleToolCallsIndividually(withFetchProvenance(toolCtx, messages, tools),
+			currentResp.Choices[0].Message.ToolCalls)
 		stats.recordToolExecution(currentResp.Choices[0].Message.ToolCalls, time.Since(toolStart))
 		if err != nil {
 			// The calls are already in the messages, and a request with calls nobody answered

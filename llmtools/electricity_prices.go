@@ -34,6 +34,7 @@ var ElectricityPricesToolDefinition = aigateway.ToolDefinition{
 	},
 	Handler:          handleElectricityPricesToolCall,
 	ValidityDuration: 1 * time.Hour,
+	Trusted:          true,
 }
 
 // Cache for electricity prices

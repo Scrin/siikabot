@@ -17,7 +17,7 @@ func TestWeatherHistory(t *testing.T) {
 	]`, `[
 		{"utctime":"19910901T000000","tap1m":12.3,"prap1m":55.7},
 		{"utctime":"19911001T000000","tap1m":6.6,"prap1m":73.3}
-	]`)
+	]`, "fmisid=100971")
 
 	history, err := WeatherHistory(context.Background(), helsinki,
 		time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC))
@@ -43,9 +43,48 @@ func TestWeatherHistory(t *testing.T) {
 	assertFloat(t, "October precipitation", october.Precipitation, 73.3)
 }
 
+// A station that reports nothing but empty days is passed over for the nearest one with statistics, and the
+// days of the stations farther away aren't mixed in
+func TestWeatherHistoryUsesTheNearestStationWithStatistics(t *testing.T) {
+	fakeHistory(t, `[
+		{"stationname":"Helsinki Kaisaniemi","fmisid":100971,"distance":0.8,"utctime":"20261005T000000","ta_p1d_avg":null,"ta_pt24h_min":null,"ta_pt24h_max":null,"pra_pt24h_sum":null,"snd_p1d_instant":3.0},
+		{"stationname":"Helsinki Kumpula","fmisid":101004,"distance":3.9,"utctime":"20261005T000000","ta_p1d_avg":12.1,"ta_pt24h_min":9.0,"ta_pt24h_max":14.2,"pra_pt24h_sum":2.5,"snd_p1d_instant":-1.0},
+		{"stationname":"Helsinki Kumpula","fmisid":101004,"distance":3.9,"utctime":"20261006T000000","ta_p1d_avg":13.8,"ta_pt24h_min":12.0,"ta_pt24h_max":15.9,"pra_pt24h_sum":-1.0,"snd_p1d_instant":-1.0},
+		{"stationname":"Vantaa Helsinki-Vantaa airport","fmisid":100968,"distance":15.2,"utctime":"20261005T000000","ta_p1d_avg":11.0,"ta_pt24h_min":7.1,"ta_pt24h_max":13.9,"pra_pt24h_sum":3.1,"snd_p1d_instant":-1.0}
+	]`, `[]`, "fmisid=101004")
+
+	history, err := WeatherHistory(context.Background(), helsinki,
+		time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 6, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("WeatherHistory() error = %v", err)
+	}
+	if history.Station != "Helsinki Kumpula" || len(history.Days) != 2 {
+		t.Fatalf("history at %s with %d days, want Helsinki Kumpula with 2", history.Station, len(history.Days))
+	}
+	assertFloat(t, "first day's mean", history.Days[0].Mean, 12.1)
+}
+
+// A day's statistics are finished once its precipitation sum, which runs to 06 UTC the next day, is published
+func TestDailyWeatherComplete(t *testing.T) {
+	day := DailyWeather{Date: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)}
+	for _, test := range []struct {
+		now  time.Time
+		want bool
+	}{
+		{time.Date(2026, 10, 9, 21, 40, 0, 0, time.UTC), false},
+		{time.Date(2026, 10, 10, 6, 30, 0, 0, time.UTC), false},
+		{time.Date(2026, 10, 10, 8, 0, 0, 0, time.UTC), true},
+		{time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC), true},
+	} {
+		if got := day.Complete(test.now); got != test.want {
+			t.Errorf("Complete(%s) = %v, want %v", test.now.Format(time.RFC3339), got, test.want)
+		}
+	}
+}
+
 // fakeHistory answers the daily statistics query with one response and the normals query, which asks for 1991,
 // with another
-func fakeHistory(t *testing.T, daily, normals string) {
+func fakeHistory(t *testing.T, daily, normals, normalsStation string) {
 	t.Helper()
 	fakeFMIFunc(t, func(producer, query string) response {
 		if producer != "opendata_daily" {
@@ -53,8 +92,8 @@ func fakeHistory(t *testing.T, daily, normals string) {
 			return response{status: 500}
 		}
 		if strings.Contains(query, "1991") {
-			if !strings.Contains(query, "fmisid=100971") {
-				t.Errorf("normals asked without the station: %s", query)
+			if !strings.Contains(query, normalsStation) {
+				t.Errorf("normals asked without %s: %s", normalsStation, query)
 			}
 			return ok(normals)
 		}
@@ -94,6 +133,10 @@ func TestLightning(t *testing.T) {
 	if query.Get("starttime") != "2026-10-09T00:00:00Z" {
 		t.Errorf("starttime = %q", query.Get("starttime"))
 	}
+	// Without an end time, FMI answers with only the first 24 hours
+	if end, err := time.Parse(time.RFC3339, query.Get("endtime")); err != nil || time.Since(end) > time.Minute {
+		t.Errorf("endtime = %q, want now", query.Get("endtime"))
+	}
 }
 
 func TestHeatingDegreeDays(t *testing.T) {
@@ -122,5 +165,28 @@ func TestHeatingDegreeDays(t *testing.T) {
 	}
 	if got := report.Months[1]; !got.Month.Equal(thisMonth) || got.DegreeDays != 15 || got.Days != 1 {
 		t.Errorf("this month = %+v", got)
+	}
+}
+
+// Only the nearest station that has heating degree days is summed, not every station in FMI's answer
+func TestHeatingDegreeDaysUsesTheNearestStation(t *testing.T) {
+	day := time.Date(time.Now().UTC().Year(), time.Now().UTC().Month(), 1, 0, 0, 0, 0, time.UTC).Format(timeseriesTimeLayout)
+	requests := fakeFMI(t, map[string]response{
+		"lammitystarve": ok(fmt.Sprintf(`[
+			{"stationname":"Vantaa Helsinki-Vantaa airport","distance":15.2,"utctime":"%[1]s","astepaivaluku":11.0},
+			{"stationname":"Helsinki Kaisaniemi","distance":0.8,"utctime":"%[1]s","astepaivaluku":null},
+			{"stationname":"Helsinki Kumpula","distance":3.9,"utctime":"%[1]s","astepaivaluku":9.5}
+		]`, day)),
+	})
+
+	report, err := HeatingDegreeDays(context.Background(), helsinki, 12)
+	if err != nil {
+		t.Fatalf("HeatingDegreeDays() error = %v", err)
+	}
+	if report.Station != "Helsinki Kumpula" || len(report.Months) != 1 || report.Months[0].DegreeDays != 9.5 {
+		t.Errorf("report = %+v, want Helsinki Kumpula's 9.5 alone", report)
+	}
+	if got := requests.list()[0].URL.Query().Get("numberofstations"); got != "10" {
+		t.Errorf("asked for %s stations, want 10", got)
 	}
 }

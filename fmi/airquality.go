@@ -55,7 +55,7 @@ func AirQualityNow(ctx context.Context, place Place) ([]AirQualityStation, error
 		rows, err := timeseries(ctx, url.Values{
 			"producer":         {producer},
 			"latlon":           {latLon(place.Lat, place.Lon)},
-			"numberofstations": {strconv.Itoa(stationsNearby)},
+			"numberofstations": {strconv.Itoa(stationCandidates)},
 			"starttime":        {"-3h"},
 			"param":            {"stationname,distance,utctime," + strings.Join(airQualityParams, ",")},
 		})
@@ -81,15 +81,25 @@ func AirQualityNow(ctx context.Context, place Place) ([]AirQualityStation, error
 			DistanceKm:  s.distance,
 			Time:        s.time,
 			Index:       s.value("aqindex_pt1h_avg"),
-			PM25:        s.value("pm25_pt1h_avg"),
-			PM10:        s.value("pm10_pt1h_avg"),
-			NO2:         s.value("no2_pt1h_avg"),
-			O3:          s.value("o3_pt1h_avg"),
-			BlackCarbon: s.value("qbcpm25_pt1h_avg"),
-			SO2:         s.value("so2_pt1h_avg"),
+			PM25:        atLeastZero(s.value("pm25_pt1h_avg")),
+			PM10:        atLeastZero(s.value("pm10_pt1h_avg")),
+			NO2:         atLeastZero(s.value("no2_pt1h_avg")),
+			O3:          atLeastZero(s.value("o3_pt1h_avg")),
+			BlackCarbon: atLeastZero(s.value("qbcpm25_pt1h_avg")),
+			SO2:         atLeastZero(s.value("so2_pt1h_avg")),
 		})
 	}
 	return result, nil
+}
+
+// atLeastZero turns a concentration below zero into zero. Analysers measuring next to nothing report noise around
+// zero, such as -0.1 µg/m³, and FMI passes it on as it is.
+func atLeastZero(v *float64) *float64 {
+	if v != nil && *v < 0 {
+		zero := 0.0
+		return &zero
+	}
+	return v
 }
 
 // pollutantLimits are the upper limits of the first four classes of FMI's air quality index, in µg/m³. A

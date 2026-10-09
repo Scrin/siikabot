@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Scrin/siikabot/aigateway"
+	"github.com/Scrin/siikabot/webfetch"
 	"github.com/rs/zerolog/log"
 )
 
@@ -241,6 +242,9 @@ func formatGitHubIssueData(issue *GitHubIssue, comments []GitHubComment) string 
 	if issue.PullRequest != nil {
 		issueType = "Pull Request"
 	}
+
+	// Anyone can open an issue or comment on one
+	sb.WriteString(webfetch.UntrustedLabel + "\n\n")
 
 	// Basic information
 	sb.WriteString(fmt.Sprintf("## %s #%d: %s\n", issueType, issue.Number, issue.Title))

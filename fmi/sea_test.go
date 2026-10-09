@@ -104,3 +104,24 @@ func TestSeaKeepsWhatSucceeded(t *testing.T) {
 		t.Errorf("report = %+v", report)
 	}
 }
+
+// The nearest sea level station without readings is passed over for the nearest one with them
+func TestNearestSeaLevelStationSkipsSilentStations(t *testing.T) {
+	requests := fakeFMI(t, map[string]response{
+		"opendata_mareograph": ok(`[
+			{"stationname":"Silent","distance":1.2,"lat":60.15,"lon":24.96,"utctime":"20261009T190000","wlev_pt1s_instant":null,"tw":null},
+			{"stationname":"Helsinki Kaivopuisto","distance":2.1,"lat":60.15,"lon":24.96,"utctime":"20261009T190000","wlev_pt1s_instant":423.0,"tw":12.3}
+		]`),
+	})
+
+	station, err := nearestSeaLevelStation(context.Background(), helsinki)
+	if err != nil {
+		t.Fatalf("nearestSeaLevelStation() error = %v", err)
+	}
+	if station == nil || station.Station != "Helsinki Kaivopuisto" {
+		t.Errorf("station = %+v, want Helsinki Kaivopuisto", station)
+	}
+	if got := requests.list()[0].URL.Query().Get("numberofstations"); got != "10" {
+		t.Errorf("asked for %s stations, want 10", got)
+	}
+}

@@ -23,6 +23,11 @@ type ToolDefinition struct {
 	Function         FunctionSchema `json:"function"`
 	Handler          ToolHandler    `json:"-"`
 	ValidityDuration time.Duration  `json:"-"`
+	// Trusted says the tool's results hold nothing a stranger could have written: they come from the bot,
+	// the room, or a source the bot relies on, such as FMI. A result from any other tool can carry
+	// instructions planted for the model, and once a chat turn holds one, the turn may fetch only URLs it
+	// has seen (webfetch.Provenance).
+	Trusted bool `json:"-"`
 }
 
 // FunctionSchema defines the schema for a function tool

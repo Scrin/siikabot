@@ -78,6 +78,7 @@ var FMIToolDefinition = aigateway.ToolDefinition{
 	},
 	Handler:          handleFMIToolCall,
 	ValidityDuration: 15 * time.Minute,
+	Trusted:          true,
 }
 
 func init() {
@@ -91,15 +92,17 @@ const fmiCredit = "Source: Finnish Meteorological Institute open data (CC BY 4.0
 
 // Limits on the time spans the tool accepts. A request outside them is clamped rather than refused.
 const (
-	fmiDefaultForecastDays   = 2
-	fmiMaxForecastDays       = 10
-	fmiMaxHistoryDays        = 31
-	fmiMaxLightningDays      = 7
-	fmiLightningRadiusKm     = 50
-	fmiForecastHours         = 48 // for air quality and the sea
-	fmiHeatingMonths         = 12
-	fmiDetailedForecastHours = 24
-	fmiDetailedForecastStep  = 3
+	fmiDefaultForecastDays = 2
+	fmiMaxForecastDays     = 10
+	fmiMaxHistoryDays      = 31
+	fmiMaxLightningDays    = 7
+	fmiLightningRadiusKm   = 50
+	fmiForecastHours       = 48 // for air quality and the sea
+	fmiHeatingMonths       = 12
+	// The forecast goes in blocks of fmiDetailedForecastStep hours up to the first midnight at least
+	// fmiDetailedForecastMinHours away, and a line a day after it
+	fmiDetailedForecastMinHours = 12
+	fmiDetailedForecastStep     = 3
 )
 
 // fmiRequest is a validated tool call, with defaults applied
@@ -234,7 +237,9 @@ func fmiData(ctx context.Context, request fmiRequest, loc *time.Location) (strin
 		return formatFMICurrent(place, observations, loc), nil
 
 	case fmiKindForecast:
-		hours, err := fmi.Forecast(ctx, place, request.days*24)
+		// The forecast reaches the given number of days ahead, and on to the end of that day, so the last day
+		// isn't summed up from part of it
+		hours, err := fmi.Forecast(ctx, place, endOfDay(time.Now().Add(time.Duration(request.days)*24*time.Hour), loc))
 		if err != nil {
 			return "", err
 		}
@@ -274,7 +279,7 @@ func fmiData(ctx context.Context, request fmiRequest, loc *time.Location) (strin
 		if err != nil {
 			return "", err
 		}
-		return formatFMIHistory(place, history, first, request.date, loc), nil
+		return formatFMIHistory(place, history, first, request.date, time.Now(), loc), nil
 
 	case fmiKindLightning:
 		since := time.Now().Add(-time.Duration(request.days) * 24 * time.Hour)
@@ -299,6 +304,12 @@ func fmiData(ctx context.Context, request fmiRequest, loc *time.Location) (strin
 // hourMinute writes a time as "Sat 14:05" in the bot's time zone
 func hourMinute(t time.Time, loc *time.Location) string {
 	return t.In(loc).Format("Mon 15:04")
+}
+
+// endOfDay returns the midnight that ends the day a time falls on, in the bot's time zone
+func endOfDay(t time.Time, loc *time.Location) time.Time {
+	local := t.In(loc)
+	return time.Date(local.Year(), local.Month(), local.Day()+1, 0, 0, 0, 0, loc)
 }
 
 // dayLabel writes a date as "Mon 5 Oct"
@@ -381,48 +392,29 @@ func formatFMIForecast(place fmi.Place, hours []fmi.ForecastHour, warnings []fmi
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "**FMI forecast for %s**\n", place.Label())
 
-	detailed := hours[:min(fmiDetailedForecastHours, len(hours))]
-	fmt.Fprintf(&sb, "Next %d hours:\n", len(detailed))
-	for i := 0; i < len(detailed); i += fmiDetailedForecastStep {
-		h := detailed[i]
-		var parts []string
-		if h.Temperature != nil {
-			parts = append(parts, fmt.Sprintf("%.0f °C", *h.Temperature))
+	// The blocks end at a midnight, so every hour of the forecast is in a block or in one of the days after them
+	split := len(hours)
+	for i, h := range hours {
+		if h.Time.In(loc).Hour() == 0 && h.Time.Sub(hours[0].Time) >= fmiDetailedForecastMinHours*time.Hour {
+			split = i
+			break
 		}
-		if h.Weather != "" {
-			parts = append(parts, h.Weather)
+	}
+	detailed, days := hours[:split], groupByDay(hours[split:], loc)
+	// A day the forecast ends partway through would be summed up from part of it
+	if n := len(days); n > 0 {
+		if lastDay := days[n-1]; lastDay[len(lastDay)-1].Time.In(loc).Hour() != 23 {
+			days = days[:n-1]
 		}
-		if h.WindSpeed != nil {
-			wind := fmt.Sprintf("wind %.0f m/s", *h.WindSpeed)
-			if h.WindDirection != nil {
-				wind += " from " + compass(*h.WindDirection)
-			}
-			if h.WindGust != nil {
-				wind += fmt.Sprintf(" (gusts %.0f)", *h.WindGust)
-			}
-			parts = append(parts, wind)
-		}
-		if h.Precipitation != nil {
-			precipitation := fmt.Sprintf("precipitation %.1f mm/h", *h.Precipitation)
-			if h.PrecipitationProbability != nil {
-				precipitation += fmt.Sprintf(" (probability %.0f %%)", *h.PrecipitationProbability)
-			}
-			parts = append(parts, precipitation)
-		}
-		if h.ThunderProbability != nil && *h.ThunderProbability >= 5 {
-			parts = append(parts, fmt.Sprintf("thunder probability %.0f %%", *h.ThunderProbability))
-		}
-		fmt.Fprintf(&sb, "- %s: %s\n", hourMinute(h.Time, loc), strings.Join(parts, ", "))
 	}
 
-	// The detailed hours already cover the rest of the day they end in
-	rest := hours[len(detailed):]
-	for len(rest) > 0 && rest[0].Time.In(loc).Hour() != 0 {
-		rest = rest[1:]
+	fmt.Fprintf(&sb, "Next %d hours, in %d-hour blocks:\n", len(detailed), fmiDetailedForecastStep)
+	for i := 0; i < len(detailed); i += fmiDetailedForecastStep {
+		sb.WriteString("- " + summariseForecastBlock(detailed[i:min(i+fmiDetailedForecastStep, len(detailed))], loc) + "\n")
 	}
-	if len(rest) > 0 {
+	if len(days) > 0 {
 		sb.WriteString("Following days:\n")
-		for _, day := range groupByDay(rest, loc) {
+		for _, day := range days {
 			sb.WriteString("- " + summariseForecastDay(day, loc) + "\n")
 		}
 	}
@@ -457,22 +449,73 @@ func sameDay(a, b time.Time, loc *time.Location) bool {
 	return a.Year() == b.Year() && a.YearDay() == b.YearDay()
 }
 
-// summariseForecastDay sums up a day of forecast hours on one line
-func summariseForecastDay(hours []fmi.ForecastHour, loc *time.Location) string {
-	minTemp, maxTemp := math.Inf(1), math.Inf(-1)
-	var precipitation, maxProbability, maxWind, maxGust, maxThunder float64
-	weather := ""
+// forecastSpan is what a run of consecutive forecast hours adds up to
+type forecastSpan struct {
+	minTemp, maxTemp float64 // infinite when no hour had a temperature
+	precipitation    float64 // mm, the sum of the hours
+	maxProbability   float64 // %
+	maxWind          float64 // m/s
+	windDirection    *float64
+	maxGust          float64 // m/s
+	maxThunder       float64 // %
+}
+
+func spanOf(hours []fmi.ForecastHour) forecastSpan {
+	span := forecastSpan{minTemp: math.Inf(1), maxTemp: math.Inf(-1)}
 	for _, h := range hours {
 		if h.Temperature != nil {
-			minTemp, maxTemp = math.Min(minTemp, *h.Temperature), math.Max(maxTemp, *h.Temperature)
+			span.minTemp, span.maxTemp = math.Min(span.minTemp, *h.Temperature), math.Max(span.maxTemp, *h.Temperature)
 		}
 		if h.Precipitation != nil {
-			precipitation += *h.Precipitation
+			span.precipitation += *h.Precipitation
 		}
-		maxProbability = maxOf(maxProbability, h.PrecipitationProbability)
-		maxWind = maxOf(maxWind, h.WindSpeed)
-		maxGust = maxOf(maxGust, h.WindGust)
-		maxThunder = maxOf(maxThunder, h.ThunderProbability)
+		if h.WindSpeed != nil && (span.windDirection == nil || *h.WindSpeed > span.maxWind) {
+			span.maxWind, span.windDirection = *h.WindSpeed, h.WindDirection
+		}
+		span.maxProbability = maxOf(span.maxProbability, h.PrecipitationProbability)
+		span.maxGust = maxOf(span.maxGust, h.WindGust)
+		span.maxThunder = maxOf(span.maxThunder, h.ThunderProbability)
+	}
+	return span
+}
+
+// temperatures writes the span's temperatures, as one value when its range rounds to one
+func (s forecastSpan) temperatures() string {
+	low, high := math.Round(s.minTemp), math.Round(s.maxTemp)
+	if low == high {
+		return fmt.Sprintf("%.0f °C", low)
+	}
+	return fmt.Sprintf("%.0f to %.0f °C", low, high)
+}
+
+// summariseForecastBlock sums up a few consecutive forecast hours on one line, with the weather at their start
+func summariseForecastBlock(hours []fmi.ForecastHour, loc *time.Location) string {
+	span := spanOf(hours)
+	var parts []string
+	if !math.IsInf(span.minTemp, 0) {
+		parts = append(parts, span.temperatures())
+	}
+	if weather := hours[0].Weather; weather != "" {
+		parts = append(parts, weather)
+	}
+	wind := fmt.Sprintf("wind up to %.0f m/s", span.maxWind)
+	if span.windDirection != nil {
+		wind += " from " + compass(*span.windDirection)
+	}
+	parts = append(parts, wind+fmt.Sprintf(" (gusts %.0f)", span.maxGust))
+	parts = append(parts, fmt.Sprintf("precipitation %.1f mm (probability up to %.0f %%)", span.precipitation, span.maxProbability))
+	if span.maxThunder >= 5 {
+		parts = append(parts, fmt.Sprintf("thunder probability up to %.0f %%", span.maxThunder))
+	}
+	end := hours[len(hours)-1].Time.Add(time.Hour)
+	return hourMinute(hours[0].Time, loc) + "–" + end.In(loc).Format("15:04") + ": " + strings.Join(parts, ", ")
+}
+
+// summariseForecastDay sums up a day of forecast hours on one line
+func summariseForecastDay(hours []fmi.ForecastHour, loc *time.Location) string {
+	span := spanOf(hours)
+	weather := ""
+	for _, h := range hours {
 		// The weather at midday describes the day best
 		if local := h.Time.In(loc); h.Weather != "" && (weather == "" || local.Hour() <= 12) {
 			weather = h.Weather
@@ -480,16 +523,16 @@ func summariseForecastDay(hours []fmi.ForecastHour, loc *time.Location) string {
 	}
 
 	parts := []string{}
-	if !math.IsInf(minTemp, 0) {
-		parts = append(parts, fmt.Sprintf("%.0f to %.0f °C", minTemp, maxTemp))
+	if !math.IsInf(span.minTemp, 0) {
+		parts = append(parts, span.temperatures())
 	}
 	if weather != "" {
 		parts = append(parts, weather+" at midday")
 	}
-	parts = append(parts, fmt.Sprintf("precipitation %.1f mm (probability up to %.0f %%)", precipitation, maxProbability))
-	parts = append(parts, fmt.Sprintf("wind up to %.0f m/s, gusts up to %.0f m/s", maxWind, maxGust))
-	if maxThunder >= 5 {
-		parts = append(parts, fmt.Sprintf("thunder probability up to %.0f %%", maxThunder))
+	parts = append(parts, fmt.Sprintf("precipitation %.1f mm (probability up to %.0f %%)", span.precipitation, span.maxProbability))
+	parts = append(parts, fmt.Sprintf("wind up to %.0f m/s, gusts up to %.0f m/s", span.maxWind, span.maxGust))
+	if span.maxThunder >= 5 {
+		parts = append(parts, fmt.Sprintf("thunder probability up to %.0f %%", span.maxThunder))
 	}
 	return dayLabel(hours[0].Time, loc) + ": " + strings.Join(parts, ", ")
 }
@@ -649,10 +692,12 @@ func formatFMISun(place fmi.Place, date time.Time, sun fmi.SunDay, loc *time.Loc
 	case sun.MidnightSun:
 		return header + "The sun doesn't set: midnight sun."
 	}
-	length := sun.DayLength.Round(time.Minute)
+	// The times are rounded to the minute, and the day length is worked out from the rounded times, so that the
+	// three add up
+	sunrise, sunset := sun.Sunrise.In(loc).Round(time.Minute), sun.Sunset.In(loc).Round(time.Minute)
+	length := sunset.Sub(sunrise)
 	return header + fmt.Sprintf("Sunrise %s, sunset %s, day length %d h %d min.",
-		sun.Sunrise.In(loc).Format("15:04"), sun.Sunset.In(loc).Format("15:04"),
-		int(length.Hours()), int(length.Minutes())%60)
+		sunrise.Format("15:04"), sunset.Format("15:04"), int(length.Hours()), int(length.Minutes())%60)
 }
 
 func formatFMISea(place fmi.Place, report fmi.SeaReport, loc *time.Location) string {
@@ -721,7 +766,7 @@ func formatFMISea(place fmi.Place, report fmi.SeaReport, loc *time.Location) str
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-func formatFMIHistory(place fmi.Place, history fmi.History, first, last time.Time, loc *time.Location) string {
+func formatFMIHistory(place fmi.Place, history fmi.History, first, last, now time.Time, loc *time.Location) string {
 	if len(history.Days) == 0 {
 		return fmt.Sprintf("FMI has no daily statistics near %s for %s to %s yet.", place.Label(),
 			first.Format("2006-01-02"), last.Format("2006-01-02"))
@@ -731,7 +776,15 @@ func formatFMIHistory(place fmi.Place, history fmi.History, first, last time.Tim
 	fmt.Fprintf(&sb, "**Daily weather at %s from %s** (FMI daily statistics)\n",
 		distanceNote(history.Station, history.DistanceKm), place.Label())
 	var months []time.Month
+	var unfinished []string
 	for _, d := range history.Days {
+		// The date is the day the statistics are for, stamped at midnight UTC, so it's read in UTC
+		date := d.Date.UTC().Format("Mon 2 Jan")
+		complete := d.Complete(now)
+		if !complete {
+			unfinished = append(unfinished, date)
+		}
+
 		var parts []string
 		if d.Mean != nil {
 			mean := fmt.Sprintf("mean %.1f °C", *d.Mean)
@@ -742,12 +795,15 @@ func formatFMIHistory(place fmi.Place, history fmi.History, first, last time.Tim
 		} else if d.Min != nil && d.Max != nil {
 			parts = append(parts, fmt.Sprintf("%.1f to %.1f °C", *d.Min, *d.Max))
 		}
-		if d.Precipitation != nil {
-			if *d.Precipitation > 0 {
-				parts = append(parts, fmt.Sprintf("precipitation %.1f mm", *d.Precipitation))
-			} else {
-				parts = append(parts, "no precipitation")
-			}
+		switch {
+		case d.Precipitation != nil && *d.Precipitation > 0:
+			parts = append(parts, fmt.Sprintf("precipitation %.1f mm", *d.Precipitation))
+		case d.Precipitation != nil:
+			parts = append(parts, "no precipitation")
+		case complete:
+			parts = append(parts, "precipitation not reported")
+		default:
+			parts = append(parts, "precipitation not reported yet")
 		}
 		if d.SnowDepth != nil {
 			if *d.SnowDepth > 0 {
@@ -756,8 +812,7 @@ func formatFMIHistory(place fmi.Place, history fmi.History, first, last time.Tim
 				parts = append(parts, "no snow")
 			}
 		}
-		// The date is the day the statistics are for, stamped at midnight UTC, so it's read in UTC
-		fmt.Fprintf(&sb, "- %s: %s\n", d.Date.UTC().Format("Mon 2 Jan"), strings.Join(parts, ", "))
+		fmt.Fprintf(&sb, "- %s: %s\n", date, strings.Join(parts, ", "))
 		if month := d.Date.UTC().Month(); !slices.Contains(months, month) {
 			months = append(months, month)
 		}
@@ -765,6 +820,10 @@ func formatFMIHistory(place fmi.Place, history fmi.History, first, last time.Tim
 
 	if lastDay := history.Days[len(history.Days)-1].Date.UTC(); lastDay.Before(time.Date(last.Year(), last.Month(), last.Day(), 0, 0, 0, 0, time.UTC)) {
 		fmt.Fprintf(&sb, "No statistics yet for the days after %s.\n", lastDay.Format("Mon 2 Jan"))
+	}
+	if len(unfinished) > 0 {
+		fmt.Fprintf(&sb, "FMI hasn't finished the statistics for %s yet: they can still change until the next morning, "+
+			"when the day's precipitation sum is added.\n", strings.Join(unfinished, " and "))
 	}
 
 	for _, month := range months {

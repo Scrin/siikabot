@@ -250,8 +250,32 @@ func TestCurrentWeather(t *testing.T) {
 	}
 
 	query := requests.list()[0].URL.Query()
-	if query.Get("latlon") != "60.16952,24.93545" || query.Get("numberofstations") != "3" || query.Get("precision") != "double" {
+	if query.Get("latlon") != "60.16952,24.93545" || query.Get("numberofstations") != "10" || query.Get("precision") != "double" {
 		t.Errorf("unexpected query: %s", query.Encode())
+	}
+}
+
+// FMI's answer has the stations that reported, out of the ones asked for, and the nearest three are kept
+func TestCurrentWeatherKeepsTheNearestThree(t *testing.T) {
+	fakeFMI(t, map[string]response{
+		"opendata": ok(`[
+			{"stationname":"Far","distance":14.0,"utctime":"20261009T194000","temperature":9.0},
+			{"stationname":"Nearest","distance":7.5,"utctime":"20261009T194000","temperature":9.5},
+			{"stationname":"Farthest","distance":20.2,"utctime":"20261009T194000","temperature":8.0},
+			{"stationname":"Near","distance":12.4,"utctime":"20261009T194000","temperature":9.9}
+		]`),
+	})
+
+	observations, err := CurrentWeather(context.Background(), helsinki)
+	if err != nil {
+		t.Fatalf("CurrentWeather() error = %v", err)
+	}
+	var names []string
+	for _, o := range observations {
+		names = append(names, o.Station)
+	}
+	if strings.Join(names, ", ") != "Nearest, Near, Far" {
+		t.Errorf("stations = %v, want the nearest three, nearest first", names)
 	}
 }
 
@@ -263,7 +287,8 @@ func TestForecast(t *testing.T) {
 		]`),
 	})
 
-	forecast, err := Forecast(context.Background(), helsinki, 24)
+	until := time.Now().UTC().Truncate(time.Hour).Add(25 * time.Hour)
+	forecast, err := Forecast(context.Background(), helsinki, until)
 	if err != nil {
 		t.Fatalf("Forecast() error = %v", err)
 	}
@@ -282,9 +307,10 @@ func TestForecast(t *testing.T) {
 	if query.Get("lang") != "en" || !strings.Contains(query.Get("param"), "smartsymboltext") {
 		t.Errorf("unexpected query: %s", query.Encode())
 	}
+	// From the next whole hour, which hasn't started yet, to the hour before until, since FMI includes the end
 	start, _ := time.Parse(time.RFC3339, query.Get("starttime"))
 	end, _ := time.Parse(time.RFC3339, query.Get("endtime"))
-	if end.Sub(start) != 24*time.Hour {
-		t.Errorf("asked for %v of forecast, want 24h", end.Sub(start))
+	if wait := time.Until(start); wait <= 0 || wait > time.Hour || start.Minute() != 0 || !end.Equal(until.Add(-time.Hour)) {
+		t.Errorf("asked for %s to %s, want the next whole hour to %s", start, end, until.Add(-time.Hour))
 	}
 }

@@ -131,33 +131,84 @@ func TestFormatFMICurrent(t *testing.T) {
 	}
 }
 
+// forecastHours makes a forecast of count hours from start, with the temperature cycling from 5 to 10 °C, a
+// shower of 1.2 mm at 02:00 in Helsinki every night, and the strongest wind of each day at 14:00
+func forecastHours(t *testing.T, start time.Time, count int) []fmi.ForecastHour {
+	t.Helper()
+	loc := helsinkiLocation(t)
+	var hours []fmi.ForecastHour
+	for i := range count {
+		at := start.Add(time.Duration(i) * time.Hour)
+		h := fmi.ForecastHour{
+			Time: at, Temperature: ptr(float64(5 + i%6)), Weather: "overcast", WindSpeed: ptr(3), WindDirection: ptr(180),
+			WindGust: ptr(7), Precipitation: ptr(0), PrecipitationProbability: ptr(10), ThunderProbability: ptr(0),
+		}
+		switch at.In(loc).Hour() {
+		case 2:
+			h.Precipitation, h.PrecipitationProbability = ptr(1.2), ptr(70)
+		case 14:
+			h.WindSpeed, h.WindDirection, h.WindGust = ptr(6), ptr(270), ptr(11)
+		}
+		hours = append(hours, h)
+	}
+	return hours
+}
+
 func TestFormatFMIForecast(t *testing.T) {
 	loc := helsinkiLocation(t)
-	start := time.Date(2026, 10, 9, 20, 0, 0, 0, time.UTC) // 23:00 in Helsinki
-	var hours []fmi.ForecastHour
-	for i := 0; i < 48; i++ {
-		hours = append(hours, fmi.ForecastHour{
-			Time: start.Add(time.Duration(i) * time.Hour), Temperature: ptr(float64(5 + i%6)), Weather: "overcast",
-			WindSpeed: ptr(3), WindDirection: ptr(180), WindGust: ptr(7), Precipitation: ptr(0.2),
-			PrecipitationProbability: ptr(40), ThunderProbability: ptr(0),
-		})
-	}
+	// Asked at 00:55 on Saturday: from 01:00 to the end of Monday
+	hours := forecastHours(t, time.Date(2026, 10, 9, 22, 0, 0, 0, time.UTC), 71)
 
 	got := formatFMIForecast(testPlace, hours, nil, true, loc)
-	assertContains(t, got, "Next 24 hours:", "- Fri 23:00: 5 °C, overcast, wind 3 m/s from S (gusts 7)", "Following days:",
+	assertContains(t, got,
+		"Next 23 hours, in 3-hour blocks:\n- Sat 01:00–04:00: 5 to 7 °C, overcast, wind up to 3 m/s from S (gusts 7), precipitation 1.2 mm (probability up to 70 %)\n",
+		// The block with the day's strongest wind shows it, and the last block runs to midnight
+		"- Sat 13:00–16:00: 5 to 7 °C, overcast, wind up to 6 m/s from W (gusts 11),",
+		"- Sat 22:00–00:00:",
+		"Following days:\n- Sun 11 Oct: 5 to 10 °C, overcast at midday, precipitation 1.2 mm (probability up to 70 %)",
+		"- Mon 12 Oct:",
 		"Active warnings: none.")
-	if lines := strings.Count(got, " °C, overcast,"); lines != 8 {
-		t.Errorf("got %d detailed lines, want one every 3 hours for 24 hours", lines)
-	}
-	// The detailed hours end Sat 22:00, so the daily lines start on Sunday, not with Saturday's last hour
-	if strings.Contains(got, "- Sat 10 Oct:") || !strings.Contains(got, "- Sun 11 Oct: 5 to 10 °C, overcast at midday") {
-		t.Errorf("daily lines don't start at the first full day:\n%s", got)
+	if blocks := strings.Count(got, "–"); blocks != 8 {
+		t.Errorf("got %d blocks, want 8 covering Saturday from 01:00:\n%s", blocks, got)
 	}
 
 	warnings := []fmi.Warning{{Headline: "Yellow wind warning for land areas: Uusimaa", Description: "Gusts up to 20 m/s."}}
 	assertContains(t, formatFMIForecast(testPlace, hours, warnings, true, loc),
 		"Active warnings:\n- Yellow wind warning for land areas: Uusimaa. Gusts up to 20 m/s.")
 	assertContains(t, formatFMIForecast(testPlace, hours, nil, false, loc), "Active warnings: couldn't be checked.")
+}
+
+// Asked in the afternoon, the blocks run on to the midnight after tomorrow, so no hours fall between the blocks
+// and the days
+func TestFormatFMIForecastFromTheAfternoon(t *testing.T) {
+	loc := helsinkiLocation(t)
+	// From 15:00 on Saturday to the end of Monday
+	hours := forecastHours(t, time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC), 57)
+
+	got := formatFMIForecast(testPlace, hours, nil, true, loc)
+	assertContains(t, got, "Next 33 hours, in 3-hour blocks:\n- Sat 15:00–18:00:", "- Sun 21:00–00:00:",
+		"Following days:\n- Mon 12 Oct:")
+	if strings.Contains(got, "- Sun 11 Oct:") {
+		t.Errorf("Sunday is both in blocks and on a line of its own:\n%s", got)
+	}
+}
+
+// A day the forecast ends partway through isn't summed up, and a range that rounds to one temperature is shown as
+// that one
+func TestFormatFMIForecastDays(t *testing.T) {
+	loc := helsinkiLocation(t)
+	hours := forecastHours(t, time.Date(2026, 10, 9, 22, 0, 0, 0, time.UTC), 48) // ends at 00:00 on Monday
+	for i := range hours {
+		if hours[i].Time.In(loc).Day() == 11 {
+			hours[i].Temperature = ptr(6.6 + float64(i%2)*0.8)
+		}
+	}
+
+	got := formatFMIForecast(testPlace, hours, nil, true, loc)
+	assertContains(t, got, "- Sun 11 Oct: 7 °C, overcast at midday")
+	if strings.Contains(got, "Mon 12 Oct") {
+		t.Errorf("Monday is summed up from its first hour:\n%s", got)
+	}
 }
 
 func TestFormatFMIWarnings(t *testing.T) {
@@ -216,6 +267,11 @@ func TestFormatFMISun(t *testing.T) {
 	got := formatFMISun(fmi.Place{Name: "Rovaniemi"}, date, sun, loc)
 	assertContains(t, got, "Sun in Rovaniemi on Mon 12 Oct 2026", "Sunrise 08:04, sunset 18:01, day length 9 h 57 min.")
 
+	// Sunset at 18:29:55 is shown as 18:30, and the day length agrees with the times shown
+	espoo := fmi.SunDay{Sunrise: time.Date(2026, 10, 9, 4, 46, 4, 0, time.UTC), Sunset: time.Date(2026, 10, 9, 15, 29, 55, 0, time.UTC)}
+	espoo.DayLength = espoo.Sunset.Sub(espoo.Sunrise)
+	assertContains(t, formatFMISun(fmi.Place{Name: "Espoo"}, date, espoo, loc), "Sunrise 07:46, sunset 18:30, day length 10 h 44 min.")
+
 	assertContains(t, formatFMISun(fmi.Place{Name: "Utsjoki"}, date, fmi.SunDay{PolarNight: true}, loc), "polar night")
 	assertContains(t, formatFMISun(fmi.Place{Name: "Utsjoki"}, date, fmi.SunDay{MidnightSun: true}, loc), "midnight sun")
 }
@@ -256,16 +312,41 @@ func TestFormatFMIHistory(t *testing.T) {
 	}
 	first := time.Date(2026, 10, 5, 0, 0, 0, 0, loc)
 	last := time.Date(2026, 10, 7, 0, 0, 0, 0, loc)
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
 
-	got := formatFMIHistory(testPlace, history, first, last, loc)
+	got := formatFMIHistory(testPlace, history, first, last, now, loc)
 	assertContains(t, got,
 		"Daily weather at Helsinki Kaisaniemi, 0.8 km away from Helsinki**",
 		"- Mon 5 Oct: mean 12.6 °C (9.4 to 14.7), precipitation 2.8 mm, no snow",
 		"- Tue 6 Oct: mean 14.1 °C (12.5 to 16.0), no precipitation, no snow",
 		"No statistics yet for the days after Tue 6 Oct.",
 		"1991-2020 normal for October at this station: mean 6.6 °C, 73 mm of precipitation in the month")
+	if strings.Contains(got, "hasn't finished") {
+		t.Errorf("finished days are said to be unfinished:\n%s", got)
+	}
 
-	assertContains(t, formatFMIHistory(testPlace, fmi.History{}, first, last, loc), "no daily statistics")
+	assertContains(t, formatFMIHistory(testPlace, fmi.History{}, first, last, now, loc), "no daily statistics")
+}
+
+// Just after midnight, yesterday's statistics are still being added to, and its precipitation comes the next
+// morning
+func TestFormatFMIHistoryUnfinishedDay(t *testing.T) {
+	loc := helsinkiLocation(t)
+	history := fmi.History{
+		Station: "Espoo Tapiola", DistanceKm: 8.1,
+		Days: []fmi.DailyWeather{
+			{Date: time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC), Mean: ptr(10.1), Min: ptr(8.0), Max: ptr(14.4), SnowDepth: ptr(0)},
+			{Date: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC), Mean: ptr(11.0), Min: ptr(8.7), Max: ptr(13.1), SnowDepth: ptr(0)},
+		},
+	}
+	first := time.Date(2026, 10, 7, 0, 0, 0, 0, loc)
+	last := time.Date(2026, 10, 9, 0, 0, 0, 0, loc)
+	now := time.Date(2026, 10, 9, 21, 40, 0, 0, time.UTC) // 00:40 on Saturday in Helsinki
+
+	assertContains(t, formatFMIHistory(testPlace, history, first, last, now, loc),
+		"- Wed 7 Oct: mean 10.1 °C (8.0 to 14.4), precipitation not reported, no snow",
+		"- Fri 9 Oct: mean 11.0 °C (8.7 to 13.1), precipitation not reported yet, no snow",
+		"FMI hasn't finished the statistics for Fri 9 Oct yet: they can still change until the next morning")
 }
 
 func TestFormatFMILightning(t *testing.T) {

@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -171,6 +172,34 @@ func latLon(lat, lon float64) string {
 // isoTime formats a time for the APIs' starttime and endtime parameters
 func isoTime(t time.Time) string {
 	return t.UTC().Format(time.RFC3339)
+}
+
+// stationCandidates is how many of the nearest stations a query asks FMI for. FMI counts stations that no longer
+// report, and then leaves them out of its answer, so asking for exactly as many as are wanted can return fewer,
+// or none: the three air quality stations nearest Espoo's centre are all out of use. The nearest ones that
+// reported are picked from the answer.
+const stationCandidates = 10
+
+// nearestReporting returns the rows of the nearest station that has a row reports accepts, from a response with
+// rows for several stations, or nil when no station has one
+func nearestReporting(rows []row, reports func(row) bool) []row {
+	nearest, nearestDistance := "", math.Inf(1)
+	for _, r := range rows {
+		if distance, _ := r.number("distance"); distance < nearestDistance && reports(r) {
+			nearest, nearestDistance = r.text("stationname"), distance
+		}
+	}
+	if nearest == "" {
+		return nil
+	}
+
+	var picked []row
+	for _, r := range rows {
+		if r.text("stationname") == nearest {
+			picked = append(picked, r)
+		}
+	}
+	return picked
 }
 
 // stationValues is the latest value of each parameter at one station

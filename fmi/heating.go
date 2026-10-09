@@ -3,6 +3,7 @@ package fmi
 import (
 	"context"
 	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -20,8 +21,8 @@ type HeatingReport struct {
 	Months     []HeatingMonth // oldest first
 }
 
-// HeatingDegreeDays returns the monthly heating degree days (lämmitystarveluku) at the station nearest a place,
-// for the given number of months up to and including the current one. FMI publishes them per day, and they're
+// HeatingDegreeDays returns the monthly heating degree days (lämmitystarveluku) at the station nearest a place
+// that has them, for the given number of months up to and including the current one. FMI publishes them per day, and they're
 // summed here by month.
 func HeatingDegreeDays(ctx context.Context, place Place, months int) (HeatingReport, error) {
 	now := time.Now().UTC()
@@ -30,7 +31,7 @@ func HeatingDegreeDays(ctx context.Context, place Place, months int) (HeatingRep
 	rows, err := timeseries(ctx, url.Values{
 		"producer":         {"lammitystarve"},
 		"latlon":           {latLon(place.Lat, place.Lon)},
-		"numberofstations": {"1"},
+		"numberofstations": {strconv.Itoa(stationCandidates)},
 		"starttime":        {isoTime(firstMonth)},
 		"endtime":          {isoTime(now)},
 		"timestep":         {"data"},
@@ -42,7 +43,11 @@ func HeatingDegreeDays(ctx context.Context, place Place, months int) (HeatingRep
 
 	report := HeatingReport{}
 	byMonth := map[time.Time]*HeatingMonth{}
-	for _, r := range rows {
+	hasDegreeDays := func(r row) bool {
+		_, ok := r.number("astepaivaluku")
+		return ok
+	}
+	for _, r := range nearestReporting(rows, hasDegreeDays) {
 		at, timeOK := r.utcTime()
 		value, valueOK := r.number("astepaivaluku")
 		if !timeOK || !valueOK {

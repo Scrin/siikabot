@@ -31,8 +31,8 @@ var observationParams = []string{
 	"totalcloudcover", "visibility", "snowdepth", "pressure",
 }
 
-// stationsNearby is how many stations a query for observations asks for. Not every station measures everything,
-// so the nearest few together give a fuller picture than the nearest one alone.
+// stationsNearby is how many stations observations come from. Not every station measures everything, so the
+// nearest few together give a fuller picture than the nearest one alone.
 const stationsNearby = 3
 
 // CurrentWeather returns the latest observations at the stations nearest a place, nearest first
@@ -40,7 +40,7 @@ func CurrentWeather(ctx context.Context, place Place) ([]Observation, error) {
 	rows, err := timeseries(ctx, url.Values{
 		"producer":         {"opendata"},
 		"latlon":           {latLon(place.Lat, place.Lon)},
-		"numberofstations": {strconv.Itoa(stationsNearby)},
+		"numberofstations": {strconv.Itoa(stationCandidates)},
 		"starttime":        {"-1h"},
 		"param":            {"stationname,distance,utctime," + strings.Join(observationParams, ",")},
 	})
@@ -49,6 +49,9 @@ func CurrentWeather(ctx context.Context, place Place) ([]Observation, error) {
 	}
 
 	stations := latestPerStation(rows, observationParams)
+	if len(stations) > stationsNearby {
+		stations = stations[:stationsNearby]
+	}
 	observations := make([]Observation, 0, len(stations))
 	for _, s := range stations {
 		observations = append(observations, Observation{
@@ -93,17 +96,20 @@ type ForecastHour struct {
 	Weather                  string   // FMI's description, such as "mostly cloudy"
 }
 
-// Forecast returns FMI's official forecast for a place, hour by hour from the current hour. It's the forecast
-// FMI's meteorologists edit and FMI's own website and app show, and it reaches about ten days ahead.
-func Forecast(ctx context.Context, place Place, hours int) ([]ForecastHour, error) {
-	start := time.Now().UTC().Truncate(time.Hour)
+// Forecast returns FMI's official forecast for a place, hour by hour from the next whole hour up to, but not
+// including, until. It's the forecast FMI's meteorologists edit and FMI's own website and app show, and it
+// reaches about ten days ahead. The current hour is left out: part of it has gone by, and the observations tell
+// how it is now.
+func Forecast(ctx context.Context, place Place, until time.Time) ([]ForecastHour, error) {
+	start := time.Now().UTC().Truncate(time.Hour).Add(time.Hour)
 	rows, err := timeseries(ctx, url.Values{
 		"producer":  {"pal_skandinavia"},
 		"latlon":    {latLon(place.Lat, place.Lon)},
 		"starttime": {isoTime(start)},
-		"endtime":   {isoTime(start.Add(time.Duration(hours) * time.Hour))},
-		"timestep":  {"60"},
-		"lang":      {"en"},
+		// FMI includes the end time in its answer
+		"endtime":  {isoTime(until.Add(-time.Hour))},
+		"timestep": {"60"},
+		"lang":     {"en"},
 		"param": {"utctime,temperature,windspeedms,winddirection,hourlymaximumgust,precipitation1h,pop," +
 			"probabilitythunderstorm,totalcloudcover,smartsymboltext"},
 	})

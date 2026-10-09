@@ -33,7 +33,7 @@ func TestAirQualityIndex(t *testing.T) {
 }
 
 func TestAirQualityNowCombinesNetworks(t *testing.T) {
-	fakeFMI(t, map[string]response{
+	requests := fakeFMI(t, map[string]response{
 		"airquality_urban": ok(`[
 			{"stationname":"Tampere Kaleva","distance":0.8,"utctime":"20261009T180000","aqindex_pt1h_avg":1.0,"pm25_pt1h_avg":0.3,"o3_pt1h_avg":46.0},
 			{"stationname":"Tampere Kaleva","distance":0.8,"utctime":"20261009T190000","aqindex_pt1h_avg":2.0,"pm25_pt1h_avg":null,"o3_pt1h_avg":47.0},
@@ -61,6 +61,28 @@ func TestAirQualityNowCombinesNetworks(t *testing.T) {
 	if kaleva.BlackCarbon != nil {
 		t.Errorf("black carbon = %v, want nil", *kaleva.BlackCarbon)
 	}
+
+	// FMI counts stations that no longer report, so asking for only three can return none
+	for _, r := range requests.list() {
+		if got := r.URL.Query().Get("numberofstations"); got != "10" {
+			t.Errorf("%s asked for %s stations, want 10", r.URL.Query().Get("producer"), got)
+		}
+	}
+}
+
+// An analyser measuring next to nothing can report a little below zero, which is shown as zero
+func TestAirQualityNowTurnsNegativeConcentrationsToZero(t *testing.T) {
+	fakeFMI(t, map[string]response{
+		"airquality_urban": ok(`[{"stationname":"Espoo Luukki","distance":12.3,"utctime":"20261009T210000","aqindex_pt1h_avg":1.0,"so2_pt1h_avg":-0.1,"o3_pt1h_avg":19.4}]`),
+		"airquality_fmi":   ok(`[]`),
+	})
+
+	stations, err := AirQualityNow(context.Background(), Place{Name: "Espoo", Lat: 60.21, Lon: 24.65})
+	if err != nil || len(stations) != 1 {
+		t.Fatalf("AirQualityNow() = %+v, %v", stations, err)
+	}
+	assertFloat(t, "SO2", stations[0].SO2, 0)
+	assertFloat(t, "O3", stations[0].O3, 19.4)
 }
 
 func TestAirQualityNowSurvivesOneNetworkFailing(t *testing.T) {

@@ -27,6 +27,7 @@ var NewsToolDefinition = aigateway.ToolDefinition{
 	},
 	Handler:          handleNewsToolCall,
 	ValidityDuration: 15 * time.Minute,
+	Trusted:          true,
 }
 
 // handleNewsToolCall handles news headlines tool calls

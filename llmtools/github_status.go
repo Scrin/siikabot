@@ -32,6 +32,7 @@ var GitHubStatusToolDefinition = aigateway.ToolDefinition{
 	},
 	Handler:          handleGitHubStatusToolCall,
 	ValidityDuration: 5 * time.Minute,
+	Trusted:          true,
 }
 
 // GitHub Status API response types

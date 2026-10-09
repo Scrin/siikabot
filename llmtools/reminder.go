@@ -38,6 +38,7 @@ var ReminderToolDefinition = aigateway.ToolDefinition{
 			}`),
 	},
 	Handler: handleReminderToolCall,
+	Trusted: true,
 }
 
 // handleReminderToolCall handles reminder tool calls

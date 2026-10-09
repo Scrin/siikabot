@@ -38,6 +38,7 @@ var TimezoneToolDefinition = aigateway.ToolDefinition{
 	},
 	Handler:          handleTimezoneToolCall,
 	ValidityDuration: 1 * time.Minute,
+	Trusted:          true,
 }
 
 // cityToTimezone maps common city names to IANA timezone identifiers

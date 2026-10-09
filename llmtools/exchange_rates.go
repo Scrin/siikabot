@@ -34,6 +34,7 @@ var ExchangeRatesToolDefinition = aigateway.ToolDefinition{
 	},
 	Handler:          handleExchangeRatesToolCall,
 	ValidityDuration: 1 * time.Hour,
+	Trusted:          true,
 }
 
 // ECB XML response structures
