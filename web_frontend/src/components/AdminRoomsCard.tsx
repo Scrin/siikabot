@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { useAdminRooms, useAdminRoomMembers } from '../api/queries'
+import { useAdminRooms, useAdminRoomMembers, useAdminRoomStats } from '../api/queries'
 import type { RoomResponse } from '../api/types'
 import { AnimatedList } from './ui/AnimatedList'
 import { RoomMemberLabel } from './RoomMemberLabel'
+import { RoomStats } from './RoomStats'
 import { useReducedMotion } from '../hooks/useReducedMotion'
 
 export function AdminRoomsCard() {
@@ -77,6 +78,13 @@ function AdminRoomItem({ room }: AdminRoomItemProps) {
     room.room_id,
     isExpanded
   )
+  const [statsDays, setStatsDays] = useState(30)
+  const {
+    data: stats,
+    isLoading: statsLoading,
+    isPlaceholderData: statsRefreshing,
+    error: statsError,
+  } = useAdminRoomStats(room.room_id, statsDays, isExpanded)
 
   const members = membersData?.members ?? []
 
@@ -110,7 +118,7 @@ function AdminRoomItem({ room }: AdminRoomItemProps) {
         </motion.span>
       </div>
 
-      {/* Expanded content - members list */}
+      {/* Expanded content - stats and members list */}
       <AnimatePresence>
         {isExpanded && (
           <motion.div
@@ -121,7 +129,15 @@ function AdminRoomItem({ room }: AdminRoomItemProps) {
             className="overflow-hidden border-t border-slate-700/50"
           >
             <div className="space-y-2 p-4">
-              <div className="mb-2 font-mono text-xs text-slate-500">
+              <RoomStats
+                stats={stats}
+                isLoading={statsLoading}
+                isRefreshing={statsRefreshing}
+                error={statsError}
+                days={statsDays}
+                onDaysChange={setStatsDays}
+              />
+              <div className="mt-4 mb-2 border-t border-slate-700/50 pt-4 font-mono text-xs text-slate-500">
                 Members ({members.length})
               </div>
               {membersLoading ? (

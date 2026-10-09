@@ -51,6 +51,7 @@ func initHTTP() {
 			protectedGroup.GET("/reminders", api.RemindersHandler)
 			protectedGroup.GET("/rooms", api.RoomsHandler)
 			protectedGroup.GET("/rooms/:roomId/members", api.RoomMembersHandler)
+			protectedGroup.GET("/rooms/:roomId/stats", api.RoomStatsHandler)
 			protectedGroup.GET("/memories", api.MemoriesHandler)
 			protectedGroup.DELETE("/memories", api.DeleteAllMemoriesHandler)
 			protectedGroup.DELETE("/memories/:id", api.DeleteMemoryHandler)
@@ -61,7 +62,9 @@ func initHTTP() {
 			{
 				adminGroup.GET("/rooms", api.AdminRoomsHandler)
 				adminGroup.GET("/rooms/:roomId/members", api.AdminRoomMembersHandler)
+				adminGroup.GET("/rooms/:roomId/stats", api.AdminRoomStatsHandler)
 				adminGroup.GET("/chat-usage", api.ChatUsageHandler)
+				adminGroup.GET("/message-activity", api.MessageActivityHandler)
 			}
 		}
 	}

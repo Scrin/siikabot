@@ -12,6 +12,8 @@ import type {
   MemoriesResponse,
   DeleteAllMemoriesResponse,
   ChatUsageResponse,
+  RoomStatsResponse,
+  MessageActivityResponse,
 } from './types'
 
 const API_BASE = '/api'
@@ -335,6 +337,96 @@ export async function fetchChatUsage(token: string, days: number): Promise<ChatU
     }
     const error = await response.json().catch(() => ({ error: response.statusText }))
     throw new Error(error.error || 'Failed to fetch chat usage')
+  }
+
+  return response.json()
+}
+
+/**
+ * Fetch the message stats of a room shared with the user, with its activity over the given number
+ * of days
+ */
+export async function fetchRoomStats(
+  token: string,
+  roomId: string,
+  days: number
+): Promise<RoomStatsResponse> {
+  const response = await fetch(
+    `${API_BASE}/rooms/${encodeURIComponent(roomId)}/stats?days=${days}`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }
+  )
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    if (response.status === 403) {
+      throw new Error('Access denied to this room')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to fetch room stats')
+  }
+
+  return response.json()
+}
+
+/**
+ * Fetch the message stats of any room (admin only)
+ */
+export async function fetchAdminRoomStats(
+  token: string,
+  roomId: string,
+  days: number
+): Promise<RoomStatsResponse> {
+  const response = await fetch(
+    `${API_BASE}/admin/rooms/${encodeURIComponent(roomId)}/stats?days=${days}`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }
+  )
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    if (response.status === 403) {
+      throw new Error('Admin access required')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to fetch room stats')
+  }
+
+  return response.json()
+}
+
+/**
+ * Fetch the message activity across every room over the given number of days (admin only)
+ */
+export async function fetchMessageActivity(
+  token: string,
+  days: number
+): Promise<MessageActivityResponse> {
+  const response = await fetch(`${API_BASE}/admin/message-activity?days=${days}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    if (response.status === 403) {
+      throw new Error('Admin access required')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to fetch message activity')
   }
 
   return response.json()

@@ -4,6 +4,9 @@ import { useChatUsage } from '../api/queries'
 import type { ChatUsageEntry } from '../api/types'
 import { AnimatedList } from './ui/AnimatedList'
 import { useReducedMotion } from '../hooks/useReducedMotion'
+import { formatCount } from '../utils/format'
+import { PeriodSelector } from './PeriodSelector'
+import { Stat } from './Stat'
 
 const DAY_RANGES = [1, 7, 30] as const
 
@@ -12,24 +15,7 @@ export function ChatUsageCard() {
   const { data, isLoading, error } = useChatUsage(days)
   const prefersReducedMotion = useReducedMotion()
 
-  const rangeSelector = (
-    <div className="flex items-center gap-2">
-      <span className="font-mono text-xs text-slate-500">Period:</span>
-      {DAY_RANGES.map((range) => (
-        <button
-          key={range}
-          onClick={() => setDays(range)}
-          className={`border px-2 py-1 font-mono text-xs transition-colors duration-200 ${
-            days === range
-              ? 'border-purple-500/50 bg-purple-500/20 text-purple-300'
-              : 'border-slate-700/50 text-slate-400 hover:border-slate-600 hover:text-slate-300'
-          }`}
-        >
-          {range}d
-        </button>
-      ))}
-    </div>
-  )
+  const rangeSelector = <PeriodSelector periods={DAY_RANGES} value={days} onChange={setDays} />
 
   if (isLoading) {
     return (
@@ -127,21 +113,6 @@ function UsageTotals({ totals }: UsageTotalsProps) {
   )
 }
 
-interface StatProps {
-  label: string
-  value: string
-  tone?: string
-}
-
-function Stat({ label, value, tone = 'text-slate-200' }: StatProps) {
-  return (
-    <div>
-      <div className="font-mono text-xs tracking-wider text-slate-500 uppercase">{label}</div>
-      <div className={`font-mono text-lg ${tone}`}>{value}</div>
-    </div>
-  )
-}
-
 interface UsageItemProps {
   entry: ChatUsageEntry
 }
@@ -216,17 +187,4 @@ function cacheTone(rate: number): string {
 
 function formatPercent(rate: number): string {
   return `${Math.round(rate * 100)}%`
-}
-
-function formatCount(value: number): string {
-  if (value >= 1_000_000) {
-    return `${(value / 1_000_000).toFixed(1)}M`
-  }
-  if (value >= 10_000) {
-    return `${Math.round(value / 1000)}k`
-  }
-  if (value >= 1000) {
-    return `${(value / 1000).toFixed(1)}k`
-  }
-  return String(value)
 }

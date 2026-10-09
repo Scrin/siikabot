@@ -1,6 +1,6 @@
 // TanStack Query hooks
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import {
   fetchHealthCheck,
   fetchMetrics,
@@ -13,6 +13,9 @@ import {
   deleteMemory,
   deleteAllMemories,
   fetchChatUsage,
+  fetchRoomStats,
+  fetchAdminRoomStats,
+  fetchMessageActivity,
 } from './client'
 import { useAuth } from '../context/AuthContext'
 
@@ -29,6 +32,9 @@ export const queryKeys = {
   adminRoomMembers: (roomId: string) => ['adminRoomMembers', roomId] as const,
   memories: ['memories'] as const,
   chatUsage: (days: number) => ['chatUsage', days] as const,
+  roomStats: (roomId: string, days: number) => ['roomStats', roomId, days] as const,
+  adminRoomStats: (roomId: string, days: number) => ['adminRoomStats', roomId, days] as const,
+  messageActivity: (days: number) => ['messageActivity', days] as const,
 }
 
 /**
@@ -184,5 +190,53 @@ export function useChatUsage(days: number) {
     queryFn: () => fetchChatUsage(token!, days),
     enabled: isAuthenticated && !!token && authorizations?.admin === true,
     refetchInterval: 60000,
+  })
+}
+
+/**
+ * Hook to fetch the message stats of a room shared with the user
+ * Only fetches when enabled (room is expanded). Changing the period keeps the previous stats until
+ * the new ones arrive, so the view doesn't jump.
+ */
+export function useRoomStats(roomId: string, days: number, enabled: boolean) {
+  const { token, isAuthenticated } = useAuth()
+
+  return useQuery({
+    queryKey: queryKeys.roomStats(roomId, days),
+    queryFn: () => fetchRoomStats(token!, roomId, days),
+    enabled: enabled && isAuthenticated && !!token,
+    staleTime: 30000,
+    placeholderData: keepPreviousData,
+  })
+}
+
+/**
+ * Hook to fetch the message stats of any room (admin only)
+ * Only fetches when enabled (room is expanded)
+ */
+export function useAdminRoomStats(roomId: string, days: number, enabled: boolean) {
+  const { token, isAuthenticated, authorizations } = useAuth()
+
+  return useQuery({
+    queryKey: queryKeys.adminRoomStats(roomId, days),
+    queryFn: () => fetchAdminRoomStats(token!, roomId, days),
+    enabled: enabled && isAuthenticated && !!token && authorizations?.admin === true,
+    staleTime: 30000,
+    placeholderData: keepPreviousData,
+  })
+}
+
+/**
+ * Message activity across every room over the given number of days (admin only)
+ */
+export function useMessageActivity(days: number) {
+  const { token, isAuthenticated, authorizations } = useAuth()
+
+  return useQuery({
+    queryKey: queryKeys.messageActivity(days),
+    queryFn: () => fetchMessageActivity(token!, days),
+    enabled: isAuthenticated && !!token && authorizations?.admin === true,
+    refetchInterval: 60000,
+    placeholderData: keepPreviousData,
   })
 }

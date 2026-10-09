@@ -8,6 +8,9 @@ import {
   logout,
   fetchReminders,
   fetchRooms,
+  fetchRoomStats,
+  fetchAdminRoomStats,
+  fetchMessageActivity,
   AuthError,
 } from './client'
 
@@ -297,4 +300,66 @@ describe('API Client', () => {
     })
   })
 
+
+  describe('fetchRoomStats', () => {
+    it('should ask for the period of the room, with its ID encoded', async () => {
+      vi.mocked(fetch).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ room_id: '!room:example.com' }),
+      } as Response)
+
+      await fetchRoomStats('token', '!room:example.com', 30)
+      expect(fetch).toHaveBeenCalledWith('/api/rooms/!room%3Aexample.com/stats?days=30', {
+        headers: { Authorization: 'Bearer token' },
+      })
+    })
+
+    it('should say when the room is not shared with the user', async () => {
+      vi.mocked(fetch).mockResolvedValue({ ok: false, status: 403 } as Response)
+
+      await expect(fetchRoomStats('token', '!room:example.com', 30)).rejects.toThrow(
+        'Access denied to this room'
+      )
+    })
+
+    it('should throw AuthError on 401', async () => {
+      vi.mocked(fetch).mockResolvedValue({ ok: false, status: 401 } as Response)
+
+      await expect(fetchRoomStats('token', '!room:example.com', 30)).rejects.toThrow(AuthError)
+    })
+  })
+
+  describe('fetchAdminRoomStats', () => {
+    it('should ask the admin endpoint', async () => {
+      vi.mocked(fetch).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ room_id: '!room:example.com' }),
+      } as Response)
+
+      await fetchAdminRoomStats('token', '!room:example.com', 7)
+      expect(fetch).toHaveBeenCalledWith('/api/admin/rooms/!room%3Aexample.com/stats?days=7', {
+        headers: { Authorization: 'Bearer token' },
+      })
+    })
+  })
+
+  describe('fetchMessageActivity', () => {
+    it('should ask for the period', async () => {
+      vi.mocked(fetch).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ rooms: [] }),
+      } as Response)
+
+      await fetchMessageActivity('token', 90)
+      expect(fetch).toHaveBeenCalledWith('/api/admin/message-activity?days=90', {
+        headers: { Authorization: 'Bearer token' },
+      })
+    })
+
+    it('should say when admin access is required', async () => {
+      vi.mocked(fetch).mockResolvedValue({ ok: false, status: 403 } as Response)
+
+      await expect(fetchMessageActivity('token', 90)).rejects.toThrow('Admin access required')
+    })
+  })
 })

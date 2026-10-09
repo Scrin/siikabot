@@ -3,11 +3,13 @@ import userEvent from '@testing-library/user-event'
 import { render, screen } from '../test/test-utils'
 import { RoomsCard } from './RoomsCard'
 import * as queries from '../api/queries'
-import type { RoomMemberResponse, RoomResponse } from '../api/types'
+import type { RoomMemberResponse, RoomResponse, RoomStatsResponse } from '../api/types'
+import { roomStatsFixture } from '../test/statsFixtures'
 
 vi.mock('../api/queries', () => ({
   useRooms: vi.fn(),
   useRoomMembers: vi.fn(),
+  useRoomStats: vi.fn(),
 }))
 
 vi.mock('../hooks/useReducedMotion', () => ({
@@ -30,10 +32,20 @@ function mockMembers(members: RoomMemberResponse[]) {
   } as unknown as ReturnType<typeof queries.useRoomMembers>)
 }
 
+function mockStats(stats: RoomStatsResponse | undefined) {
+  vi.mocked(queries.useRoomStats).mockReturnValue({
+    isLoading: false,
+    isPlaceholderData: false,
+    data: stats,
+    error: null,
+  } as unknown as ReturnType<typeof queries.useRoomStats>)
+}
+
 describe('RoomsCard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockMembers([])
+    mockStats(undefined)
   })
 
   describe('loading state', () => {
@@ -118,6 +130,36 @@ describe('RoomsCard', () => {
         true,
       )
       expect(screen.getByText('No members found')).toBeInTheDocument()
+    })
+
+    it('should only fetch the stats of a room once it is expanded, for the last 30 days', async () => {
+      const user = userEvent.setup()
+      mockRooms([{ room_id: '!named:example.com', room_name: 'Siika HQ' }])
+
+      render(<RoomsCard />)
+      expect(queries.useRoomStats).toHaveBeenLastCalledWith('!named:example.com', 30, false)
+
+      await user.click(screen.getByText('Siika HQ'))
+      expect(queries.useRoomStats).toHaveBeenLastCalledWith('!named:example.com', 30, true)
+    })
+
+    it('should show the stats of a room above its members, and fetch another period when picked', async () => {
+      const user = userEvent.setup()
+      // Picking a period re-renders the expanding panel, whose height framer-motion measures with
+      // window.scrollTo, which jsdom doesn't have
+      vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+      mockRooms([{ room_id: '!named:example.com', room_name: 'Siika HQ' }])
+      mockStats(roomStatsFixture())
+
+      render(<RoomsCard />)
+      await user.click(screen.getByText('Siika HQ'))
+
+      expect(screen.getByText('Text messages per day')).toBeInTheDocument()
+      expect(screen.getByText('Most messages · all time')).toBeInTheDocument()
+      expect(screen.getByText('1,204 · 34%')).toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: '90d' }))
+      expect(queries.useRoomStats).toHaveBeenLastCalledWith('!named:example.com', 90, true)
     })
   })
 })

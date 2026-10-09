@@ -63,6 +63,9 @@ describe('React Query Hooks', () => {
       // Test function-based keys
       expect(queryKeys.roomMembers('room1')).toEqual(['roomMembers', 'room1'])
       expect(queryKeys.adminRoomMembers('room2')).toEqual(['adminRoomMembers', 'room2'])
+      expect(queryKeys.roomStats('room1', 30)).toEqual(['roomStats', 'room1', 30])
+      expect(queryKeys.adminRoomStats('room2', 7)).toEqual(['adminRoomStats', 'room2', 7])
+      expect(queryKeys.messageActivity(90)).toEqual(['messageActivity', 90])
     })
   })
 

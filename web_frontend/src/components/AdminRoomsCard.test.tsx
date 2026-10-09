@@ -3,11 +3,13 @@ import userEvent from '@testing-library/user-event'
 import { render, screen } from '../test/test-utils'
 import { AdminRoomsCard } from './AdminRoomsCard'
 import * as queries from '../api/queries'
-import type { RoomMemberResponse, RoomResponse } from '../api/types'
+import type { RoomMemberResponse, RoomResponse, RoomStatsResponse } from '../api/types'
+import { roomStatsFixture } from '../test/statsFixtures'
 
 vi.mock('../api/queries', () => ({
   useAdminRooms: vi.fn(),
   useAdminRoomMembers: vi.fn(),
+  useAdminRoomStats: vi.fn(),
 }))
 
 vi.mock('../hooks/useReducedMotion', () => ({
@@ -30,10 +32,20 @@ function mockMembers(members: RoomMemberResponse[]) {
   } as unknown as ReturnType<typeof queries.useAdminRoomMembers>)
 }
 
+function mockStats(stats: RoomStatsResponse | undefined) {
+  vi.mocked(queries.useAdminRoomStats).mockReturnValue({
+    isLoading: false,
+    isPlaceholderData: false,
+    data: stats,
+    error: null,
+  } as unknown as ReturnType<typeof queries.useAdminRoomStats>)
+}
+
 describe('AdminRoomsCard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockMembers([])
+    mockStats(undefined)
   })
 
   describe('loading state', () => {
@@ -99,6 +111,36 @@ describe('AdminRoomsCard', () => {
       expect(screen.getByText('Alice')).toBeInTheDocument()
       expect(screen.getByText('(@alice:example.com)')).toBeInTheDocument()
       expect(screen.getByText('@nameless:example.com')).toBeInTheDocument()
+    })
+
+    it('should only fetch the stats of a room once it is expanded, for the last 30 days', async () => {
+      const user = userEvent.setup()
+      mockRooms([{ room_id: '!named:example.com', room_name: 'Siika HQ' }])
+
+      render(<AdminRoomsCard />)
+      expect(queries.useAdminRoomStats).toHaveBeenLastCalledWith('!named:example.com', 30, false)
+
+      await user.click(screen.getByText('Siika HQ'))
+      expect(queries.useAdminRoomStats).toHaveBeenLastCalledWith('!named:example.com', 30, true)
+    })
+
+    it('should show the stats of a room above its members, and fetch another period when picked', async () => {
+      const user = userEvent.setup()
+      // Picking a period re-renders the expanding panel, whose height framer-motion measures with
+      // window.scrollTo, which jsdom doesn't have
+      vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+      mockRooms([{ room_id: '!named:example.com', room_name: 'Siika HQ' }])
+      mockStats(roomStatsFixture())
+
+      render(<AdminRoomsCard />)
+      await user.click(screen.getByText('Siika HQ'))
+
+      expect(screen.getByText('Text messages per day')).toBeInTheDocument()
+      expect(screen.getByText('Most messages · all time')).toBeInTheDocument()
+      expect(screen.getByText('1,204 · 34%')).toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: '90d' }))
+      expect(queries.useAdminRoomStats).toHaveBeenLastCalledWith('!named:example.com', 90, true)
     })
   })
 })

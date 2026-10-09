@@ -41,6 +41,16 @@ func statDate(t time.Time, loc *time.Location) time.Time {
 	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC)
 }
 
+// StatDayStart is the moment a stat date begins: midnight in the bot's time zone on that date. It
+// lines up a period of stat dates with records kept by timestamp.
+func StatDayStart(date time.Time) time.Time {
+	return statDayStart(date, statLocation())
+}
+
+func statDayStart(date time.Time, loc *time.Location) time.Time {
+	return time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
+}
+
 func UpdateRoomDailyStats(ctx context.Context, roomID, messageText string) error {
 	wordCount := countWords(messageText)
 	charCount := countCharacters(messageText)
@@ -95,6 +105,39 @@ func GetFirstRoomStatDate(ctx context.Context, roomID string) (*time.Time, error
 	err := pool.QueryRow(ctx, "SELECT MIN(stat_date) FROM room_daily_stats WHERE room_id = $1", roomID).Scan(&first)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Msg("Failed to get the first room stat date")
+		return nil, err
+	}
+	return first, nil
+}
+
+// GetAllRoomsDailyStats returns every room's counts for the days from one date to another, both
+// included, in date order. A room has no row for a day on which nothing was counted in it.
+func GetAllRoomsDailyStats(ctx context.Context, from, to time.Time) ([]RoomDailyStats, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT room_id, stat_date, message_count, word_count, character_count
+		FROM room_daily_stats
+		WHERE stat_date BETWEEN $1 AND $2
+		ORDER BY stat_date, room_id
+	`, from, to)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Time("from", from).Time("to", to).Msg("Failed to query all rooms' daily stats")
+		return nil, err
+	}
+	days, err := pgx.CollectRows(rows, pgx.RowToStructByName[RoomDailyStats])
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Time("from", from).Time("to", to).Msg("Failed to read all rooms' daily stats")
+		return nil, err
+	}
+	return days, nil
+}
+
+// GetFirstStatDate returns the first day anything was counted on in any room, nil if nothing has
+// been
+func GetFirstStatDate(ctx context.Context) (*time.Time, error) {
+	var first *time.Time
+	err := pool.QueryRow(ctx, "SELECT MIN(stat_date) FROM room_daily_stats").Scan(&first)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Msg("Failed to get the first stat date")
 		return nil, err
 	}
 	return first, nil

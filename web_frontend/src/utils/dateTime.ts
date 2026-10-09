@@ -24,3 +24,18 @@ export function formatDateTime(date: Date): string {
 
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
 }
+
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+/**
+ * The weekday of a calendar date, YYYY-MM-DD, such as the days messages are counted on. A calendar
+ * date isn't a moment, so it is worked out in UTC: in the browser's own time zone, the date could
+ * land on a neighbouring day.
+ *
+ * @example
+ * weekdayOf('2026-10-10') // "Sat"
+ */
+export function weekdayOf(date: string): string {
+  const [year, month, day] = date.split('-').map(Number)
+  return WEEKDAYS[new Date(Date.UTC(year, month - 1, day)).getUTCDay()]
+}

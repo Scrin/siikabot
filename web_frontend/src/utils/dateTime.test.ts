@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatDateTime } from './dateTime'
+import { formatDateTime, weekdayOf } from './dateTime'
 
 describe('formatDateTime', () => {
   it('should format date in YYYY-MM-DD HH:MM:SS format', () => {
@@ -51,5 +51,13 @@ describe('formatDateTime', () => {
   it('should handle all double-digit values', () => {
     const date = new Date(2026, 10, 22, 14, 35, 48) // Nov 22, 2026, 14:35:48
     expect(formatDateTime(date)).toBe('2026-11-22 14:35:48')
+  })
+})
+
+describe('weekdayOf', () => {
+  it('should give the weekday of a calendar date', () => {
+    expect(weekdayOf('2026-10-10')).toBe('Sat')
+    expect(weekdayOf('2026-10-04')).toBe('Sun')
+    expect(weekdayOf('2026-03-01')).toBe('Sun')
   })
 })

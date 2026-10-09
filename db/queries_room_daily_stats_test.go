@@ -33,3 +33,19 @@ func TestStatDateFollowsTheBotsTimeZone(t *testing.T) {
 		})
 	}
 }
+
+// A stat date begins at midnight in the bot's time zone, which lines it up with records kept by
+// timestamp
+func TestStatDayStartIsMidnightInTheBotsTimeZone(t *testing.T) {
+	ahead := time.FixedZone("UTC+3", 3*60*60)
+	date := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+
+	got := statDayStart(date, ahead)
+	if want := time.Date(2026, 10, 9, 21, 0, 0, 0, time.UTC); !got.Equal(want) {
+		t.Errorf("statDayStart() = %v, want %v", got, want)
+	}
+	// A message sent at that moment is counted on that date
+	if counted := statDate(got, ahead); !counted.Equal(date) {
+		t.Errorf("a message sent at the start of the day is counted on %v", counted)
+	}
+}
