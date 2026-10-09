@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en-GB">
+  <title>Finnish Meteorological Institute warnings</title>
+  <entry>
+    <id>active-helsinki</id>
+    <content type="text/xml">
+      <alert xmlns="urn:oasis:names:tc:emergency:cap:1.2">
+        <identifier>active-helsinki</identifier>
+        <status>Actual</status>
+        <msgType>Alert</msgType>
+        <info>
+          <language>fi-FI</language>
+          <event>Tuulivaroitus maa-alueille</event>
+          <severity>Moderate</severity>
+          <onset>2026-10-09T20:00:00+03:00</onset>
+          <expires>2099-10-10T00:00:00+03:00</expires>
+          <headline>Keltainen tuulivaroitus maa-alueille: Uusimaa</headline>
+          <description>Kovaa tuulta.</description>
+        </info>
+        <info>
+          <language>en-GB</language>
+          <event>Wind warning for land areas</event>
+          <severity>Moderate</severity>
+          <onset>2026-10-09T20:00:00+03:00</onset>
+          <expires>2099-10-10T00:00:00+03:00</expires>
+          <headline>Yellow wind warning for land areas: Uusimaa, Fri 20.00 - Sat 0.00</headline>
+          <description>Wind warning: Gusts up to 20 m/s.</description>
+          <parameter><valueName>color</valueName><value>yellow</value></parameter>
+          <area>
+            <areaDesc>Uusimaa</areaDesc>
+            <polygon>60.0,24.5 60.0,25.3 60.4,25.3 60.4,24.5 60.0,24.5</polygon>
+          </area>
+        </info>
+      </alert>
+    </content>
+  </entry>
+  <entry>
+    <id>active-oulu</id>
+    <content type="text/xml">
+      <alert xmlns="urn:oasis:names:tc:emergency:cap:1.2">
+        <identifier>active-oulu</identifier>
+        <status>Actual</status>
+        <msgType>Update</msgType>
+        <info>
+          <language>en-GB</language>
+          <event>Traffic weather</event>
+          <severity>Moderate</severity>
+          <onset>2026-10-09T18:00:00+03:00</onset>
+          <expires>2099-10-10T09:00:00+03:00</expires>
+          <headline>Yellow traffic weather: North Ostrobothnia, Fri 18.00 - Sat 9.00</headline>
+          <description>Slippery roads.</description>
+          <parameter><valueName>color</valueName><value>yellow</value></parameter>
+          <area>
+            <areaDesc>North Ostrobothnia</areaDesc>
+            <polygon>64.8,25.2 64.8,25.8 65.2,25.8 65.2,25.2 64.8,25.2</polygon>
+          </area>
+        </info>
+      </alert>
+    </content>
+  </entry>
+  <entry>
+    <id>cancelled</id>
+    <content type="text/xml">
+      <alert xmlns="urn:oasis:names:tc:emergency:cap:1.2">
+        <identifier>cancelled</identifier>
+        <status>Actual</status>
+        <msgType>Cancel</msgType>
+        <info>
+          <language>en-GB</language>
+          <event>Wind warning for sea areas</event>
+          <headline>REMOVED: Yellow wind warning for sea area: Gulf of Finland</headline>
+          <area>
+            <areaDesc>Gulf of Finland</areaDesc>
+            <polygon>59.9,24.0 59.9,26.0 60.3,26.0 60.3,24.0 59.9,24.0</polygon>
+          </area>
+        </info>
+      </alert>
+    </content>
+  </entry>
+  <entry>
+    <id>expired</id>
+    <content type="text/xml">
+      <alert xmlns="urn:oasis:names:tc:emergency:cap:1.2">
+        <identifier>expired</identifier>
+        <status>Actual</status>
+        <msgType>Alert</msgType>
+        <info>
+          <language>en-GB</language>
+          <event>Rain warning</event>
+          <onset>2000-01-01T00:00:00+02:00</onset>
+          <expires>2000-01-02T00:00:00+02:00</expires>
+          <headline>Yellow rain warning: Uusimaa</headline>
+          <area>
+            <areaDesc>Uusimaa</areaDesc>
+            <polygon>60.0,24.5 60.0,25.3 60.4,25.3 60.4,24.5 60.0,24.5</polygon>
+          </area>
+        </info>
+      </alert>
+    </content>
+  </entry>
+</feed>

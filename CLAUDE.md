@@ -7,7 +7,7 @@ This document provides context for working with SiikaBot using Claude Code CLI.
 **SiikaBot** is a multi-purpose Matrix (matrix.org) bot written in Go, using PostgreSQL for database and deployed as a Docker image. It's a personal/experimental bot with diverse features for a single user/admin, not intended for public use.
 
 ### Key Features
-- **AI Chat** - LLM-powered conversations with tool calling (weather, web search, GitHub, news, electricity prices)
+- **AI Chat** - LLM-powered conversations with tool calling (FMI weather and environment data, web search, GitHub, news, electricity prices)
 - **Network Utilities** - Ping and traceroute commands
 - **Reminders** - Time-based reminder system with natural language parsing
 - **Alerting** - Alertmanager webhook relayed into Matrix rooms
@@ -94,6 +94,10 @@ The referenced events are resolved once, in `bot/reply.go`, and handed to the ch
   - `aigateway.go` - HTTP client. Inference goes to the Unified API (`gateway.ai.cloudflare.com/.../compat/chat/completions`), which is the only endpoint that honours the OTel trace headers; the REST API on `api.cloudflare.com` is used for the management API only
   - `logs.go` - Background poller that records cost/token/latency metrics from gateway logs
   - `tools.go` - Tool definition framework for function calling
+
+- **`./fmi/`** - The Finnish Meteorological Institute's open data: observations, forecasts, warnings, air quality, sea, lightning and more, used by the `get_fmi_data` LLM tool (`llmtools/fmi.go`)
+  - Most data comes from FMI's timeseries API (JSON), warnings from its CAP feed, and only the wave buoys from WFS
+  - FMI's open data is CC BY 4.0, so anything that presents it credits FMI
 
 - **`./api/`** - HTTP API endpoints
   - `healthcheck.go` - `/api/healthcheck` endpoint

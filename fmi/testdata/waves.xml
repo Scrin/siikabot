@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<wfs:FeatureCollection numberReturned="4" xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:om="http://www.opengis.net/om/2.0" xmlns:omso="http://inspire.ec.europa.eu/schemas/omso/3.0" xmlns:gml="http://www.opengis.net/gml/3.2" xmlns:sam="http://www.opengis.net/sampling/2.0" xmlns:sams="http://www.opengis.net/samplingSpatial/2.0" xmlns:target="http://xml.fmi.fi/namespace/om/atmosphericfeatures/1.1" xmlns:wml2="http://www.opengis.net/waterml/2.0">
+  <wfs:member>
+    <omso:PointTimeSeriesObservation gml:id="obs-1">
+      <om:featureOfInterest>
+        <sams:SF_SpatialSamplingFeature gml:id="fi-1-1-WaveHs">
+          <sam:sampledFeature>
+            <target:LocationCollection gml:id="sampled-target-1-1-WaveHs">
+              <target:member>
+                <target:Location gml:id="obsloc-fmisid-1-pos-WaveHs">
+                  <gml:identifier codeSpace="http://xml.fmi.fi/namespace/stationcode/fmisid">1</gml:identifier>
+                  <gml:name codeSpace="http://xml.fmi.fi/namespace/locationcode/name">Coastal buoy</gml:name>
+                  <gml:name codeSpace="http://xml.fmi.fi/namespace/locationcode/geoid">-1</gml:name>
+                </target:Location>
+              </target:member>
+            </target:LocationCollection>
+          </sam:sampledFeature>
+          <sams:shape>
+            <gml:Point gml:id="point-1-WaveHs">
+              <gml:name>Coastal buoy</gml:name>
+              <gml:pos>60.12 24.97 </gml:pos>
+            </gml:Point>
+          </sams:shape>
+        </sams:SF_SpatialSamplingFeature>
+      </om:featureOfInterest>
+      <om:result>
+        <wml2:MeasurementTimeseries gml:id="obs-obs-1-1-WaveHs">
+          <wml2:point><wml2:MeasurementTVP><wml2:time>2026-10-09T18:00:00Z</wml2:time><wml2:value>NaN</wml2:value></wml2:MeasurementTVP></wml2:point>
+          <wml2:point><wml2:MeasurementTVP><wml2:time>2026-10-09T19:00:00Z</wml2:time><wml2:value>NaN</wml2:value></wml2:MeasurementTVP></wml2:point>
+        </wml2:MeasurementTimeseries>
+      </om:result>
+    </omso:PointTimeSeriesObservation>
+  </wfs:member>
+  <wfs:member>
+    <omso:PointTimeSeriesObservation gml:id="obs-2">
+      <om:featureOfInterest>
+        <sams:SF_SpatialSamplingFeature gml:id="fi-1-1-TWATER">
+          <sam:sampledFeature>
+            <target:LocationCollection gml:id="sampled-target-1-1-TWATER">
+              <target:member>
+                <target:Location gml:id="obsloc-fmisid-1-pos-TWATER">
+                  <gml:name codeSpace="http://xml.fmi.fi/namespace/locationcode/name">Coastal buoy</gml:name>
+                </target:Location>
+              </target:member>
+            </target:LocationCollection>
+          </sam:sampledFeature>
+          <sams:shape>
+            <gml:Point gml:id="point-1-TWATER"><gml:pos>60.12 24.97 </gml:pos></gml:Point>
+          </sams:shape>
+        </sams:SF_SpatialSamplingFeature>
+      </om:featureOfInterest>
+      <om:result>
+        <wml2:MeasurementTimeseries gml:id="obs-obs-1-1-TWATER">
+          <wml2:point><wml2:MeasurementTVP><wml2:time>2026-10-09T18:00:00Z</wml2:time><wml2:value>12.9</wml2:value></wml2:MeasurementTVP></wml2:point>
+          <wml2:point><wml2:MeasurementTVP><wml2:time>2026-10-09T19:00:00Z</wml2:time><wml2:value>12.8</wml2:value></wml2:MeasurementTVP></wml2:point>
+        </wml2:MeasurementTimeseries>
+      </om:result>
+    </omso:PointTimeSeriesObservation>
+  </wfs:member>
+  <wfs:member>
+    <omso:PointTimeSeriesObservation gml:id="obs-3">
+      <om:featureOfInterest>
+        <sams:SF_SpatialSamplingFeature gml:id="fi-1-2-WaveHs">
+          <sam:sampledFeature>
+            <target:LocationCollection gml:id="sampled-target-1-2-WaveHs">
+              <target:member>
+                <target:Location gml:id="obsloc-fmisid-2-pos-WaveHs">
+                  <gml:name codeSpace="http://xml.fmi.fi/namespace/locationcode/name">Offshore buoy</gml:name>
+                </target:Location>
+              </target:member>
+            </target:LocationCollection>
+          </sam:sampledFeature>
+          <sams:shape>
+            <gml:Point gml:id="point-2-WaveHs"><gml:pos>59.96 25.23 </gml:pos></gml:Point>
+          </sams:shape>
+        </sams:SF_SpatialSamplingFeature>
+      </om:featureOfInterest>
+      <om:result>
+        <wml2:MeasurementTimeseries gml:id="obs-obs-1-2-WaveHs">
+          <wml2:point><wml2:MeasurementTVP><wml2:time>2026-10-09T18:30:00Z</wml2:time><wml2:value>0.7</wml2:value></wml2:MeasurementTVP></wml2:point>
+          <wml2:point><wml2:MeasurementTVP><wml2:time>2026-10-09T19:00:00Z</wml2:time><wml2:value>0.8</wml2:value></wml2:MeasurementTVP></wml2:point>
+        </wml2:MeasurementTimeseries>
+      </om:result>
+    </omso:PointTimeSeriesObservation>
+  </wfs:member>
+  <wfs:member>
+    <omso:PointTimeSeriesObservation gml:id="obs-4">
+      <om:featureOfInterest>
+        <sams:SF_SpatialSamplingFeature gml:id="fi-1-2-WTP">
+          <sam:sampledFeature>
+            <target:LocationCollection gml:id="sampled-target-1-2-WTP">
+              <target:member>
+                <target:Location gml:id="obsloc-fmisid-2-pos-WTP">
+                  <gml:name codeSpace="http://xml.fmi.fi/namespace/locationcode/name">Offshore buoy</gml:name>
+                </target:Location>
+              </target:member>
+            </target:LocationCollection>
+          </sam:sampledFeature>
+          <sams:shape>
+            <gml:Point gml:id="point-2-WTP"><gml:pos>59.96 25.23 </gml:pos></gml:Point>
+          </sams:shape>
+        </sams:SF_SpatialSamplingFeature>
+      </om:featureOfInterest>
+      <om:result>
+        <wml2:MeasurementTimeseries gml:id="obs-obs-1-2-WTP">
+          <wml2:point><wml2:MeasurementTVP><wml2:time>2026-10-09T19:00:00Z</wml2:time><wml2:value>6.1</wml2:value></wml2:MeasurementTVP></wml2:point>
+        </wml2:MeasurementTimeseries>
+      </om:result>
+    </omso:PointTimeSeriesObservation>
+  </wfs:member>
+</wfs:FeatureCollection>

@@ -45,8 +45,7 @@ func Init(ctx context.Context) {
 
 	// Register the tool implementations from the chat package
 	toolRegistry.RegisterTool(llmtools.ElectricityPricesToolDefinition)
-	toolRegistry.RegisterTool(llmtools.WeatherToolDefinition)
-	toolRegistry.RegisterTool(llmtools.WeatherForecastToolDefinition)
+	toolRegistry.RegisterTool(llmtools.FMIToolDefinition)
 	toolRegistry.RegisterTool(llmtools.NewsToolDefinition)
 	toolRegistry.RegisterTool(llmtools.WebSearchToolDefinition)
 	toolRegistry.RegisterTool(llmtools.ReminderToolDefinition)
