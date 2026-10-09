@@ -25,6 +25,19 @@ type RoomMember struct {
 	IsBot bool
 }
 
+// label is how the model is shown a member: by name, with their user ID when that isn't their name,
+// and marked when they are the bot
+func (m RoomMember) label() string {
+	label := m.Name
+	if m.Name != m.UserID {
+		label += " (" + m.UserID + ")"
+	}
+	if m.IsBot {
+		label += " (you)"
+	}
+	return label
+}
+
 // RoomMembersToolDefinition finds members of the room a chat turn happens in. A room too large for
 // its members to be listed in full shows the model only the ones relevant to each message, and
 // anyone else a message refers to by name can be looked up with it.
@@ -99,14 +112,7 @@ func findMembers(members []RoomMember, query string) string {
 			fmt.Fprintf(&b, "(and %d more: ask with a longer query to narrow it down)\n", len(matches)-maxMemberMatches)
 			break
 		}
-		line := "- " + member.Name
-		if member.Name != member.UserID {
-			line += " (" + member.UserID + ")"
-		}
-		if member.IsBot {
-			line += " (you)"
-		}
-		b.WriteString(line + "\n")
+		b.WriteString("- " + member.label() + "\n")
 	}
 	return strings.TrimSuffix(b.String(), "\n")
 }

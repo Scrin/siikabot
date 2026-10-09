@@ -69,3 +69,20 @@ func TestCountWords(t *testing.T) {
 		})
 	}
 }
+
+// Characters are counted as characters, not bytes, which used to count ä twice and an emoji four
+// times
+func TestCountCharacters(t *testing.T) {
+	tests := map[string]int{
+		"hello":    5,
+		"":         0,
+		"ääkköset": 8,
+		"👍":        1,
+		"こんにちは":    5,
+	}
+	for input, want := range tests {
+		if got := countCharacters(input); got != want {
+			t.Errorf("countCharacters(%q) = %d, want %d", input, got, want)
+		}
+	}
+}

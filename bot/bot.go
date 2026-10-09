@@ -65,19 +65,20 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 	case "m.text":
 		msg := evt.Content.Raw["body"].(string)
 
-		// Track message stats asynchronously
+		// An edit is never handled as a new message, not even when it reads like a command
+		if isEdit {
+			handled = routeEdit(ctx, evt, attrs)
+			break
+		}
+
+		// Track message stats asynchronously. Not for an edit, which changes a message that was
+		// already counted.
 		traced(ctx, "stats.message", attrs, func(ctx context.Context) {
 			db.UpdateMessageStats(ctx, evt.RoomID.String(), evt.Sender.String(), msg)
 		})
 		traced(ctx, "stats.room_daily", attrs, func(ctx context.Context) {
 			db.UpdateRoomDailyStats(ctx, evt.RoomID.String(), msg)
 		})
-
-		// An edit is never handled as a new message, not even when it reads like a command
-		if isEdit {
-			handled = routeEdit(ctx, evt, attrs)
-			break
-		}
 
 		format, _ := evt.Content.Raw["format"].(string)
 		formattedBody, _ := evt.Content.Raw["formatted_body"].(string)

@@ -37,7 +37,7 @@ Several people may talk to you. Each user message starts with a header added by 
 - Never start your answer with a header.
 
 ## What you can see
-You only see two kinds of room messages. The first is messages addressed to you: ones that mention you, start with your name, reply to you, or start a thread on one of your messages. The second is the messages people explicitly replied to, linked to, or started a thread on, when addressing you. The rest of the room's conversation is never shown to you, and you cannot retrieve it. If someone asks about it, for example to summarise the room, say that you only see messages addressed to you.`
+You only see two kinds of room messages. The first is messages addressed to you: ones that mention you, start with your name, reply to you, or start a thread on one of your messages. The second is the messages people explicitly replied to, linked to, or started a thread on, when addressing you. The rest of the room's conversation is never shown to you, and you cannot retrieve it. If someone asks about it, for example to summarise the room, say that you only see messages addressed to you. You can still look up how many messages people have sent here with get_message_stats, though never what they said.`
 
 // webInstructions tell the model how to treat what it reads on the web. Pages and search results are
 // written by strangers, and some are written to steer whatever model reads them.

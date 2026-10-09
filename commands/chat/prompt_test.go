@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Scrin/siikabot/db"
+	"github.com/Scrin/siikabot/llmtools"
 	"github.com/Scrin/siikabot/matrix"
 )
 
@@ -144,6 +145,15 @@ func TestSystemPromptIsTheSameForEverySpeaker(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the system prompt lacks %q", want)
 		}
+	}
+}
+
+// The model is told it can still count the messages it doesn't see. Told only that it can't see
+// them, it may refuse to say who talks the most.
+func TestSystemPromptOffersMessageStats(t *testing.T) {
+	prompt := systemPrompt("Siikabot", testRoom("Siika HQ", alice, bob, botSelf))
+	if !strings.Contains(prompt, llmtools.MessageStatsToolDefinition.Function.Name) {
+		t.Error("the system prompt doesn't mention the message stats tool")
 	}
 }
 
