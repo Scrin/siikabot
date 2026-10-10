@@ -52,6 +52,19 @@ func TestDeliveryContextHandlesNoSpan(t *testing.T) {
 	}
 }
 
+// TestDeliveryContextOutlivesTheSchedulingContext covers reminders set by the reminder tool. The chat
+// turn cancels its context as soon as it ends, so the reminder fired with a dead context: the message
+// went out, deleting the reminder failed, and it was sent again on the next start.
+func TestDeliveryContextOutlivesTheSchedulingContext(t *testing.T) {
+	schedulingCtx, cancel := context.WithCancel(context.Background())
+	deliverCtx, _ := deliveryContext(schedulingCtx)
+	cancel()
+
+	if err := deliverCtx.Err(); err != nil {
+		t.Errorf("delivery context ended with the scheduling context: %v", err)
+	}
+}
+
 // TestDeliveryContextKeepsContextValues verifies detaching the span does not discard the logging
 // fields threaded through the context, which every log line on the delivery path depends on
 func TestDeliveryContextKeepsContextValues(t *testing.T) {
