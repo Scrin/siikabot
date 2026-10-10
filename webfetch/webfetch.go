@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/metrics"
 	"github.com/Scrin/siikabot/tracing"
 	"github.com/rs/zerolog"
@@ -40,12 +41,16 @@ const (
 	tier = "direct"
 )
 
-// The request headers. The User-Agent says honestly what the bot is.
+// The request headers
 const (
-	userAgent      = "Mozilla/5.0 (compatible; Siikabot/2.0; +https://github.com/Scrin/siikabot)"
 	acceptHeader   = "text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf;q=0.8,text/plain;q=0.8,application/json;q=0.8,*/*;q=0.5"
 	acceptLanguage = "fi,en;q=0.8"
 )
+
+// userAgent is the User-Agent header, which says honestly what the bot is and links to its source code
+func userAgent() string {
+	return "Mozilla/5.0 (compatible; Siikabot/2.0; +" + config.SourceURL + ")"
+}
 
 // Outcome is how a fetch went. It's also the outcome label of the fetch metrics.
 type Outcome string
@@ -212,7 +217,7 @@ func fetch(ctx context.Context, rawURL string) (Result, int, error) {
 		result.Outcome, result.Reason = OutcomeInvalidURL, "it can't be requested"
 		return result, 0, err
 	}
-	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("User-Agent", userAgent())
 	req.Header.Set("Accept", acceptHeader)
 	req.Header.Set("Accept-Language", acceptLanguage)
 

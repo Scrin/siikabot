@@ -33,6 +33,8 @@ var (
 	TempoEndpoint            = ""
 	TempoUser                = ""
 	TempoPassword            = ""
+	SourceURL                = ""
+	FrontendURL              = ""
 )
 
 func loadConfig() error {
@@ -55,6 +57,8 @@ func loadConfig() error {
 	TempoEndpoint = os.Getenv("SIIKABOT_TEMPO_ENDPOINT")
 	TempoUser = os.Getenv("SIIKABOT_TEMPO_USER")
 	TempoPassword = os.Getenv("SIIKABOT_TEMPO_PASSWORD")
+	SourceURL = os.Getenv("SIIKABOT_SOURCE_URL")
+	FrontendURL = os.Getenv("SIIKABOT_FRONTEND_URL")
 
 	if HomeserverURL == "" {
 		return fmt.Errorf("SIIKABOT_HOMESERVER_URL is not set")
@@ -107,21 +111,47 @@ func loadConfig() error {
 		return fmt.Errorf("SIIKABOT_TEMPO_ENDPOINT is not set")
 	}
 	// Validated here rather than left to the exporter, which treats an unparseable endpoint as a
-	// reason to silently fall back to localhost:4317. url.Parse is permissive enough that a bare
-	// "host:port" parses without error but yields no host, so the scheme and host are checked
-	// explicitly — the alternative is a confusing DNS error at runtime instead of a clear one now.
-	if endpoint, err := url.Parse(TempoEndpoint); err != nil {
-		return fmt.Errorf("SIIKABOT_TEMPO_ENDPOINT is not a valid URL: %w", err)
-	} else if endpoint.Scheme != "http" && endpoint.Scheme != "https" {
-		return fmt.Errorf("SIIKABOT_TEMPO_ENDPOINT must start with http:// or https://, got %q", TempoEndpoint)
-	} else if endpoint.Host == "" {
-		return fmt.Errorf("SIIKABOT_TEMPO_ENDPOINT has no host: %q", TempoEndpoint)
+	// reason to silently fall back to localhost:4317. The alternative is a confusing DNS error at
+	// runtime instead of a clear one now.
+	if err := checkHTTPURL("SIIKABOT_TEMPO_ENDPOINT", TempoEndpoint); err != nil {
+		return err
 	}
 	if TempoUser == "" {
 		return fmt.Errorf("SIIKABOT_TEMPO_USER is not set")
 	}
 	if TempoPassword == "" {
 		return fmt.Errorf("SIIKABOT_TEMPO_PASSWORD is not set")
+	}
+	// Where the bot's source code and web dashboard are. The chat model gives them as links, and
+	// reads the bot's own source code from the repository.
+	if SourceURL == "" {
+		return fmt.Errorf("SIIKABOT_SOURCE_URL is not set")
+	}
+	if err := checkHTTPURL("SIIKABOT_SOURCE_URL", SourceURL); err != nil {
+		return err
+	}
+	if FrontendURL == "" {
+		return fmt.Errorf("SIIKABOT_FRONTEND_URL is not set")
+	}
+	if err := checkHTTPURL("SIIKABOT_FRONTEND_URL", FrontendURL); err != nil {
+		return err
+	}
+	return nil
+}
+
+// checkHTTPURL checks that a variable holds an http:// or https:// URL with a host. url.Parse is
+// permissive enough that a bare "host:port" parses without error but yields no host, so the scheme
+// and host are checked explicitly.
+func checkHTTPURL(name, value string) error {
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return fmt.Errorf("%s is not a valid URL: %w", name, err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("%s must start with http:// or https://, got %q", name, value)
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("%s has no host: %q", name, value)
 	}
 	return nil
 }

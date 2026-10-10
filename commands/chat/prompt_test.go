@@ -157,6 +157,27 @@ func TestSystemPromptOffersMessageStats(t *testing.T) {
 	}
 }
 
+// The model knows where its source code and dashboard are, and looks its code up instead of describing
+// it from memory
+func TestSystemPromptPointsToTheSourceCode(t *testing.T) {
+	prompt := systemPrompt("Siikabot", testRoom("Siika HQ", alice, bob, botSelf))
+
+	for _, want := range []string{
+		"## Your source code and web dashboard",
+		"your source code is at " + testSourceURL + ".",
+		"Your web dashboard is at " + testFrontendURL + ".",
+		llmtools.SourceCodeToolDefinition.Function.Name,
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the system prompt lacks %q", want)
+		}
+	}
+	// The room comes last: it is the only part that differs between rooms, and the rest is a prefix they share
+	if strings.Index(prompt, "## Your source code") > strings.Index(prompt, "## This room") {
+		t.Error("the source code section comes after the room")
+	}
+}
+
 func TestTurnContext(t *testing.T) {
 	now := time.Date(2026, 9, 25, 16, 45, 12, 0, time.UTC)
 	memories := []db.UserMemory{{ID: 12, Memory: "prefers metric units"}}

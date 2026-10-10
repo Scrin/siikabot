@@ -28,6 +28,15 @@ var requiredVars = []string{
 	"SIIKABOT_TEMPO_ENDPOINT",
 	"SIIKABOT_TEMPO_USER",
 	"SIIKABOT_TEMPO_PASSWORD",
+	"SIIKABOT_SOURCE_URL",
+	"SIIKABOT_FRONTEND_URL",
+}
+
+// urlVars are the required variables that are validated as URLs, with a valid placeholder for each
+var urlVars = map[string]string{
+	"SIIKABOT_TEMPO_ENDPOINT": "https://tempo.example.org:443",
+	"SIIKABOT_SOURCE_URL":     "https://git.example.org/siikabot",
+	"SIIKABOT_FRONTEND_URL":   "https://siikabot.example.org/",
 }
 
 // setAllRequired populates every required variable with a placeholder, restored by t.Setenv
@@ -36,8 +45,10 @@ func setAllRequired(t *testing.T) {
 	for _, name := range requiredVars {
 		t.Setenv(name, "test-value")
 	}
-	// The endpoint is validated as a URL, so a placeholder will not do for it
-	t.Setenv("SIIKABOT_TEMPO_ENDPOINT", "https://tempo.example.org:443")
+	// These are validated as URLs, so a placeholder will not do for them
+	for name, value := range urlVars {
+		t.Setenv(name, value)
+	}
 }
 
 // TestTempoEndpointMustBeAURL guards the shape of the endpoint rather than merely its presence.
@@ -90,11 +101,43 @@ func TestTempoEndpointAcceptsValidURLs(t *testing.T) {
 	}
 }
 
+// TestSourceAndFrontendMustBeURLs guards the shape of the source and frontend addresses. The chat
+// model gives them out as links, and reads the bot's source code from the repository, so a value
+// that is not a URL fails at boot rather than in a conversation.
+func TestSourceAndFrontendMustBeURLs(t *testing.T) {
+	rejected := map[string]string{
+		"no scheme":    "github.com/owner/siikabot",
+		"wrong scheme": "git@github.com:owner/siikabot.git",
+		"scheme only":  "https://",
+		"unparseable":  "https://example.org:port",
+	}
+
+	for _, name := range []string{"SIIKABOT_SOURCE_URL", "SIIKABOT_FRONTEND_URL"} {
+		for kind, value := range rejected {
+			t.Run(name+"/"+kind, func(t *testing.T) {
+				setAllRequired(t)
+				t.Setenv(name, value)
+
+				err := loadConfig()
+				if err == nil {
+					t.Fatalf("%q was accepted as %s", value, name)
+				}
+				if !strings.Contains(err.Error(), name) {
+					t.Errorf("error should name the variable, got: %v", err)
+				}
+			})
+		}
+	}
+}
+
 func TestLoadConfigSucceedsWhenEverythingIsSet(t *testing.T) {
 	setAllRequired(t)
 
 	if err := loadConfig(); err != nil {
 		t.Fatalf("expected a complete configuration to load, got: %v", err)
+	}
+	if SourceURL != urlVars["SIIKABOT_SOURCE_URL"] || FrontendURL != urlVars["SIIKABOT_FRONTEND_URL"] {
+		t.Errorf("the source and frontend URLs were loaded as %q and %q", SourceURL, FrontendURL)
 	}
 }
 

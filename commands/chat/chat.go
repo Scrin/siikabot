@@ -13,6 +13,7 @@ import (
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/llmtools"
 	"github.com/Scrin/siikabot/matrix"
+	"github.com/Scrin/siikabot/sourcecode"
 	"github.com/rs/zerolog/log"
 )
 
@@ -61,6 +62,13 @@ func Init(ctx context.Context) {
 	toolRegistry.RegisterTool(llmtools.MemoryToolDefinition)
 	toolRegistry.RegisterTool(llmtools.RoomMembersToolDefinition)
 	toolRegistry.RegisterTool(llmtools.MessageStatsToolDefinition)
+	toolRegistry.RegisterTool(llmtools.SourceCodeToolDefinition)
+
+	// The source code can be looked up only in a repository on GitHub. Elsewhere the model still links to
+	// the repository, but the tool tells it that it can't read anything there.
+	if _, err := sourcecode.ParseRepository(config.SourceURL); err != nil {
+		log.Warn().Ctx(ctx).Err(err).Str("source_url", config.SourceURL).Msg("The chat can't look up the bot's source code")
+	}
 
 	// Start a goroutine to periodically clean up old chat history
 	go func() {

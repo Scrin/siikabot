@@ -19,8 +19,13 @@ import (
 const shutdownGrace = 15 * time.Second
 
 func main() {
-	config.LoadEnv()
+	// Logging is set up before the error is looked at, so that it is reported in the configured format
+	configErr := config.LoadEnv()
 	logging.Setup()
+	if configErr != nil {
+		log.Error().Err(configErr).Msg("Invalid configuration")
+		os.Exit(1)
+	}
 
 	// All the real work happens in run so that its deferred cleanup runs. Calling log.Fatal here
 	// instead would exit through os.Exit, which skips defers entirely — that is precisely how the

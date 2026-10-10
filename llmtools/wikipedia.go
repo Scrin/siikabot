@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Scrin/siikabot/aigateway"
+	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/webfetch"
 	"github.com/rs/zerolog/log"
 )
@@ -110,7 +111,7 @@ func fetchWikipediaSummary(ctx context.Context, query, lang string) (*wikipediaS
 	}
 
 	// Set a user agent as Wikipedia API recommends
-	req.Header.Set("User-Agent", "SiikaBot/1.0 (Matrix bot; contact: github.com/Scrin/siikabot)")
+	req.Header.Set("User-Agent", "SiikaBot/1.0 (Matrix bot; contact: "+config.SourceURL+")")
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := httpClient.Do(req)

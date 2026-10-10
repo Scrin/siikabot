@@ -7,7 +7,7 @@ This document provides context for working with SiikaBot using Claude Code CLI.
 **SiikaBot** is a multi-purpose Matrix (matrix.org) bot written in Go, using PostgreSQL for database and deployed as a Docker image. It's a personal/experimental bot with diverse features for a single user/admin, not intended for public use.
 
 ### Key Features
-- **AI Chat** - LLM-powered conversations with tool calling (FMI weather and environment data, web search, GitHub, news, electricity prices, room message statistics)
+- **AI Chat** - LLM-powered conversations with tool calling (FMI weather and environment data, web search, GitHub, news, electricity prices, room message statistics, the bot's own source code)
 - **Network Utilities** - Ping and traceroute commands
 - **Reminders** - Time-based reminder system with natural language parsing
 - **Alerting** - Alertmanager webhook relayed into Matrix rooms
@@ -102,6 +102,9 @@ The referenced events are resolved once, in `bot/reply.go`, and handed to the ch
 - **`./webfetch/`** - Reads web pages for the `get_web_content` LLM tool (`llmtools/web.go`): fetches a URL, extracts the main content with readability, reads PDFs, and judges how the fetch went (`judge.go`), so a failure reaches the model as an explanation rather than an error
   - `guard.go` refuses connections to addresses that aren't public, checked when connecting so redirects are covered
   - `provenance.go` holds the provenance rule: once a chat turn holds a result from a tool that isn't `Trusted`, it may fetch only URLs that appeared in the room's messages or in tool results. The chat turn passes the rule to the tools through the context
+
+- **`./sourcecode/`** - The bot's own source code, for the `get_own_source_code` LLM tool (`llmtools/source_code.go`): downloads the default branch of the repository in `SIIKABOT_SOURCE_URL` from GitHub as one archive, keeps it in memory for 15 minutes, and searches and reads its files
+  - Only a repository on GitHub can be read. Elsewhere the chat still links to the repository, but the tool tells the model it can't look anything up there
 
 - **`./api/`** - HTTP API endpoints
   - `healthcheck.go` - `/api/healthcheck` endpoint
@@ -430,6 +433,8 @@ What the dashboard shows, and where the data comes from:
 
 When a dashboard component or API endpoint is added, add it to this table.
 
+The chat's system prompt also tells the model what people see on the dashboard (`sourceSection` in `commands/chat/prompt.go`), so a change to that updates the prompt too.
+
 ### Testing
 
 **CRITICAL: Always run tests after making code changes**
@@ -493,7 +498,9 @@ docker build -t siikabot .
 
 ### Environment Variables
 
-All configuration is via environment variables (no config files). See `config/config.go` for required variables.
+All configuration is via environment variables (no config files). See `config/config.go` for required variables. A required variable that is missing or invalid stops the bot at startup, with an error naming it.
+
+`SIIKABOT_SOURCE_URL` and `SIIKABOT_FRONTEND_URL` are where the bot's source code repository and web dashboard are. The chat model gives them out as links, and reads the bot's own source code from the repository.
 
 The exception is the chat parameters (models, context window budget, response and tool limits, web content size). They are global and live in the append-only `chat_config` table, where the latest row is the configuration in effect and older rows are its history. The admin changes them with the `!chat` subcommands, and each change appends a new row. Migration `0019__global-chat-config.sql` seeds the first row.
 
