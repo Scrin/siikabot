@@ -441,8 +441,11 @@ func insertChatMessage(ctx context.Context, executor chatMessageExecutor, row Ch
 
 // GetChatHistory retrieves the recent chat history of a timeline, oldest first: its own turns, and
 // for a thread started from a stored turn, that turn as well (seedTurnEventID, empty for none).
-// maxMessages is a safety cap on how many rows to read, not the context window size — the window is
-// decided by the caller from the timeline's anchor and token budget.
+//
+// Only the rows from the timeline's anchor on are read (anchorID, nil to read from the oldest row),
+// so a turn reads its context window rather than everything the timeline holds. maxMessages is a
+// safety cap on how many rows to read, not the context window size — the window is decided by the
+// caller from the anchor and the token budget.
 //
 // Expired rows are returned rather than filtered out. Deleting them would silently reshape the
 // conversation mid-thread, so the caller replaces expired tool results with a marker instead,
@@ -455,7 +458,7 @@ func insertChatMessage(ctx context.Context, executor chatMessageExecutor, row Ch
 // The images the user rows showed come without their data. Every row read needs their size, which
 // the token budget counts, but only the rows that make it into the context window need the images
 // themselves, and LoadChatImageData reads those.
-func GetChatHistory(ctx context.Context, timeline Timeline, seedTurnEventID string, maxMessages int) ([]ChatMessage, error) {
+func GetChatHistory(ctx context.Context, timeline Timeline, seedTurnEventID string, anchorID *int64, maxMessages int) ([]ChatMessage, error) {
 	// The seed belongs to the main timeline, where the thread was started from
 	rows, err := pool.Query(ctx,
 		`SELECT id, room_id, user_id, message, role, timestamp, message_type, tool_call_id, tool_name, expiry,
@@ -464,12 +467,14 @@ func GetChatHistory(ctx context.Context, timeline Timeline, seedTurnEventID stri
 		FROM chat_history
 		WHERE room_id = $1 AND (thread_root_id IS NOT DISTINCT FROM $2
 			OR (thread_root_id IS NULL AND turn_event_id = $3))
-		ORDER BY timestamp DESC, id DESC LIMIT $4`,
-		timeline.RoomID, nullIfEmpty(timeline.ThreadRootID), seedTurnEventID, maxMessages)
+			AND ($4::bigint IS NULL OR id >= $4)
+		ORDER BY timestamp DESC, id DESC LIMIT $5`,
+		timeline.RoomID, nullIfEmpty(timeline.ThreadRootID), seedTurnEventID, anchorID, maxMessages)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).
 			Str("room_id", timeline.RoomID).
 			Str("thread_root_id", timeline.ThreadRootID).
+			Interface("anchor_id", anchorID).
 			Int("max_messages", maxMessages).
 			Msg("Failed to get chat history")
 		return nil, err

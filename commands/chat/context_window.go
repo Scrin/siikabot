@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"slices"
+	"time"
 
 	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/db"
@@ -10,13 +11,21 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// maxContextRows caps how many history rows are read per turn. The anchor and the token budget
-// normally keep the window far below this; it exists so a pathologically stale anchor cannot turn
-// into an unbounded read.
-const maxContextRows = 1000
-
 // messageTokenOverhead approximates the per-message framing the API adds around the content
 const messageTokenOverhead = 4
+
+// maxContextRows caps how many history rows a turn reads, for a window whose high mark is high. The
+// anchor keeps the read well below it: only a timeline with no anchor yet, or one whose anchor could
+// not be read or moved, reaches it.
+//
+// It follows the budget so that it can never decide the window in the budget's place. Every row is
+// estimated at messageTokenOverhead tokens at least, so a window within the high mark has fewer rows
+// than this, and a read the cap cuts short is over the high mark already: the anchor then advances as
+// it would anyway. A fixed cap used to cut windows that were still within a large budget, and the
+// anchor of such a window never moved again, while the cut slid forward by a turn on every turn.
+func maxContextRows(high int) int {
+	return high/messageTokenOverhead + 1
+}
 
 // estimateTokens approximates the token count of a string.
 //
@@ -48,30 +57,38 @@ func estimateImagesTokens(images []db.ChatImage) int {
 	return total
 }
 
-// estimateHistoryTokens approximates the token cost of replaying the given history rows
-func estimateHistoryTokens(history []db.ChatMessage) int {
+// estimateHistoryTokens approximates the token cost of replaying the given history rows at the time
+// now
+func estimateHistoryTokens(history []db.ChatMessage, now time.Time) int {
 	total := 0
 	for _, msg := range history {
-		total += estimateRowTokens(msg)
+		total += estimateRowTokens(msg, now)
 	}
 	return total
 }
 
-// estimateRowTokens approximates the token cost of replaying a history row: its text, and for a user
-// message the images it shows, which stay in the window for as long as the message does
-func estimateRowTokens(msg db.ChatMessage) int {
-	tokens := estimateTokens(replayText(msg))
+// estimateRowTokens approximates the token cost of replaying a history row at the time now: its text,
+// and for a user message the images it shows, which stay in the window for as long as the message does
+func estimateRowTokens(msg db.ChatMessage, now time.Time) int {
+	tokens := estimateTokens(replayText(msg, now))
 	if msg.Role == "user" {
 		tokens += estimateImagesTokens(shownImages(msg.UserTurn()))
 	}
 	return tokens
 }
 
-// replayText is the text a history row is replayed as, which is also what its share of the token
-// budget is measured on: a user message is replayed with its header
-func replayText(msg db.ChatMessage) string {
-	if msg.Role == "user" {
+// replayText is the text a history row is replayed as at the time now, which is also what its share
+// of the token budget is measured on: a user message is replayed with its header, and a tool result
+// as replayableToolResponse leaves it, cut short or replaced by its expiry marker.
+//
+// The budget used to measure a tool result as stored, and a window holding tool results was trimmed
+// long before it reached the budget, since most of what it counted was text the model never saw.
+func replayText(msg db.ChatMessage, now time.Time) string {
+	switch {
+	case msg.Role == "user":
 		return renderUserTurn(msg.UserTurn())
+	case msg.MessageType == "tool_response":
+		return replayableToolResponse(msg, now)
 	}
 	return msg.Message
 }
@@ -116,9 +133,22 @@ func estimateMessageTokens(messages []aigateway.Message) int {
 
 // currentContextWindow returns a timeline's context window as it currently stands, without
 // advancing the anchor. Use this for reporting; buildContextWindow is the one that maintains the
-// window. seedTurnEventID is the stored turn a thread was started from, empty for none.
-func currentContextWindow(ctx context.Context, timeline db.Timeline, seedTurnEventID string) []db.ChatMessage {
-	history, err := db.GetChatHistory(ctx, timeline, seedTurnEventID, maxContextRows)
+// window. seedTurnEventID is the stored turn a thread was started from, empty for none, and high is
+// the high mark of the window, which the row cap follows.
+//
+// The window is the history from the timeline's anchor on. A missing anchor means the window starts
+// at the oldest available row. An anchor pointing at a row that no longer exists — the retention
+// cleanup deletes rows older than a week — still leaves out only the rows before it, so a quiet room
+// degrades to a shorter window instead of breaking.
+//
+// An anchor past every row leaves the window empty. A reset puts a thread's anchor there, so that
+// the turn the thread was started from, which the reset doesn't delete, stays out of the thread.
+func currentContextWindow(ctx context.Context, timeline db.Timeline, seedTurnEventID string, high int) []db.ChatMessage {
+	// A failure is already logged, and the window then starts at the oldest row, as without an anchor
+	anchorID, _ := db.GetChatContextAnchor(ctx, timeline)
+
+	maxRows := maxContextRows(high)
+	history, err := db.GetChatHistory(ctx, timeline, seedTurnEventID, anchorID, maxRows)
 	if err != nil {
 		// Already logged. Continuing without history is better than refusing to answer.
 		return nil
@@ -126,40 +156,44 @@ func currentContextWindow(ctx context.Context, timeline db.Timeline, seedTurnEve
 	if len(history) == 0 {
 		return nil
 	}
-	if len(history) == maxContextRows {
-		log.Warn().Ctx(ctx).
+	if len(history) == maxRows {
+		// Nothing the window needs is lost by the cut: what was read is over the high mark already,
+		// so the next trim moves the anchor past the rows the read left out
+		log.Debug().Ctx(ctx).
 			Str("room_id", timeline.RoomID).
 			Str("thread_root_id", timeline.ThreadRootID).
-			Int("max_rows", maxContextRows).
-			Msg("Chat history read hit the row cap, older context is not visible")
+			Int("max_rows", maxRows).
+			Msg("Chat history read hit the row cap")
 	}
 
-	return applyAnchor(ctx, timeline, history)
+	return history
 }
 
 // buildContextWindow returns the history rows that make up the current context window of a
-// timeline, advancing and persisting the anchor when the window has outgrown its token budget.
+// timeline, advancing and persisting the anchor when the window has outgrown its token budget. The
+// window is measured as it is replayed at the time now, the time the turn is built at.
 //
 // The window grows until it exceeds the high mark, then the anchor jumps forward far enough to bring
 // it under the low mark and stays put until the next overflow. Evicting one message per turn instead
 // would change the prompt prefix on every request, which both unsettles the model and makes
-// provider-side prompt caching impossible.
+// provider-side prompt caching impossible. A tool result expiring only ever makes the window smaller,
+// so the passing of time alone never moves the anchor.
 //
 // A thread started from a stored turn begins with that turn. It is the oldest part of the thread's
 // window, so it is the first to go when the anchor advances.
-func buildContextWindow(ctx context.Context, timeline db.Timeline, seedTurnEventID string, high, low int) []db.ChatMessage {
+func buildContextWindow(ctx context.Context, timeline db.Timeline, seedTurnEventID string, high, low int, now time.Time) []db.ChatMessage {
 	roomID := timeline.RoomID
-	history := currentContextWindow(ctx, timeline, seedTurnEventID)
+	history := currentContextWindow(ctx, timeline, seedTurnEventID, high)
 	if len(history) == 0 {
 		return nil
 	}
 
-	windowTokens := estimateHistoryTokens(history)
+	windowTokens := estimateHistoryTokens(history, now)
 	if windowTokens <= high {
 		return history
 	}
 
-	trimmed, newAnchorID := trimToLowMark(history, low)
+	trimmed, newAnchorID := trimToLowMark(history, low, now)
 	if newAnchorID == 0 {
 		// No usable turn boundary to move to, so leave the window alone rather than cutting the
 		// conversation mid-turn. The next turn adds a boundary and this resolves itself.
@@ -176,7 +210,7 @@ func buildContextWindow(ctx context.Context, timeline db.Timeline, seedTurnEvent
 		Str("room_id", roomID).
 		Str("thread_root_id", timeline.ThreadRootID).
 		Int("window_tokens", windowTokens).
-		Int("trimmed_tokens", estimateHistoryTokens(trimmed)).
+		Int("trimmed_tokens", estimateHistoryTokens(trimmed, now)).
 		Int("high_tokens", high).
 		Int("low_tokens", low).
 		Int("dropped_messages", len(history)-len(trimmed)).
@@ -210,47 +244,17 @@ func loadHistoryImages(ctx context.Context, roomID string, window []db.ChatMessa
 	}
 }
 
-// applyAnchor drops the history rows that precede the timeline's stored anchor.
-//
-// A missing anchor means the window starts at the oldest available row. An anchor pointing at a row
-// that no longer exists — the retention cleanup deletes rows older than a week — still drops only
-// the rows before it, so a quiet room degrades to a shorter window instead of breaking.
-//
-// An anchor past every row leaves the window empty. A reset puts a thread's anchor there, so that
-// the turn the thread was started from, which the reset doesn't delete, stays out of the thread.
-func applyAnchor(ctx context.Context, timeline db.Timeline, history []db.ChatMessage) []db.ChatMessage {
-	anchorID, err := db.GetChatContextAnchor(ctx, timeline)
-	if err != nil {
-		// Already logged. The window starts at the oldest row, as without an anchor.
-		return history
-	}
-	return fromAnchor(history, anchorID)
-}
-
-// fromAnchor returns the history rows from the anchor on, all of them if there is no anchor
-func fromAnchor(history []db.ChatMessage, anchorID *int64) []db.ChatMessage {
-	if anchorID == nil {
-		return history
-	}
-	for i, msg := range history {
-		if msg.ID >= *anchorID {
-			return history[i:]
-		}
-	}
-	return nil
-}
-
-// trimToLowMark finds the earliest turn boundary that brings the window under the low mark and
-// returns the history from there, along with the id to anchor at.
+// trimToLowMark finds the earliest turn boundary that brings the window under the low mark, as it
+// is replayed at the time now, and returns the history from there, along with the id to anchor at.
 //
 // The boundary is always a user message: cutting mid-turn would strand a tool call without its
 // response, which the chat API rejects. Returns a zero id when no suitable boundary exists.
-func trimToLowMark(history []db.ChatMessage, low int) ([]db.ChatMessage, int64) {
+func trimToLowMark(history []db.ChatMessage, low int, now time.Time) ([]db.ChatMessage, int64) {
 	// Walk backwards accumulating tokens, remembering the earliest turn boundary that still fits
 	tokens := 0
 	best := -1
 	for i := len(history) - 1; i >= 0; i-- {
-		tokens += estimateRowTokens(history[i])
+		tokens += estimateRowTokens(history[i], now)
 		if tokens > low {
 			break
 		}

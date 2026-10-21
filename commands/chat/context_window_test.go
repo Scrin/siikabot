@@ -1,11 +1,14 @@
 package chat
 
 import (
+	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/db"
 )
 
@@ -19,7 +22,7 @@ func sizedText(tokens int) string {
 func userRow(id int64, tokens int) db.ChatMessage {
 	row := textMsg("user", "", time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC))
 	row.ID = id
-	header := len(replayText(row))
+	header := len(replayText(row, testNow))
 	row.Message = strings.Repeat("x", max(0, (tokens-messageTokenOverhead)*4-header))
 	return row
 }
@@ -53,7 +56,7 @@ func TestTrimToLowMarkStopsAtTurnBoundary(t *testing.T) {
 		assistantRow(6, 100),
 	}
 
-	trimmed, anchorID := trimToLowMark(history, 250)
+	trimmed, anchorID := trimToLowMark(history, 250, testNow)
 
 	if anchorID == 0 {
 		t.Fatal("expected an anchor to be chosen")
@@ -64,7 +67,7 @@ func TestTrimToLowMarkStopsAtTurnBoundary(t *testing.T) {
 	if trimmed[0].ID != anchorID {
 		t.Errorf("anchor id %d does not match the first row %d", anchorID, trimmed[0].ID)
 	}
-	if got := estimateHistoryTokens(trimmed); got > 250 {
+	if got := estimateHistoryTokens(trimmed, testNow); got > 250 {
 		t.Errorf("trimmed window is %d tokens, above the low mark of 250", got)
 	}
 }
@@ -78,7 +81,7 @@ func TestTrimToLowMarkKeepsTheMostRecentTurns(t *testing.T) {
 		userRow(4, 100),
 	}
 
-	trimmed, _ := trimToLowMark(history, 250)
+	trimmed, _ := trimToLowMark(history, 250, testNow)
 
 	if trimmed[len(trimmed)-1].ID != 4 {
 		t.Errorf("expected the newest row to be kept, last row is id %d", trimmed[len(trimmed)-1].ID)
@@ -96,7 +99,7 @@ func TestTrimToLowMarkFallsBackToNewestBoundary(t *testing.T) {
 		userRow(2, 500),
 	}
 
-	trimmed, anchorID := trimToLowMark(history, 100)
+	trimmed, anchorID := trimToLowMark(history, 100, testNow)
 
 	if anchorID != 2 {
 		t.Errorf("expected to anchor at the newest boundary (2), got %d", anchorID)
@@ -114,7 +117,7 @@ func TestTrimToLowMarkWithNoBoundary(t *testing.T) {
 		assistantRow(2, 500),
 	}
 
-	trimmed, anchorID := trimToLowMark(history, 100)
+	trimmed, anchorID := trimToLowMark(history, 100, testNow)
 
 	if anchorID != 0 {
 		t.Errorf("expected no anchor when there is no turn boundary, got %d", anchorID)
@@ -137,8 +140,8 @@ func TestWindowIsStableBetweenEvictions(t *testing.T) {
 	evictions := 0
 	for id := int64(4); id <= 20; id++ {
 		history = append(history, userRow(id, 100))
-		if estimateHistoryTokens(history) > high {
-			trimmed, anchorID := trimToLowMark(history, low)
+		if estimateHistoryTokens(history, testNow) > high {
+			trimmed, anchorID := trimToLowMark(history, low, testNow)
 			if anchorID == 0 {
 				t.Fatal("expected an anchor while trimming")
 			}
@@ -225,31 +228,66 @@ func TestIsTurnBoundary(t *testing.T) {
 	}
 }
 
-func TestFromAnchor(t *testing.T) {
-	history := []db.ChatMessage{{ID: 3}, {ID: 5}, {ID: 8}}
-	ids := func(rows []db.ChatMessage) []int64 {
-		var got []int64
-		for _, row := range rows {
-			got = append(got, row.ID)
-		}
-		return got
+// TestRowCapNeverCutsAWindowWithinBudget is the property the row cap is derived for: a read the cap
+// cuts short is over the high mark already, so the cap can never decide the window in the budget's
+// place. Rows of the smallest possible size are the hardest case, since the most of them fit.
+func TestRowCapNeverCutsAWindowWithinBudget(t *testing.T) {
+	smallest := db.ChatMessage{Role: "assistant", MessageType: "text"}
+	if got := estimateRowTokens(smallest, testNow); got != messageTokenOverhead {
+		t.Fatalf("an empty row is estimated at %d tokens, want %d", got, messageTokenOverhead)
 	}
-	anchor := func(id int64) *int64 { return &id }
 
-	if got := ids(fromAnchor(history, nil)); len(got) != 3 {
-		t.Errorf("without an anchor = %v, want every row", got)
+	for _, high := range []int{1, 3, 4, 5, 16384, 100000, 102401} {
+		cut := slices.Repeat([]db.ChatMessage{smallest}, maxContextRows(high))
+		if got := estimateHistoryTokens(cut, testNow); got <= high {
+			t.Errorf("a read cut at the cap of %d rows is %d tokens, within the high mark of %d",
+				maxContextRows(high), got, high)
+		}
 	}
-	if got := ids(fromAnchor(history, anchor(5))); len(got) != 2 || got[0] != 5 {
-		t.Errorf("anchored at a row = %v, want the rows from it on", got)
+}
+
+// TestBudgetMeasuresToolResultsAsReplayed verifies the budget counts a tool result as the model sees
+// it: cut short while it is current, and as its expiry marker once it has expired. Counting results
+// as stored trimmed the windows that held them long before they reached the budget.
+func TestBudgetMeasuresToolResultsAsReplayed(t *testing.T) {
+	past, future := testNow.Add(-time.Hour), testNow.Add(time.Hour)
+
+	long := responseMsg("call_1", "get_web_content", strings.Repeat("a", maxReplayedToolResponseBytes*3), testNow)
+	long.Expiry = &future
+	expired := responseMsg("call_2", "get_fmi_data", strings.Repeat("b", 2000), testNow)
+	expired.Expiry = &past
+
+	history := []db.ChatMessage{
+		textMsg("user", "read this page and check the weather", testNow),
+		callMsg("call_1", "get_web_content", `{"url":"https://example.com"}`, testNow),
+		long,
+		callMsg("call_2", "get_fmi_data", `{"place":"Oulu"}`, testNow),
+		expired,
+		textMsg("assistant", "here you go", testNow),
 	}
-	// The anchored row itself has gone, as the retention cleanup does to old rows
-	if got := ids(fromAnchor(history, anchor(4))); len(got) != 2 || got[0] != 5 {
-		t.Errorf("anchored at a deleted row = %v, want the rows after it", got)
+
+	// The budget has to measure exactly the text the replay produces
+	var messages []aigateway.Message
+	processHistoryMessages(context.Background(), history, "low", testNow, &messages)
+	replayed := make(map[string]string)
+	for _, msg := range messages {
+		if msg.Role == "tool" {
+			replayed[msg.ToolCallID], _ = msg.Content.(string)
+		}
 	}
-	// Where a reset of a thread leaves its anchor: past everything, the turn the thread was started
-	// from included
-	if got := fromAnchor(history, anchor(9)); len(got) != 0 {
-		t.Errorf("anchored past every row = %v, want none", ids(got))
+	for _, row := range []db.ChatMessage{long, expired} {
+		if got, want := replayText(row, testNow), replayed[*row.ToolCallID]; got != want {
+			t.Errorf("the %s result is measured as %d bytes of text, but replayed as %d", *row.ToolName, len(got), len(want))
+		}
+		if got, stored := estimateRowTokens(row, testNow), estimateTokens(row.Message); got >= stored {
+			t.Errorf("the %s result is estimated at %d tokens, not less than the %d it is stored as", *row.ToolName, got, stored)
+		}
+	}
+
+	// Expiring only ever makes a result cheaper, so the passing of time alone never pushes a window
+	// over the high mark
+	if before, after := estimateRowTokens(long, future.Add(-time.Minute)), estimateRowTokens(long, future); after >= before {
+		t.Errorf("the result is estimated at %d tokens once it has expired, not less than the %d before", after, before)
 	}
 }
 
@@ -289,7 +327,7 @@ func TestEstimateHistoryTokensCountsImages(t *testing.T) {
 	withImage := imageTurnRow(1, 1536, 1152)
 	withImage.Message = plain.Message
 
-	if got, least := estimateHistoryTokens([]db.ChatMessage{withImage}), estimateHistoryTokens([]db.ChatMessage{plain})+estimateImageTokens(1536, 1152); got < least {
+	if got, least := estimateHistoryTokens([]db.ChatMessage{withImage}, testNow), estimateHistoryTokens([]db.ChatMessage{plain}, testNow)+estimateImageTokens(1536, 1152); got < least {
 		t.Errorf("a message with an image is estimated at %d tokens, want at least %d", got, least)
 	}
 }
@@ -306,7 +344,7 @@ func TestTrimToLowMarkDropsImageTurnsLikeAnyOther(t *testing.T) {
 		t.Fatalf("historyImages() = %d, %d, want the one image", count, tokens)
 	}
 
-	trimmed, anchorID := trimToLowMark(history, 500)
+	trimmed, anchorID := trimToLowMark(history, 500, testNow)
 
 	if anchorID != 3 {
 		t.Errorf("anchored at %d, want the turn after the image turn (3)", anchorID)

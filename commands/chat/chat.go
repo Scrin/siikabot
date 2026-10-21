@@ -123,10 +123,10 @@ func cleanupChatUsage(ctx context.Context) {
 // Deliberately reads the window without maintaining it: showing the configuration should not move
 // the anchor as a side effect.
 func describeContextWindow(ctx context.Context, timeline db.Timeline, sender string, cfg db.ChatConfig) string {
-	window := currentContextWindow(ctx, timeline, threadSeed(ctx, timeline, sender))
+	window := currentContextWindow(ctx, timeline, threadSeed(ctx, timeline, sender), cfg.ContextHighTokens)
 	images, _ := historyImages(window)
 	return fmt.Sprintf("%d / %d tokens (currently ~%d tokens over %d %s, %d %s)",
-		cfg.ContextHighTokens, cfg.ContextLowTokens, estimateHistoryTokens(window),
+		cfg.ContextHighTokens, cfg.ContextLowTokens, estimateHistoryTokens(window, time.Now()),
 		len(window), plural(len(window), "message", "messages"), images, plural(images, "image", "images"))
 }
 

@@ -135,10 +135,12 @@ var chatTokenEstimateDrift = makeCollector(prometheus.NewHistogramVec(prometheus
 	Buckets: []float64{0.5, 0.7, 0.85, 0.95, 1.05, 1.15, 1.3, 1.5, 2},
 }, []string{"model", "with_images"}))
 
+// The buckets reach 1M tokens, so that even the largest windows a large-context model takes land in
+// a bucket of their own rather than in the overflow
 var chatContextWindowTokens = makeCollector(prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	Name:    metricPrefix + "chat_context_window_tokens",
 	Help:    "Estimated token size of the replayed context window",
-	Buckets: []float64{256, 512, 1024, 2048, 4096, 8192, 16384, 32768},
+	Buckets: []float64{256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576},
 }, []string{"model"}))
 
 var chatContextAnchorAdvances = makeCollector(prometheus.NewCounter(prometheus.CounterOpts{
@@ -154,11 +156,12 @@ var chatTurnPhaseDuration = makeCollector(prometheus.NewHistogramVec(prometheus.
 	Buckets: []float64{0.25, 0.5, 1, 2, 4, 8, 15, 30, 60, 120},
 }, []string{"model", "phase"}))
 
-// Shows which part of the prompt the tokens are actually going to, so trimming can be aimed
+// Shows which part of the prompt the tokens are actually going to, so trimming can be aimed. The
+// buckets reach 1M tokens, as those of the context window do, since the history is one of the parts.
 var chatPromptComponentTokens = makeCollector(prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	Name:    metricPrefix + "chat_prompt_component_tokens",
 	Help:    "Estimated token cost of each component of a prompt",
-	Buckets: []float64{64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384},
+	Buckets: []float64{64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576},
 }, []string{"component"}))
 
 // RecordChatRequestDuration records the end-to-end duration of a chat request

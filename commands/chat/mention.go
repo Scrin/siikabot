@@ -502,11 +502,15 @@ func buildInitialMessages(ctx context.Context, trigger Trigger, cfg db.ChatConfi
 	// room, and everything that changes from turn to turn goes in the turn context after the history.
 	system := systemPrompt(room.nameOf(ctx, config.UserID), room)
 
+	// The time the turn is built at. The window is measured as it is replayed, so the two have to
+	// agree on which tool results have expired, and both take the time from here.
+	now := time.Now()
+
 	// The history of the timeline the trigger was sent in: the main timeline, or its thread, which
 	// begins with the turn it was started from if there is one
 	turn := db.Turn{RoomID: roomID, EventID: trigger.EventID, ThreadRootID: trigger.ThreadRootID}
 	seed := threadSeed(ctx, turn.Timeline(), sender)
-	history := buildContextWindow(ctx, turn.Timeline(), seed, cfg.ContextHighTokens, cfg.ContextLowTokens)
+	history := buildContextWindow(ctx, turn.Timeline(), seed, cfg.ContextHighTokens, cfg.ContextLowTokens, now)
 	loadHistoryImages(ctx, roomID, history)
 
 	// The trigger, as the model sees it now and as the history keeps it. The first message of a
@@ -535,7 +539,7 @@ func buildInitialMessages(ctx context.Context, trigger Trigger, cfg db.ChatConfi
 	// Process history to include tool calls and tool responses, and the images its messages showed,
 	// which are shown again
 	historyStart := len(messages)
-	processHistoryMessages(ctx, history, cfg.ImageDetail, &messages)
+	processHistoryMessages(ctx, history, cfg.ImageDetail, now, &messages)
 	historyImageCount, historyImageTokens := historyImages(history)
 	composition.history = estimateMessageTokens(messages[historyStart:]) + historyImageTokens
 
@@ -550,7 +554,7 @@ func buildInitialMessages(ctx context.Context, trigger Trigger, cfg db.ChatConfi
 		notes = append(notes, noReplyNote)
 	}
 
-	turnInfo := turnContext(time.Now(), person(userTurn.SenderName, sender),
+	turnInfo := turnContext(now, person(userTurn.SenderName, sender),
 		memoriesFor(ctx, sender, room), relevantMembers(room, userTurn, history), notes)
 	messages = append(messages, aigateway.Message{Role: "system", Content: turnInfo})
 
@@ -598,8 +602,9 @@ func memoriesFor(ctx context.Context, sender string, room roomInfo) []db.UserMem
 //
 // A user message is replayed exactly as it was sent when it was the current turn: with its header,
 // and with the images it showed, for as long as it stays in the window. imageDetail is the configured
-// image detail.
-func processHistoryMessages(ctx context.Context, history []db.ChatMessage, imageDetail string, messages *[]aigateway.Message) {
+// image detail, and now the time the turn is built at, which decides the tool results that have
+// expired.
+func processHistoryMessages(ctx context.Context, history []db.ChatMessage, imageDetail string, now time.Time, messages *[]aigateway.Message) {
 	for i := 0; i < len(history); {
 		historyMsg := history[i]
 
@@ -608,7 +613,7 @@ func processHistoryMessages(ctx context.Context, history []db.ChatMessage, image
 			// Collect the run of calls making up this batch, then the responses answering them,
 			// which the writer stores right after the calls in the same transaction
 			calls, next := collectToolCalls(history, i)
-			responses, next := collectToolResponses(history, next)
+			responses, next := collectToolResponses(history, next, now)
 
 			*messages = append(*messages, aigateway.Message{
 				Role:      "assistant",
@@ -665,12 +670,12 @@ func collectToolCalls(history []db.ChatMessage, start int) ([]aigateway.ToolCall
 // collectToolResponses reads the run of consecutive tool_response rows starting at start, returning
 // them keyed by tool call id and the index of the first row that follows.
 //
-// An expired result is replaced by a marker rather than dropped. Removing it would delete the reply
-// to a tool call that is still in the history, and reshape the conversation behind the model's back
-// mid-thread; the marker keeps the structure intact while making it plain that the data is stale.
-func collectToolResponses(history []db.ChatMessage, start int) (map[string]string, int) {
+// An expired result, as of now, is replaced by a marker rather than dropped. Removing it would delete
+// the reply to a tool call that is still in the history, and reshape the conversation behind the
+// model's back mid-thread; the marker keeps the structure intact while making it plain that the data
+// is stale.
+func collectToolResponses(history []db.ChatMessage, start int, now time.Time) (map[string]string, int) {
 	responses := make(map[string]string)
-	now := time.Now()
 	i := start
 	for ; i < len(history) && history[i].MessageType == "tool_response"; i++ {
 		responses[*history[i].ToolCallID] = replayableToolResponse(history[i], now)
