@@ -37,7 +37,7 @@ func TestExtractAssistantResponse(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			answer, outcome := extractAssistantResponse(context.Background(), "!room:example.com",
-				"@alice:example.com", "test-model", false, responseWith(tt.content))
+				"@alice:example.com", "test-model", responseWith(tt.content))
 			if answer != tt.wantAnswer || outcome != tt.wantOutcome {
 				t.Errorf("extractAssistantResponse() = %q, %q, want %q, %q", answer, outcome, tt.wantAnswer, tt.wantOutcome)
 			}

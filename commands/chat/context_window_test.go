@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -260,5 +261,72 @@ func TestWindowHasTurn(t *testing.T) {
 	}
 	if windowHasTurn(history, "$other") || windowHasTurn(history, "") {
 		t.Error("a turn that isn't in the window was found")
+	}
+}
+
+// imageTurnRow builds a turn-boundary row of a message with an image of its own, kept with it
+func imageTurnRow(id int64, width, height int) db.ChatMessage {
+	row := userRow(id, 50)
+	row.TurnEventID = fmt.Sprintf("$turn%d", id)
+	hasImage := true
+	row.HasImage = &hasImage
+	row.Images = []db.ChatImage{{EventID: row.TurnEventID, MIMEType: "image/jpeg", Width: width, Height: height}}
+	return row
+}
+
+func TestEstimateImageTokens(t *testing.T) {
+	if got, want := estimateImageTokens(1500, 750), 1500+messageTokenOverhead; got != want {
+		t.Errorf("estimateImageTokens(1500, 750) = %d, want %d", got, want)
+	}
+	if small, large := estimateImageTokens(100, 100), estimateImageTokens(maxImageSide, maxImageSide); small >= large {
+		t.Errorf("a small image is estimated at %d tokens and a large one at %d", small, large)
+	}
+}
+
+// An image counts against the budget for as long as its message is in the window
+func TestEstimateHistoryTokensCountsImages(t *testing.T) {
+	plain := userRow(1, 100)
+	withImage := imageTurnRow(1, 1536, 1152)
+	withImage.Message = plain.Message
+
+	if got, least := estimateHistoryTokens([]db.ChatMessage{withImage}), estimateHistoryTokens([]db.ChatMessage{plain})+estimateImageTokens(1536, 1152); got < least {
+		t.Errorf("a message with an image is estimated at %d tokens, want at least %d", got, least)
+	}
+}
+
+// A turn with an image leaves the window like any other, and its image with it
+func TestTrimToLowMarkDropsImageTurnsLikeAnyOther(t *testing.T) {
+	history := []db.ChatMessage{
+		imageTurnRow(1, 1536, 1152),
+		assistantRow(2, 100),
+		userRow(3, 100),
+		assistantRow(4, 100),
+	}
+	if count, tokens := historyImages(history); count != 1 || tokens != estimateImageTokens(1536, 1152) {
+		t.Fatalf("historyImages() = %d, %d, want the one image", count, tokens)
+	}
+
+	trimmed, anchorID := trimToLowMark(history, 500)
+
+	if anchorID != 3 {
+		t.Errorf("anchored at %d, want the turn after the image turn (3)", anchorID)
+	}
+	if count, _ := historyImages(trimmed); count != 0 {
+		t.Errorf("%d images left in the trimmed window, want none", count)
+	}
+}
+
+// The images of a history are those its user messages show, whatever else the rows hold
+func TestHistoryImages(t *testing.T) {
+	history := []db.ChatMessage{
+		imageTurnRow(1, 800, 600),
+		assistantRow(2, 100),
+		userRow(3, 100),
+		imageTurnRow(4, 1536, 1152),
+	}
+
+	count, tokens := historyImages(history)
+	if want := estimateImageTokens(800, 600) + estimateImageTokens(1536, 1152); count != 2 || tokens != want {
+		t.Errorf("historyImages() = %d, %d, want 2, %d", count, tokens, want)
 	}
 }

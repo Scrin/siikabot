@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -103,7 +104,7 @@ func TestHistoryPreservesChronologicalOrder(t *testing.T) {
 	}
 
 	var messages []aigateway.Message
-	processHistoryMessages(context.Background(), history, &messages)
+	processHistoryMessages(context.Background(), history, "low", &messages)
 
 	want := []string{
 		"user[what is the weather?]",
@@ -137,7 +138,7 @@ func TestHistoryGroupsParallelToolCalls(t *testing.T) {
 	}
 
 	var messages []aigateway.Message
-	processHistoryMessages(context.Background(), history, &messages)
+	processHistoryMessages(context.Background(), history, "low", &messages)
 
 	want := []string{
 		"user[weather and time?]",
@@ -168,7 +169,7 @@ func TestHistoryHandlesMultipleIterations(t *testing.T) {
 	}
 
 	var messages []aigateway.Message
-	processHistoryMessages(context.Background(), history, &messages)
+	processHistoryMessages(context.Background(), history, "low", &messages)
 
 	want := []string{
 		"user[research this]",
@@ -197,7 +198,7 @@ func TestHistoryDropsOrphanedToolResponse(t *testing.T) {
 	}
 
 	var messages []aigateway.Message
-	processHistoryMessages(context.Background(), history, &messages)
+	processHistoryMessages(context.Background(), history, "low", &messages)
 
 	want := []string{"assistant[it is -7 C]", "user[thanks]"}
 
@@ -222,7 +223,7 @@ func TestHistoryReplaysStoredBatchesAsOneStep(t *testing.T) {
 	history = append(history, textMsg("assistant", "-7 C at 14:05", base))
 
 	var messages []aigateway.Message
-	processHistoryMessages(context.Background(), history, &messages)
+	processHistoryMessages(context.Background(), history, "low", &messages)
 
 	want := []string{
 		"user[weather and time?]",
@@ -244,9 +245,9 @@ func TestHistoryReplaysUserTurnsWithTheirHeader(t *testing.T) {
 	row := textMsg("user", "what's the weather?", at)
 
 	var messages []aigateway.Message
-	processHistoryMessages(context.Background(), []db.ChatMessage{row}, &messages)
+	processHistoryMessages(context.Background(), []db.ChatMessage{row}, "low", &messages)
 
-	want := renderUserTurn(row.UserTurn(), nil)
+	want := renderUserTurn(row.UserTurn())
 	if got, _ := messages[0].Content.(string); got != want {
 		t.Errorf("replayed user message = %q, want %q", got, want)
 	}
@@ -257,7 +258,7 @@ func TestHistoryReplaysUserTurnsWithTheirHeader(t *testing.T) {
 
 func TestHistoryEmpty(t *testing.T) {
 	var messages []aigateway.Message
-	processHistoryMessages(context.Background(), nil, &messages)
+	processHistoryMessages(context.Background(), nil, "low", &messages)
 
 	if len(messages) != 0 {
 		t.Errorf("expected no messages, got %d", len(messages))
@@ -269,11 +270,63 @@ func TestHistoryAppendsToExistingMessages(t *testing.T) {
 	base := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 
 	messages := []aigateway.Message{{Role: "system", Content: "you are a bot"}}
-	processHistoryMessages(context.Background(), []db.ChatMessage{textMsg("user", "hello", base)}, &messages)
+	processHistoryMessages(context.Background(), []db.ChatMessage{textMsg("user", "hello", base)}, "low", &messages)
 
 	want := []string{"system[you are a bot]", "user[hello]"}
 
 	if got := summarise(messages); !equal(got, want) {
 		t.Errorf("existing messages not preserved\n got: %v\nwant: %v", got, want)
+	}
+}
+
+// storedRow is a user turn as the history reads it back once it is stored, with its images loaded
+func storedRow(turn db.UserTurn) db.ChatMessage {
+	unseen, hasImage := turn.UnseenBefore, turn.HasImage
+	row := db.ChatMessage{
+		RoomID: turn.RoomID, UserID: turn.UserID, Message: turn.Message, Role: "user", MessageType: "text",
+		TurnEventID: turn.EventID, SenderName: &turn.SenderName, SentAt: &turn.SentAt, Mentions: []db.Mention{},
+		UnseenBefore: &unseen, HasImage: &hasImage, Images: turn.Images,
+	}
+	if turn.ReplyTo != nil {
+		row.References = append(row.References, db.Reference{Relation: db.RelationReply, QuotedMessage: *turn.ReplyTo})
+	}
+	for _, link := range turn.Links {
+		row.References = append(row.References, db.Reference{Relation: db.RelationLink, QuotedMessage: link})
+	}
+	return row
+}
+
+// A turn is replayed exactly as it was sent when it was the current turn, images and all, so the
+// model still sees them and the prompt prefix stays cacheable
+func TestHistoryReplaysATurnWithItsImages(t *testing.T) {
+	turn := aliceTurn("is this the same cat?")
+	turn.HasImage = true
+	turn.ReplyTo = &db.QuotedMessage{EventID: "$cat", Sender: "@carol:example.com", SenderName: "Carol",
+		SentAt: renderTime, Kind: db.QuoteImage, Body: "my cat"}
+	turn.Images = []db.ChatImage{testImage("$cat"), testImage("$alice")}
+	sent := userContent(turn, "low")
+
+	var messages []aigateway.Message
+	processHistoryMessages(context.Background(), []db.ChatMessage{storedRow(turn)}, "low", &messages)
+
+	if len(messages) != 1 || messages[0].Role != "user" || !reflect.DeepEqual(messages[0].Content, sent) {
+		t.Errorf("replayed turn = %#v\nwant it as it was sent: %#v", messages, sent)
+	}
+	if parts, ok := sent.([]aigateway.ContentPart); !ok || len(parts) != 3 {
+		t.Errorf("the turn was sent as %#v, want its text and both images", sent)
+	}
+}
+
+// A message whose image isn't kept, because it couldn't be downloaded when it was sent or was sent
+// before images were kept, says so when it is replayed
+func TestHistoryReplaysAMissingImageAsNotAttached(t *testing.T) {
+	turn := aliceTurn("what is this?")
+	turn.HasImage = true
+
+	var messages []aigateway.Message
+	processHistoryMessages(context.Background(), []db.ChatMessage{storedRow(turn)}, "low", &messages)
+
+	if content, ok := messages[0].Content.(string); !ok || !strings.Contains(content, "]\n[with an image, not attached]\nwhat is this?") {
+		t.Errorf("replayed turn = %#v, want text saying the image isn't attached", messages[0].Content)
 	}
 }

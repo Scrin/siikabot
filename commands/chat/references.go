@@ -2,10 +2,11 @@ package chat
 
 import (
 	"context"
-	"strings"
+	"time"
 
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/matrix"
+	"github.com/Scrin/siikabot/metrics"
 	"github.com/rs/zerolog/log"
 )
 
@@ -23,16 +24,16 @@ const (
 )
 
 // references is what a turn gets of the messages its trigger explicitly refers to, and of the image
-// the trigger is if it is one: the quotes kept with the turn, the images attached to this turn only,
-// and notes for the model about what it can't be shown
+// the trigger is if it is one: the quotes and the images kept with the turn, and notes for the model
+// about what it can't be shown
 type references struct {
 	replyTo *db.QuotedMessage
 	links   []db.QuotedMessage
-	// images are the images attached to the turn, as data URLs, and attached says whose they are,
-	// by event ID
-	images   []string
-	attached map[string]bool
-	notes    []string
+	// images are the images the turn shows the model, prepared for it, at most one for each message
+	images []db.ChatImage
+	notes  []string
+	// imageTime is how long getting the images ready took, downloading and preparing them
+	imageTime time.Duration
 }
 
 // referencedMessages works out what a turn gets of the messages its trigger explicitly refers to,
@@ -44,7 +45,7 @@ type references struct {
 func referencedMessages(ctx context.Context, trigger Trigger, room roomInfo, withReply bool) references {
 	// Images are attached in the order the turn shows what they belong to: the replied-to message,
 	// the linked ones, then the message's own image
-	refs := references{attached: make(map[string]bool)}
+	var refs references
 
 	if withReply && trigger.ReplyToEventID != "" {
 		log.Debug().Ctx(ctx).
@@ -126,24 +127,27 @@ func quoteOf(ctx context.Context, roomID string, msg *matrix.Message, room roomI
 	return quote
 }
 
-// attach downloads the image of a message and attaches it to the turn. An image that can't be
-// attached leaves a note for the model instead, failureNote if it couldn't be downloaded.
+// attach downloads the image of a message and prepares it for the model, which the turn then shows
+// it to. An image that can't be shown leaves a note for the model instead, failureNote if it couldn't
+// be downloaded or prepared.
 func (r *references) attach(ctx context.Context, roomID string, msg *matrix.Message, failureNote string) {
-	imageDataURL, note := imageOf(ctx, roomID, msg, failureNote)
+	start := time.Now()
+	image, ok, note := imageOf(ctx, roomID, msg, failureNote)
+	r.imageTime += time.Since(start)
 	if note != "" {
 		r.notes = append(r.notes, note)
 	}
-	if imageDataURL == "" {
+	if !ok {
 		return
 	}
-	r.images = append(r.images, imageDataURL)
-	r.attached[msg.EventID] = true
+	r.images = append(r.images, image)
+	metrics.RecordChatImageProcessed()
 }
 
-// imageOf downloads the image of a message, returning it as a data URL ready to attach. When it
-// can't be attached, the data URL is empty and there may be a note for the model: failureNote if
-// the download failed.
-func imageOf(ctx context.Context, roomID string, msg *matrix.Message, failureNote string) (string, string) {
+// imageOf downloads the image of a message and prepares it for the model (see prepareImage). When
+// it can't be shown, ok is false and there may be a note for the model: failureNote if the image
+// couldn't be downloaded or prepared.
+func imageOf(ctx context.Context, roomID string, msg *matrix.Message, failureNote string) (image db.ChatImage, ok bool, note string) {
 	// Get the image URL, encryption info, and full content
 	imageURL, encryptionInfo, fullContent, err := matrix.MessageImageURL(ctx, msg)
 	if err != nil {
@@ -151,95 +155,41 @@ func imageOf(ctx context.Context, roomID string, msg *matrix.Message, failureNot
 			Str("room_id", roomID).
 			Str("event_id", msg.EventID).
 			Msg("Failed to get image URL from a message")
-		return "", ""
+		return db.ChatImage{}, false, ""
 	}
 
-	// Download the image and convert to base64
-	base64ImageURL, err := matrix.DownloadImageAsBase64(ctx, imageURL, encryptionInfo, fullContent)
+	data, err := matrix.DownloadImage(ctx, imageURL, encryptionInfo, fullContent)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).
 			Str("room_id", roomID).
 			Str("image_url", imageURL).
 			Bool("is_encrypted", encryptionInfo != nil).
-			Msg("Failed to download and convert image to base64")
-		return "", failureNote
+			Msg("Failed to download an image")
+		return db.ChatImage{}, false, failureNote
 	}
+
+	image, err = prepareImage(data)
+	if err != nil {
+		log.Warn().Ctx(ctx).Err(err).
+			Str("room_id", roomID).
+			Str("event_id", msg.EventID).
+			Int("size_bytes", len(data)).
+			Msg("Failed to prepare an image for the model")
+		return db.ChatImage{}, false, failureNote
+	}
+	image.EventID = msg.EventID
 
 	log.Debug().Ctx(ctx).
 		Str("room_id", roomID).
 		Str("event_id", msg.EventID).
 		Str("image_url", imageURL).
 		Bool("is_encrypted", encryptionInfo != nil).
+		Int("downloaded_bytes", len(data)).
+		Int("prepared_bytes", len(image.Data)).
+		Str("mime_type", image.MIMEType).
+		Int("width", image.Width).
+		Int("height", image.Height).
 		Msg("Attaching an image to the chat turn")
 
-	return usableImage(ctx, roomID, base64ImageURL)
-}
-
-// maxImageBytes is the largest image that is attached to a request
-const maxImageBytes = 5 * 1024 * 1024
-
-// usableImage checks that a downloaded image can be attached: a well-formed data URL of at most
-// maxImageBytes. Returns the data URL to attach, or an empty one with a note for the model.
-func usableImage(ctx context.Context, roomID, base64ImageURL string) (string, string) {
-	// Ensure the base64ImageURL is properly formatted
-	if !strings.HasPrefix(base64ImageURL, "data:image/") {
-		// Log a prefix of the URL for debugging, but be careful of index out of range
-		urlPrefix := base64ImageURL
-		if len(base64ImageURL) > 30 {
-			urlPrefix = base64ImageURL[:30] + "..."
-		}
-
-		log.Warn().Ctx(ctx).
-			Str("room_id", roomID).
-			Str("base64_url_prefix", urlPrefix).
-			Msg("Image URL is not properly formatted, attempting to fix")
-
-		// Try to extract the content type and base64 data
-		if strings.Contains(base64ImageURL, ";base64,") {
-			parts := strings.SplitN(base64ImageURL, ";base64,", 2)
-			if len(parts) == 2 {
-				contentType := parts[0]
-				if !strings.HasPrefix(contentType, "data:") {
-					contentType = "data:" + contentType
-				}
-				if !strings.HasPrefix(contentType, "data:image/") {
-					contentType = "data:image/png"
-				}
-				base64Data := parts[1]
-				base64ImageURL = contentType + ";base64," + base64Data
-
-				// Log a prefix of the fixed URL for debugging, but be careful of index out of range
-				fixedUrlPrefix := base64ImageURL
-				if len(base64ImageURL) > 30 {
-					fixedUrlPrefix = base64ImageURL[:30] + "..."
-				}
-
-				log.Debug().Ctx(ctx).
-					Str("room_id", roomID).
-					Str("fixed_url_prefix", fixedUrlPrefix).
-					Msg("Fixed image URL format")
-			}
-		}
-	}
-
-	parts := strings.SplitN(base64ImageURL, ";base64,", 2)
-	if len(parts) != 2 {
-		log.Error().Ctx(ctx).
-			Str("room_id", roomID).
-			Msg("Image URL does not contain valid base64 data, skipping image")
-		return "", ""
-	}
-
-	// Base64 encoding increases size by ~33%, so this approximates the decoded size
-	estimatedSize := len(parts[1]) * 3 / 4
-	if estimatedSize > maxImageBytes {
-		log.Warn().Ctx(ctx).
-			Str("room_id", roomID).
-			Int("estimated_size_bytes", estimatedSize).
-			Int("max_size_bytes", maxImageBytes).
-			Msg("Image is too large, skipping image attachment")
-		return "", "Note: An image was attached to this message, but it was too large to process (>5MB)."
-	}
-
-	return base64ImageURL, ""
+	return image, true, ""
 }

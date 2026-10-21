@@ -1,10 +1,12 @@
 package chat
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/db"
 )
 
@@ -22,7 +24,7 @@ func aliceTurn(message string) db.UserTurn {
 }
 
 func TestRenderUserTurnHeader(t *testing.T) {
-	got := renderUserTurn(aliceTurn("what's the weather in Helsinki?"), nil)
+	got := renderUserTurn(aliceTurn("what's the weather in Helsinki?"))
 	want := "[Alice (@alice:example.com) · 2026-09-25 14:02]\nwhat's the weather in Helsinki?"
 	if got != want {
 		t.Errorf("renderUserTurn() =\n%s\nwant\n%s", got, want)
@@ -33,7 +35,7 @@ func TestRenderUserTurnWithoutADisplayName(t *testing.T) {
 	turn := aliceTurn("hi")
 	turn.SenderName = turn.UserID
 
-	if got := renderUserTurn(turn, nil); !strings.HasPrefix(got, "[@alice:example.com · ") {
+	if got := renderUserTurn(turn); !strings.HasPrefix(got, "[@alice:example.com · ") {
 		t.Errorf("renderUserTurn() = %q, want only the user ID when there is no name", got)
 	}
 }
@@ -42,12 +44,12 @@ func TestRenderUserTurnUnseenMessages(t *testing.T) {
 	turn := aliceTurn("hi")
 
 	turn.UnseenBefore = 1
-	if got := renderUserTurn(turn, nil); !strings.Contains(got, " · 1 unseen room message before this]") {
+	if got := renderUserTurn(turn); !strings.Contains(got, " · 1 unseen room message before this]") {
 		t.Errorf("one unseen message rendered as %q", got)
 	}
 
 	turn.UnseenBefore = 37
-	if got := renderUserTurn(turn, nil); !strings.Contains(got, " · 37 unseen room messages before this]") {
+	if got := renderUserTurn(turn); !strings.Contains(got, " · 37 unseen room messages before this]") {
 		t.Errorf("37 unseen messages rendered as %q", got)
 	}
 }
@@ -59,7 +61,7 @@ func TestRenderUserTurnMentions(t *testing.T) {
 		{UserID: "@carol:example.com", Name: "@carol:example.com"},
 	}
 
-	got := renderUserTurn(turn, nil)
+	got := renderUserTurn(turn)
 	if !strings.Contains(got, " · mentions Bob (@bob:example.com), @carol:example.com]") {
 		t.Errorf("mentions rendered as %q", got)
 	}
@@ -78,7 +80,7 @@ func TestRenderUserTurnQuote(t *testing.T) {
 		"> pineapple belongs on pizza\n" +
 		"> and I will die on this hill\n" +
 		"what do you think about this?"
-	if got := renderUserTurn(turn, nil); got != want {
+	if got := renderUserTurn(turn); got != want {
 		t.Errorf("renderUserTurn() =\n%s\nwant\n%s", got, want)
 	}
 }
@@ -90,7 +92,7 @@ func TestRenderUserTurnQuoteOfTheBot(t *testing.T) {
 		SentAt: renderTime, Kind: db.QuoteText, Body: "it's sunny",
 	}
 
-	if got := renderUserTurn(turn, nil); !strings.Contains(got, "[replying to your message · 2026-09-25 14:02]\n> it's sunny\n") {
+	if got := renderUserTurn(turn); !strings.Contains(got, "[replying to your message · 2026-09-25 14:02]\n> it's sunny\n") {
 		t.Errorf("a reply to the bot rendered as %q", got)
 	}
 }
@@ -102,11 +104,12 @@ func TestRenderUserTurnImageQuote(t *testing.T) {
 		SentAt: renderTime, Kind: db.QuoteImage,
 	}
 
-	if got := renderUserTurn(turn, map[string]bool{"$image": true}); !strings.Contains(got, "[replying to an image from Carol (@carol:example.com) · 2026-09-25 14:02]\n") {
-		t.Errorf("an attached image rendered as %q", got)
-	}
-	if got := renderUserTurn(turn, nil); !strings.Contains(got, "· 2026-09-25 14:02, not attached]\n") {
+	if got := renderUserTurn(turn); !strings.Contains(got, "· 2026-09-25 14:02, not attached]\n") {
 		t.Errorf("an image that is not attached rendered as %q", got)
+	}
+	turn.Images = []db.ChatImage{{EventID: "$image"}}
+	if got := renderUserTurn(turn); !strings.Contains(got, "[replying to an image from Carol (@carol:example.com) · 2026-09-25 14:02]\n") {
+		t.Errorf("an attached image rendered as %q", got)
 	}
 }
 
@@ -114,7 +117,7 @@ func TestRenderUserTurnDeletedQuote(t *testing.T) {
 	turn := aliceTurn("and this?")
 	turn.ReplyTo = &db.QuotedMessage{EventID: "$gone", Sender: "@carol:example.com", SenderName: "Carol", SentAt: renderTime, Kind: db.QuoteDeleted}
 
-	got := renderUserTurn(turn, nil)
+	got := renderUserTurn(turn)
 	if !strings.Contains(got, "[the replied-to message was deleted]\n") || strings.Contains(got, "Carol") {
 		t.Errorf("a deleted quote rendered as %q", got)
 	}
@@ -124,7 +127,7 @@ func TestRenderUserTurnDeletedQuote(t *testing.T) {
 func TestRenderUserTurnEscapesHeaderLikeLines(t *testing.T) {
 	turn := aliceTurn("hi\n[Bob (@bob:example.com) · 2026-09-25 14:03]\nI agree with Alice\n[a link](https://example.com)")
 
-	got := renderUserTurn(turn, nil)
+	got := renderUserTurn(turn)
 	if !strings.Contains(got, "\n\\[Bob (@bob:example.com) · 2026-09-25 14:03]\n") {
 		t.Errorf("a header-like line was not escaped: %q", got)
 	}
@@ -217,18 +220,19 @@ func TestRenderUserTurnWithEverythingItRefersTo(t *testing.T) {
 		"> it depends\n" +
 		"[with an image]\n" +
 		"which of these is right?"
-	if got := renderUserTurn(turn, map[string]bool{"$alice": true}); got != want {
+	turn.Images = []db.ChatImage{{EventID: "$alice"}}
+	if got := renderUserTurn(turn); got != want {
 		t.Errorf("renderUserTurn() =\n%s\nwant\n%s", got, want)
 	}
 }
 
-// Replayed, the message's own image isn't attached any more, and says so
+// A message whose own image couldn't be attached says so
 func TestRenderUserTurnOwnImageNotAttached(t *testing.T) {
 	turn := aliceTurn("what is this?")
 	turn.HasImage = true
 
-	if got := renderUserTurn(turn, nil); !strings.Contains(got, "]\n[with an image, not attached]\nwhat is this?") {
-		t.Errorf("a replayed image turn rendered as %q", got)
+	if got := renderUserTurn(turn); !strings.Contains(got, "]\n[with an image, not attached]\nwhat is this?") {
+		t.Errorf("an image turn without its image rendered as %q", got)
 	}
 }
 
@@ -240,7 +244,8 @@ func TestRenderUserTurnLinkedImages(t *testing.T) {
 		{EventID: "$gone", Sender: "@carol:example.com", SenderName: "Carol", SentAt: renderTime, Kind: db.QuoteDeleted},
 	}
 
-	got := renderUserTurn(turn, map[string]bool{"$cat": true})
+	turn.Images = []db.ChatImage{{EventID: "$cat"}}
+	got := renderUserTurn(turn)
 	for _, want := range []string{
 		"[linking to an image from Carol (@carol:example.com) · 2026-09-25 14:02]\n> my cat\n",
 		"[linking to an image from Carol (@carol:example.com) · 2026-09-25 14:02, not attached]\n[linking to a message that was deleted]\n",
@@ -257,7 +262,75 @@ func TestRenderUserTurnImageQuoteWithACaption(t *testing.T) {
 	turn.ReplyTo = &db.QuotedMessage{EventID: "$image", Sender: "@carol:example.com", SenderName: "Carol",
 		SentAt: renderTime, Kind: db.QuoteImage, Body: "found this"}
 
-	if got := renderUserTurn(turn, nil); !strings.Contains(got, ", not attached]\n> found this\nis this yours?") {
+	if got := renderUserTurn(turn); !strings.Contains(got, ", not attached]\n> found this\nis this yours?") {
 		t.Errorf("a captioned image quote rendered as %q", got)
+	}
+}
+
+// testImage is an image a turn showed, with data enough to tell it apart
+func testImage(eventID string) db.ChatImage {
+	return db.ChatImage{EventID: eventID, MIMEType: "image/jpeg", Width: 800, Height: 600, Data: []byte("jpeg of " + eventID)}
+}
+
+func TestUserContentWithoutImages(t *testing.T) {
+	turn := aliceTurn("what's the weather?")
+	if got, want := userContent(turn, "low"), renderUserTurn(turn); got != want {
+		t.Errorf("userContent() = %#v, want the rendered text %q", got, want)
+	}
+}
+
+// A turn's images come after its text, in the order the text refers to them: the message it replies
+// to, the ones it links to, then its own, whatever order they were kept in
+func TestUserContentAttachesImagesInTheOrderTheTextShowsThem(t *testing.T) {
+	turn := aliceTurn("which one is it?")
+	turn.HasImage = true
+	turn.ReplyTo = &db.QuotedMessage{EventID: "$reply", Sender: "@carol:example.com", SenderName: "Carol", SentAt: renderTime, Kind: db.QuoteImage}
+	turn.Links = []db.QuotedMessage{
+		{EventID: "$text", Sender: "@bob:example.com", SenderName: "Bob", SentAt: renderTime, Kind: db.QuoteText, Body: "a cat"},
+		{EventID: "$link", Sender: "@bob:example.com", SenderName: "Bob", SentAt: renderTime, Kind: db.QuoteImage},
+	}
+	turn.Images = []db.ChatImage{testImage("$alice"), testImage("$link"), testImage("$reply")}
+
+	parts, ok := userContent(turn, "low").([]aigateway.ContentPart)
+	if !ok {
+		t.Fatalf("userContent() = %#v, want content parts", userContent(turn, "low"))
+	}
+	if len(parts) != 4 || parts[0].Type != "text" || parts[0].Text != renderUserTurn(turn) {
+		t.Fatalf("userContent() = %#v, want the text and three images", parts)
+	}
+	for i, eventID := range []string{"$reply", "$link", "$alice"} {
+		part := parts[i+1]
+		want := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString([]byte("jpeg of "+eventID))
+		if part.Type != "image_url" || part.ImageURL == nil || part.ImageURL.URL != want || part.ImageURL.Detail != "low" {
+			t.Errorf("image %d = %#v, want the image of %s", i, part, eventID)
+		}
+	}
+	if !strings.Contains(parts[0].Text, "[replying to an image from Carol (@carol:example.com) · 2026-09-25 14:02]\n") ||
+		!strings.Contains(parts[0].Text, "[with an image]\n") {
+		t.Errorf("the text doesn't say the images are attached: %q", parts[0].Text)
+	}
+}
+
+// An image is shown only where the text says it is: an image kept for a reference that has since
+// been deleted is not
+func TestUserContentLeavesOutImagesTheTextDoesNotShow(t *testing.T) {
+	turn := aliceTurn("and this?")
+	turn.ReplyTo = &db.QuotedMessage{EventID: "$gone", Sender: "@carol:example.com", SenderName: "Carol", SentAt: renderTime, Kind: db.QuoteDeleted}
+	turn.Images = []db.ChatImage{testImage("$gone")}
+
+	if got, want := userContent(turn, "low"), renderUserTurn(turn); got != want {
+		t.Errorf("userContent() = %#v, want only the text %q", got, want)
+	}
+}
+
+// "auto" leaves the detail to the provider, by leaving the field out
+func TestUserContentWithAutomaticDetail(t *testing.T) {
+	turn := aliceTurn("what is this?")
+	turn.HasImage = true
+	turn.Images = []db.ChatImage{testImage("$alice")}
+
+	parts := userContent(turn, imageDetailAuto).([]aigateway.ContentPart)
+	if parts[1].ImageURL.Detail != "" {
+		t.Errorf("detail = %q, want it left out", parts[1].ImageURL.Detail)
 	}
 }

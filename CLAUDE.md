@@ -59,6 +59,7 @@ In general, each command or webhook is considered a **self-contained feature** a
 - Nothing else from a room may be passed to the model, persisted in `chat_history` or exposed through an LLM tool, and no tool may read room events.
 - Metadata that is not message content (member list, room name, message counts) is allowed, for the room the turn happens in only. A tool that looks such things up takes the room from the chat turn, never from its arguments: `find_room_members` gets the member list from the turn, and `get_message_stats` reads the counts for the turn's room.
 - Redacted messages must leave the chat history, and a message its sender edits is stored as edited.
+- The image of a message the model may see is stored with the turn that showed it (`chat_images`), and is shown again while that turn is in the context window. It leaves the history with the turn, and at once when its own message is redacted.
 
 The referenced events are resolved once, in `bot/reply.go`, and handed to the chat turn in `chat.Trigger`. The chat package never fetches room events itself.
 
@@ -502,7 +503,7 @@ All configuration is via environment variables (no config files). See `config/co
 
 `SIIKABOT_SOURCE_URL` and `SIIKABOT_FRONTEND_URL` are where the bot's source code repository and web dashboard are. The chat model gives them out as links, and reads the bot's own source code from the repository.
 
-The exception is the chat parameters (models, context window budget, response and tool limits, web content size). They are global and live in the append-only `chat_config` table, where the latest row is the configuration in effect and older rows are its history. The admin changes them with the `!chat` subcommands, and each change appends a new row. Migration `0019__global-chat-config.sql` seeds the first row.
+The exception is the chat parameters (the model, which has to take images as well as text, the context window budget, response and tool limits, web content size). They are global and live in the append-only `chat_config` table, where the latest row is the configuration in effect and older rows are its history. The admin changes them with the `!chat` subcommands, and each change appends a new row. Migration `0019__global-chat-config.sql` seeds the first row.
 
 ### Database Migrations
 

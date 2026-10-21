@@ -157,11 +157,11 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 
 	// fail ends a turn that has no answer to give: the turn is recorded with the outcome, and the
 	// room is told in place of the answer
-	fail := func(outcome, model string, hasImage bool) {
+	fail := func(outcome, model string) {
 		duration := time.Since(startTime)
-		metrics.RecordChatRequestDuration(model, hasImage, duration.Seconds())
+		metrics.RecordChatRequestDuration(model, duration.Seconds())
 		stats.outcome = outcome
-		stats.finish(ctx, roomID, sender, model, hasImage, duration)
+		stats.finish(ctx, roomID, sender, model, duration)
 		stats.recordOnSpan(turnSpan)
 		matrix.SendMessageTo(ctx, roomID, target, failureMessage(outcome), failureDebugData(ctx, model, outcome))
 	}
@@ -172,18 +172,20 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 	if err != nil {
 		// Already logged. There is nothing to fall back to: the database is the only source of the
 		// configuration, and without it there is no model to ask.
-		fail("config_unavailable", "", false)
+		fail("config_unavailable", "")
 		return
 	}
 
 	// Build the prompt: system prompt, history, and the current message with what it refers to
 	buildCtx, buildSpan := tracer.Start(ctx, "chat.build_context")
 	prompt := buildInitialMessages(buildCtx, trigger, cfg)
-	messages, hasImage, model, composition := prompt.messages, prompt.hasImage, prompt.model, prompt.composition
+	messages, composition := prompt.messages, prompt.composition
+	stats.turnImages, stats.historyImages, stats.imageDuration = prompt.turnImages, prompt.historyImages, prompt.imageTime
 	buildSpan.SetAttributes(
 		attribute.Int("siikabot.chat.message_count", len(messages)),
 		attribute.Int("siikabot.chat.history_tokens", composition.history),
-		attribute.Bool("siikabot.chat.has_image", hasImage),
+		attribute.Int("siikabot.chat.turn_image_count", prompt.turnImages),
+		attribute.Int("siikabot.chat.history_image_count", prompt.historyImages),
 		attribute.Bool("siikabot.chat.is_dm", prompt.room.isDM()),
 		attribute.Int("siikabot.chat.member_count", len(prompt.room.Members)),
 		attribute.Bool("siikabot.chat.has_reply_context", prompt.userTurn.ReplyTo != nil),
@@ -200,9 +202,13 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 	composition.tools = estimateToolDefinitionTokens(tools)
 	composition.record(ctx)
 
+	// One model answers every turn, so it has to take the images in the prompt as well as the text
+	model := cfg.LLMModel
+
 	turnSpan.SetAttributes(
 		attribute.String("siikabot.chat.model", model),
-		attribute.Bool("siikabot.chat.has_image", hasImage),
+		attribute.Int("siikabot.chat.turn_image_count", prompt.turnImages),
+		attribute.Int("siikabot.chat.history_image_count", prompt.historyImages),
 		attribute.Int("siikabot.chat.prompt_tokens_estimated", composition.total()),
 	)
 
@@ -235,8 +241,9 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 		Str("room_id", roomID).
 		Str("sender", sender).
 		Str("model", model).
-		Bool("has_image", hasImage).
 		Int("message_count", len(messages)).
+		Int("turn_image_count", prompt.turnImages).
+		Int("history_image_count", prompt.historyImages).
 		Int("estimated_prompt_tokens", estimatedPromptTokens).
 		Int("context_window_tokens", composition.history).
 		Msg("Sending chat request to the AI Gateway")
@@ -249,9 +256,8 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 			Str("room_id", roomID).
 			Str("sender", sender).
 			Str("model", model).
-			Bool("has_image", hasImage).
 			Msg("Failed to send chat request")
-		fail(requestFailure(ctx), model, hasImage)
+		fail(requestFailure(ctx), model)
 		return
 	}
 
@@ -260,16 +266,16 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 			Str("room_id", roomID).
 			Str("sender", sender).
 			Str("model", model).
-			Bool("has_image", hasImage).
 			Msg("Chat API returned no choices")
-		fail("no_choices", model, hasImage)
+		fail("no_choices", model)
 		return
 	}
 
-	// Skipped for image turns: an image costs a number of tokens that bears no relation to the length
-	// of its data URI, so comparing them would only measure something the estimator never modelled
-	if chatResp.Usage != nil && !hasImage {
-		recordTokenEstimateDrift(ctx, model, estimatedPromptTokens, chatResp.Usage.PromptTokens)
+	// The images in the prompt are estimated from their size rather than their text, so the drift of
+	// prompts with images is kept apart
+	if chatResp.Usage != nil {
+		withImages := prompt.turnImages+prompt.historyImages > 0
+		recordTokenEstimateDrift(ctx, model, withImages, estimatedPromptTokens, chatResp.Usage.PromptTokens)
 	}
 
 	// Save the user message to history
@@ -286,13 +292,12 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 			Str("room_id", roomID).
 			Str("sender", sender).
 			Str("model", model).
-			Bool("has_image", hasImage).
 			Int("tool_calls", len(chatResp.Choices[0].Message.ToolCalls)).
 			Msg("Model requested tool calls")
 
 		// Process tool calls iteratively
 		iterationCount, messages, finalResp, failure = processToolCalls(
-			ctx, toolContext(ctx, trigger, prompt.room, target), turn, sender, model, hasImage, cfg,
+			ctx, toolContext(ctx, trigger, prompt.room, target), turn, sender, model, cfg,
 			chatResp, messages, tools, stats,
 		)
 	}
@@ -301,14 +306,14 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 
 	var assistantResponse string
 	if failure == "" {
-		assistantResponse, failure = extractAssistantResponse(ctx, roomID, sender, model, hasImage, finalResp)
+		assistantResponse, failure = extractAssistantResponse(ctx, roomID, sender, model, finalResp)
 	}
 
 	// A turn that fails part way keeps the question and the tool calls it stored, but what the room
 	// is told is not stored as the answer. Replayed later, it would read as something the bot had
 	// said; without it, the model sees a question that went unanswered, which is what happened.
 	if failure != "" {
-		fail(failure, model, hasImage)
+		fail(failure, model)
 		return
 	}
 
@@ -320,9 +325,9 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 			Str("turn_event_id", turn.EventID).
 			Msg("Staying silent on a reply that needs no answer")
 		duration := time.Since(startTime)
-		metrics.RecordChatRequestDuration(model, hasImage, duration.Seconds())
+		metrics.RecordChatRequestDuration(model, duration.Seconds())
 		stats.outcome = outcomeSilent
-		stats.finish(ctx, roomID, sender, model, hasImage, duration)
+		stats.finish(ctx, roomID, sender, model, duration)
 		stats.recordOnSpan(turnSpan)
 		return
 	}
@@ -333,7 +338,7 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 	// The turn's own work ends here. Waiting for the answer to be delivered is not part of it, so
 	// the duration is taken now, although the turn is only recorded once the delivery is known.
 	turnDuration := time.Since(startTime)
-	metrics.RecordChatRequestDuration(model, hasImage, turnDuration.Seconds())
+	metrics.RecordChatRequestDuration(model, turnDuration.Seconds())
 
 	// Create debug data with model info and tool calls
 	debugData := buildDebugData(ctx, model, messages, iterationCount)
@@ -345,7 +350,7 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 			Str("room_id", roomID).
 			Str("turn_event_id", turn.EventID).
 			Msg("Dropping the answer to a redacted trigger")
-		stats.finish(ctx, roomID, sender, model, hasImage, turnDuration)
+		stats.finish(ctx, roomID, sender, model, turnDuration)
 		stats.recordOnSpan(turnSpan)
 		return
 	}
@@ -364,7 +369,7 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 	if answerEventID == "" {
 		stats.outcome = "not_delivered"
 	}
-	stats.finish(ctx, roomID, sender, model, hasImage, turnDuration)
+	stats.finish(ctx, roomID, sender, model, turnDuration)
 	stats.recordOnSpan(turnSpan)
 
 	if answerEventID == "" {
@@ -470,9 +475,13 @@ func toolContext(ctx context.Context, trigger Trigger, room roomInfo, target mat
 // turnPrompt is the prompt built for a turn, with what the rest of the turn needs from building it
 type turnPrompt struct {
 	messages    []aigateway.Message
-	hasImage    bool
-	model       string
 	composition promptComposition
+	// turnImages are how many images the trigger shows the model, its own and those of the messages
+	// it refers to, and historyImages how many the replayed history shows again. imageTime is how
+	// long getting the trigger's images ready took.
+	turnImages    int
+	historyImages int
+	imageTime     time.Duration
 	// userTurn is the trigger as it is stored, once the turn gets that far
 	userTurn db.UserTurn
 	room     roomInfo
@@ -498,6 +507,7 @@ func buildInitialMessages(ctx context.Context, trigger Trigger, cfg db.ChatConfi
 	turn := db.Turn{RoomID: roomID, EventID: trigger.EventID, ThreadRootID: trigger.ThreadRootID}
 	seed := threadSeed(ctx, turn.Timeline(), sender)
 	history := buildContextWindow(ctx, turn.Timeline(), seed, cfg.ContextHighTokens, cfg.ContextLowTokens)
+	loadHistoryImages(ctx, roomID, history)
 
 	// The trigger, as the model sees it now and as the history keeps it. The first message of a
 	// thread started on a stored turn refers to the turn's question or answer, which the history
@@ -515,16 +525,19 @@ func buildInitialMessages(ctx context.Context, trigger Trigger, cfg db.ChatConfi
 		HasImage:     trigger.Image != nil,
 		ReplyTo:      refs.replyTo,
 		Links:        refs.links,
+		Images:       refs.images,
 	}
 
 	// Build messages array with system prompt, history, and current message
 	messages := []aigateway.Message{{Role: "system", Content: system}}
 	composition := promptComposition{system: estimateTokens(system)}
 
-	// Process history to include tool calls and tool responses
+	// Process history to include tool calls and tool responses, and the images its messages showed,
+	// which are shown again
 	historyStart := len(messages)
-	processHistoryMessages(ctx, history, &messages)
-	composition.history = estimateMessageTokens(messages[historyStart:])
+	processHistoryMessages(ctx, history, cfg.ImageDetail, &messages)
+	historyImageCount, historyImageTokens := historyImages(history)
+	composition.history = estimateMessageTokens(messages[historyStart:]) + historyImageTokens
 
 	// Everything from here on belongs to this specific turn rather than to the replayed history, so
 	// it is all accounted for as "current": the turn context and the user's message
@@ -541,52 +554,27 @@ func buildInitialMessages(ctx context.Context, trigger Trigger, cfg db.ChatConfi
 		memoriesFor(ctx, sender, room), relevantMembers(room, userTurn, history), notes)
 	messages = append(messages, aigateway.Message{Role: "system", Content: turnInfo})
 
-	// Select the appropriate model based on whether we have an image
-	hasImage := len(refs.images) > 0
-	model := cfg.TextModel
-	if hasImage {
-		model = cfg.ImageModel
-		log.Debug().Ctx(ctx).
-			Str("room_id", roomID).
-			Str("model", model).
-			Msg("Using image model for message with image")
-	} else {
-		log.Debug().Ctx(ctx).
-			Str("room_id", roomID).
-			Str("model", model).
-			Msg("Using text model for message without image")
-	}
-
 	// Add the current message, with the images it carries or refers to attached if there are any
-	content := renderUserTurn(userTurn, refs.attached)
-	if hasImage {
-		parts := []aigateway.ContentPart{{Type: "text", Text: content}}
-		for _, imageDataURL := range refs.images {
-			parts = append(parts, aigateway.ContentPart{Type: "image_url", ImageURL: &aigateway.ImageURL{
-				URL:    imageDataURL,
-				Detail: requestImageDetail(cfg.ImageDetail),
-			}})
-			metrics.RecordChatImageProcessed()
-		}
-		messages = append(messages, aigateway.Message{Role: "user", Content: parts})
+	turnImages := shownImages(userTurn)
+	messages = append(messages, aigateway.Message{Role: "user", Content: userContent(userTurn, cfg.ImageDetail)})
+	if len(turnImages) > 0 {
 		log.Debug().Ctx(ctx).
 			Str("room_id", roomID).
 			Str("image_detail", cfg.ImageDetail).
-			Int("image_count", len(refs.images)).
+			Int("image_count", len(turnImages)).
 			Msg("Attaching images to chat request")
-	} else {
-		messages = append(messages, aigateway.Message{Role: "user", Content: content})
 	}
-	composition.current = estimateMessageTokens(messages[currentStart:])
+	composition.current = estimateMessageTokens(messages[currentStart:]) + estimateImagesTokens(turnImages)
 
 	return turnPrompt{
-		messages:     messages,
-		hasImage:     hasImage,
-		model:        model,
-		composition:  composition,
-		userTurn:     userTurn,
-		room:         room,
-		threadSeeded: windowHasTurn(history, seed),
+		messages:      messages,
+		composition:   composition,
+		turnImages:    len(turnImages),
+		historyImages: historyImageCount,
+		imageTime:     refs.imageTime,
+		userTurn:      userTurn,
+		room:          room,
+		threadSeeded:  windowHasTurn(history, seed),
 	}
 }
 
@@ -608,8 +596,10 @@ func memoriesFor(ctx context.Context, sender string, room roomInfo) []db.UserMem
 // where it actually happened. Interleaving matters — replaying text and tool calls in separate
 // groups presents the model with a conversation that never took place.
 //
-// A user message is replayed with its header, exactly as it was shown when it was the current turn.
-func processHistoryMessages(ctx context.Context, history []db.ChatMessage, messages *[]aigateway.Message) {
+// A user message is replayed exactly as it was sent when it was the current turn: with its header,
+// and with the images it showed, for as long as it stays in the window. imageDetail is the configured
+// image detail.
+func processHistoryMessages(ctx context.Context, history []db.ChatMessage, imageDetail string, messages *[]aigateway.Message) {
 	for i := 0; i < len(history); {
 		historyMsg := history[i]
 
@@ -639,9 +629,13 @@ func processHistoryMessages(ctx context.Context, history []db.ChatMessage, messa
 			// there is nothing to attach it to
 			i++
 		case "text":
+			content := any(historyMsg.Message)
+			if historyMsg.Role == "user" {
+				content = userContent(historyMsg.UserTurn(), imageDetail)
+			}
 			*messages = append(*messages, aigateway.Message{
 				Role:    historyMsg.Role,
-				Content: replayText(historyMsg),
+				Content: content,
 			})
 			i++
 		}
@@ -761,7 +755,7 @@ func mentionsOf(ctx context.Context, trigger Trigger, room roomInfo) []db.Mentio
 // extractAssistantResponse extracts the assistant's response from the API response. A response
 // without any text is a failure, returned as the "empty_response" outcome; the outcome is empty
 // when there is an answer.
-func extractAssistantResponse(ctx context.Context, roomID, sender, model string, hasImage bool, chatResp *aigateway.ChatResponse) (string, string) {
+func extractAssistantResponse(ctx context.Context, roomID, sender, model string, chatResp *aigateway.ChatResponse) (string, string) {
 	var assistantResponse string
 
 	if content, ok := chatResp.Choices[0].Message.Content.(string); ok {
@@ -770,7 +764,6 @@ func extractAssistantResponse(ctx context.Context, roomID, sender, model string,
 			Str("room_id", roomID).
 			Str("sender", sender).
 			Str("model", model).
-			Bool("has_image", hasImage).
 			Int("response_length", len(assistantResponse)).
 			Msg("Received string response from the AI Gateway")
 	} else if contentMap, ok := chatResp.Choices[0].Message.Content.(map[string]any); ok {
@@ -778,7 +771,6 @@ func extractAssistantResponse(ctx context.Context, roomID, sender, model string,
 			Str("room_id", roomID).
 			Str("sender", sender).
 			Str("model", model).
-			Bool("has_image", hasImage).
 			Interface("content_map", contentMap).
 			Msg("Received map response from the AI Gateway")
 
@@ -789,7 +781,6 @@ func extractAssistantResponse(ctx context.Context, roomID, sender, model string,
 				Str("room_id", roomID).
 				Str("sender", sender).
 				Str("model", model).
-				Bool("has_image", hasImage).
 				Interface("content_map", contentMap).
 				Msg("Response content map doesn't contain text field")
 		}
@@ -798,7 +789,6 @@ func extractAssistantResponse(ctx context.Context, roomID, sender, model string,
 			Str("room_id", roomID).
 			Str("sender", sender).
 			Str("model", model).
-			Bool("has_image", hasImage).
 			Interface("content", chatResp.Choices[0].Message.Content).
 			Msg("Unexpected response content type")
 	}
@@ -810,7 +800,6 @@ func extractAssistantResponse(ctx context.Context, roomID, sender, model string,
 			Str("room_id", roomID).
 			Str("sender", sender).
 			Str("model", model).
-			Bool("has_image", hasImage).
 			Str("finish_reason", chatResp.Choices[0].FinishReason).
 			Msg("Chat API returned no answer text")
 		return "", "empty_response"
@@ -827,7 +816,6 @@ func processToolCalls(
 	ctx, toolCtx context.Context,
 	turn db.Turn,
 	sender, model string,
-	hasImage bool,
 	cfg db.ChatConfig,
 	chatResp *aigateway.ChatResponse,
 	messages []aigateway.Message,
@@ -862,7 +850,6 @@ func processToolCalls(
 			log.Error().Ctx(ctx).Err(err).
 				Str("room_id", roomID).
 				Str("model", model).
-				Bool("has_image", hasImage).
 				Int("iteration", iterationCount).
 				Msg("Failed to handle tool calls")
 			return iterationCount, messages, nil, "tool_failed"
@@ -895,7 +882,6 @@ func processToolCalls(
 			Str("room_id", roomID).
 			Str("sender", sender).
 			Str("model", model).
-			Bool("has_image", hasImage).
 			Int("message_count", len(messages)).
 			Int("iteration", iterationCount).
 			Msg("Sending chat request for tool iteration")
@@ -908,7 +894,6 @@ func processToolCalls(
 			log.Error().Ctx(ctx).Err(err).
 				Str("room_id", roomID).
 				Str("model", model).
-				Bool("has_image", hasImage).
 				Int("iteration", iterationCount).
 				Msg("Failed to send chat request for tool iteration")
 			return iterationCount, messages, nil, requestFailure(ctx)
@@ -916,7 +901,6 @@ func processToolCalls(
 			log.Error().Ctx(ctx).
 				Str("room_id", roomID).
 				Str("model", model).
-				Bool("has_image", hasImage).
 				Int("iteration", iterationCount).
 				Msg("Chat API returned no choices for tool iteration")
 			return iterationCount, messages, nil, "no_choices"
@@ -936,7 +920,6 @@ func processToolCalls(
 			Str("room_id", roomID).
 			Str("sender", sender).
 			Str("model", model).
-			Bool("has_image", hasImage).
 			Int("tool_calls", len(currentResp.Choices[0].Message.ToolCalls)).
 			Int("iteration", iterationCount).
 			Msg("Model requested additional tool calls")
@@ -950,7 +933,6 @@ func processToolCalls(
 			Str("room_id", roomID).
 			Str("sender", sender).
 			Str("model", model).
-			Bool("has_image", hasImage).
 			Int("iteration", iterationCount).
 			Msg("Reached maximum tool iterations, making final request that can't call tools")
 
@@ -972,7 +954,6 @@ func processToolCalls(
 			log.Error().Ctx(ctx).Err(err).
 				Str("room_id", roomID).
 				Str("model", model).
-				Bool("has_image", hasImage).
 				Int("iteration", iterationCount).
 				Msg("Failed to handle tool calls")
 			return iterationCount, messages, nil, "tool_failed"
@@ -1000,7 +981,6 @@ func processToolCalls(
 			Str("room_id", roomID).
 			Str("sender", sender).
 			Str("model", model).
-			Bool("has_image", hasImage).
 			Int("message_count", len(messages)).
 			Msg("Sending final request that can't call tools")
 
@@ -1012,14 +992,12 @@ func processToolCalls(
 			log.Error().Ctx(ctx).Err(err).
 				Str("room_id", roomID).
 				Str("model", model).
-				Bool("has_image", hasImage).
 				Msg("Failed to send final request")
 			return iterationCount, messages, nil, requestFailure(ctx)
 		} else if len(finalResp.Choices) == 0 {
 			log.Error().Ctx(ctx).
 				Str("room_id", roomID).
 				Str("model", model).
-				Bool("has_image", hasImage).
 				Msg("Final chat API returned no choices")
 			return iterationCount, messages, nil, "no_choices"
 		}
@@ -1030,7 +1008,6 @@ func processToolCalls(
 			log.Warn().Ctx(ctx).
 				Str("room_id", roomID).
 				Str("model", model).
-				Bool("has_image", hasImage).
 				Int("iteration", iterationCount).
 				Int("tool_calls", len(finalResp.Choices[0].Message.ToolCalls)).
 				Str("finish_reason", finalResp.Choices[0].FinishReason).

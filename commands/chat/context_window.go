@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"slices"
 
 	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/db"
@@ -27,27 +28,72 @@ func estimateTokens(text string) int {
 	return len(text)/4 + messageTokenOverhead
 }
 
+// pixelsPerImageToken is about how many pixels of an image make a token. It is Anthropic's published
+// rule, and in the range of the tile and patch schemes of other providers. A provider that honours a
+// low image detail charges far less, so the estimate errs towards an image leaving the window early.
+const pixelsPerImageToken = 750
+
+// estimateImageTokens approximates the token cost of showing the model an image of the given size.
+// Like estimateTokens it is a heuristic, and the drift metric says how well it fits the model.
+func estimateImageTokens(width, height int) int {
+	return width*height/pixelsPerImageToken + messageTokenOverhead
+}
+
+// estimateImagesTokens approximates the token cost of showing the model the given images
+func estimateImagesTokens(images []db.ChatImage) int {
+	total := 0
+	for _, image := range images {
+		total += estimateImageTokens(image.Width, image.Height)
+	}
+	return total
+}
+
 // estimateHistoryTokens approximates the token cost of replaying the given history rows
 func estimateHistoryTokens(history []db.ChatMessage) int {
 	total := 0
 	for _, msg := range history {
-		total += estimateTokens(replayText(msg))
+		total += estimateRowTokens(msg)
 	}
 	return total
+}
+
+// estimateRowTokens approximates the token cost of replaying a history row: its text, and for a user
+// message the images it shows, which stay in the window for as long as the message does
+func estimateRowTokens(msg db.ChatMessage) int {
+	tokens := estimateTokens(replayText(msg))
+	if msg.Role == "user" {
+		tokens += estimateImagesTokens(shownImages(msg.UserTurn()))
+	}
+	return tokens
 }
 
 // replayText is the text a history row is replayed as, which is also what its share of the token
 // budget is measured on: a user message is replayed with its header
 func replayText(msg db.ChatMessage) string {
 	if msg.Role == "user" {
-		return renderUserTurn(msg.UserTurn(), nil)
+		return renderUserTurn(msg.UserTurn())
 	}
 	return msg.Message
 }
 
+// historyImages returns how many images the user messages of a history show the model, and their
+// estimated token cost
+func historyImages(history []db.ChatMessage) (int, int) {
+	count, tokens := 0, 0
+	for _, msg := range history {
+		if msg.Role == "user" {
+			images := shownImages(msg.UserTurn())
+			count += len(images)
+			tokens += estimateImagesTokens(images)
+		}
+	}
+	return count, tokens
+}
+
 // estimateMessageTokens approximates the prompt size of a built request. Image content parts are
 // counted by their text only: a base64 image bears no relation to its token cost, and counting the
-// data URI would swamp the estimate with a number that means nothing.
+// data URI would swamp the estimate with a number that means nothing. The images are estimated from
+// their size where they are attached, with estimateImageTokens.
 func estimateMessageTokens(messages []aigateway.Message) int {
 	total := 0
 	for _, msg := range messages {
@@ -148,6 +194,22 @@ func buildContextWindow(ctx context.Context, timeline db.Timeline, seedTurnEvent
 	return trimmed
 }
 
+// loadHistoryImages reads the images the messages in a context window showed, which are shown again
+// with them. The window is changed in place. An image that can't be read, or whose message has been
+// redacted since, is left out, and its message says it isn't attached, as for an image that couldn't
+// be downloaded when it was sent.
+func loadHistoryImages(ctx context.Context, roomID string, window []db.ChatMessage) {
+	if err := db.LoadChatImageData(ctx, roomID, window); err != nil {
+		// Already logged. The window goes ahead without its images.
+		_ = err
+	}
+	for i := range window {
+		window[i].Images = slices.DeleteFunc(window[i].Images, func(image db.ChatImage) bool {
+			return image.Data == nil
+		})
+	}
+}
+
 // applyAnchor drops the history rows that precede the timeline's stored anchor.
 //
 // A missing anchor means the window starts at the oldest available row. An anchor pointing at a row
@@ -188,7 +250,7 @@ func trimToLowMark(history []db.ChatMessage, low int) ([]db.ChatMessage, int64) 
 	tokens := 0
 	best := -1
 	for i := len(history) - 1; i >= 0; i-- {
-		tokens += estimateTokens(replayText(history[i]))
+		tokens += estimateRowTokens(history[i])
 		if tokens > low {
 			break
 		}
@@ -223,15 +285,19 @@ func isTurnBoundary(msg db.ChatMessage) bool {
 // so the accuracy of estimateTokens stays observable rather than assumed.
 //
 // The estimate must cover the whole prompt, tool definitions included, or the two sides are not
-// measuring the same thing and the ratio says nothing about the estimator.
-func recordTokenEstimateDrift(ctx context.Context, model string, estimated, actual int) {
+// measuring the same thing and the ratio says nothing about the estimator. withImages says the
+// prompt held images, whose part of the estimate comes from estimateImageTokens instead: kept apart,
+// the drift of prompts without images stays comparable over time, and that of prompts with them says
+// how well the image estimate fits the model.
+func recordTokenEstimateDrift(ctx context.Context, model string, withImages bool, estimated, actual int) {
 	if estimated <= 0 || actual <= 0 {
 		return
 	}
 	ratio := float64(actual) / float64(estimated)
-	metrics.RecordTokenEstimateDrift(model, ratio)
+	metrics.RecordTokenEstimateDrift(model, withImages, ratio)
 	log.Debug().Ctx(ctx).
 		Str("model", model).
+		Bool("with_images", withImages).
 		Int("estimated_prompt_tokens", estimated).
 		Int("actual_prompt_tokens", actual).
 		Float64("drift_ratio", ratio).

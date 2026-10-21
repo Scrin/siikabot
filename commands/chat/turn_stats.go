@@ -17,8 +17,9 @@ import (
 
 // Phase names for the turn duration breakdown
 const (
-	phaseModel = "model"
-	phaseTools = "tools"
+	phaseModel  = "model"
+	phaseTools  = "tools"
+	phaseImages = "images"
 )
 
 // Prompt component names for the composition breakdown
@@ -38,11 +39,18 @@ const outcomeSilent = "silent"
 //
 // A turn can span several API calls and several rounds of tool execution, and until now the only
 // record of it was a scattering of debug lines. Collecting it in one place lets a turn be summarised
-// in a single log entry and its time attributed between the model and the tools.
+// in a single log entry and its time attributed between the model, the tools and its images.
 type turnStats struct {
-	iterations       int
-	modelDuration    time.Duration
-	toolDuration     time.Duration
+	iterations    int
+	modelDuration time.Duration
+	toolDuration  time.Duration
+	// imageDuration is the time spent getting the trigger's images ready for the model: downloading
+	// and preparing them
+	imageDuration time.Duration
+	// turnImages are how many images the trigger showed the model, its own and those of the messages
+	// it refers to, and historyImages how many the replayed history showed
+	turnImages       int
+	historyImages    int
 	promptTokens     int
 	completionTokens int
 	cachedTokens     int
@@ -82,9 +90,10 @@ func (s *turnStats) cacheHitRate() float64 {
 //
 // Unlike the metrics, neither the database nor the logs are publicly readable, so these are the
 // places where a turn can be tied back to the room and user it belonged to.
-func (s *turnStats) finish(ctx context.Context, roomID, sender, model string, hasImage bool, totalDuration time.Duration) {
+func (s *turnStats) finish(ctx context.Context, roomID, sender, model string, totalDuration time.Duration) {
 	metrics.RecordChatTurnPhase(model, phaseModel, s.modelDuration.Seconds())
 	metrics.RecordChatTurnPhase(model, phaseTools, s.toolDuration.Seconds())
+	metrics.RecordChatTurnPhase(model, phaseImages, s.imageDuration.Seconds())
 
 	// Written on a context that outlives a cancelled turn: a turn that timed out is precisely the
 	// one whose cost is worth recording
@@ -99,7 +108,6 @@ func (s *turnStats) finish(ctx context.Context, roomID, sender, model string, ha
 		CompletionTokens:   s.completionTokens,
 		CachedPromptTokens: s.cachedTokens,
 		ToolIterations:     s.iterations,
-		HasImage:           hasImage,
 		DurationMS:         int(totalDuration.Milliseconds()),
 		Outcome:            s.outcome,
 	}); err != nil {
@@ -111,16 +119,18 @@ func (s *turnStats) finish(ctx context.Context, roomID, sender, model string, ha
 		Str("room_id", roomID).
 		Str("sender", sender).
 		Str("model", model).
-		Bool("has_image", hasImage).
 		Str("outcome", s.outcome).
 		Int("tool_iterations", s.iterations).
 		Strs("tools_called", s.toolsCalled).
+		Int("turn_image_count", s.turnImages).
+		Int("history_image_count", s.historyImages).
 		Int("prompt_tokens", s.promptTokens).
 		Int("completion_tokens", s.completionTokens).
 		Int("cached_prompt_tokens", s.cachedTokens).
 		Float64("cache_hit_rate", s.cacheHitRate()).
 		Float64("model_duration_sec", s.modelDuration.Seconds()).
 		Float64("tool_duration_sec", s.toolDuration.Seconds()).
+		Float64("image_duration_sec", s.imageDuration.Seconds()).
 		Float64("total_duration_sec", totalDuration.Seconds()).
 		Msg("Chat turn completed")
 }
@@ -128,9 +138,9 @@ func (s *turnStats) finish(ctx context.Context, roomID, sender, model string, ha
 // promptComposition is the estimated token cost of each part of a built prompt.
 //
 // The parts are exhaustive by construction: system covers the system prompt, history the replayed
-// window, current everything added for this turn (the timestamp, any reply context, the user's
-// message), and tools the definitions sent alongside. They therefore sum to the whole prompt, which
-// is what makes total comparable against the token count the API reports.
+// window with its images, current everything added for this turn (the timestamp, any reply context,
+// the user's message and its images), and tools the definitions sent alongside. They therefore sum
+// to the whole prompt, which is what makes total comparable against the token count the API reports.
 type promptComposition struct {
 	system  int
 	tools   int

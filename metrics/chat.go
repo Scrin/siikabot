@@ -112,7 +112,7 @@ var chatRequestDuration = makeCollector(prometheus.NewHistogramVec(prometheus.Hi
 	Name:    metricPrefix + "chat_request_duration_seconds",
 	Help:    "End-to-end duration of chat requests in seconds",
 	Buckets: []float64{0.5, 1, 2, 5, 10, 30, 60, 120},
-}, []string{"model", "has_image"}))
+}, []string{"model"}))
 
 var chatToolIterations = makeCollector(prometheus.NewHistogram(prometheus.HistogramOpts{
 	Name:    metricPrefix + "chat_tool_iterations",
@@ -128,11 +128,12 @@ var chatImagesProcessed = makeCollector(prometheus.NewCounter(prometheus.Counter
 // The context window is sized with a cheap heuristic rather than a real tokeniser. This tracks the
 // ratio of the token count the API reported to the count that was estimated, so the error stays
 // visible: 1.0 is exact, above 1.0 means the estimate runs low and the window is bigger than intended.
+// with_images separates the prompts that held images, which are estimated from their size instead.
 var chatTokenEstimateDrift = makeCollector(prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	Name:    metricPrefix + "chat_token_estimate_drift_ratio",
 	Help:    "Ratio of reported prompt tokens to estimated prompt tokens",
 	Buckets: []float64{0.5, 0.7, 0.85, 0.95, 1.05, 1.15, 1.3, 1.5, 2},
-}, []string{"model"}))
+}, []string{"model", "with_images"}))
 
 var chatContextWindowTokens = makeCollector(prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	Name:    metricPrefix + "chat_context_window_tokens",
@@ -145,8 +146,8 @@ var chatContextAnchorAdvances = makeCollector(prometheus.NewCounter(prometheus.C
 	Help: "Number of times a room's context window was trimmed back to the low mark",
 }))
 
-// Splits a turn into waiting on the model versus waiting on tools, so "slow when many tool calls
-// are involved" can be attributed rather than guessed at
+// Splits a turn into waiting on the model, waiting on tools, and getting the images it was sent
+// ready, so "slow when many tool calls are involved" can be attributed rather than guessed at
 var chatTurnPhaseDuration = makeCollector(prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	Name:    metricPrefix + "chat_turn_phase_duration_seconds",
 	Help:    "Time spent in each phase of a chat turn in seconds",
@@ -161,8 +162,8 @@ var chatPromptComponentTokens = makeCollector(prometheus.NewHistogramVec(prometh
 }, []string{"component"}))
 
 // RecordChatRequestDuration records the end-to-end duration of a chat request
-func RecordChatRequestDuration(model string, hasImage bool, durationSec float64) {
-	chatRequestDuration.WithLabelValues(model, strconv.FormatBool(hasImage)).Observe(durationSec)
+func RecordChatRequestDuration(model string, durationSec float64) {
+	chatRequestDuration.WithLabelValues(model).Observe(durationSec)
 }
 
 // RecordChatToolIterations records the number of tool iterations in a chat request
@@ -176,8 +177,8 @@ func RecordChatImageProcessed() {
 }
 
 // RecordTokenEstimateDrift records how far the prompt token estimate was from the reported count
-func RecordTokenEstimateDrift(model string, ratio float64) {
-	chatTokenEstimateDrift.WithLabelValues(model).Observe(ratio)
+func RecordTokenEstimateDrift(model string, withImages bool, ratio float64) {
+	chatTokenEstimateDrift.WithLabelValues(model, strconv.FormatBool(withImages)).Observe(ratio)
 }
 
 // RecordChatContextWindowTokens records the estimated size of the replayed context window
@@ -221,7 +222,8 @@ func RecordToolError(tool, errorKind string) {
 	toolErrors.WithLabelValues(tool, errorKind).Inc()
 }
 
-// RecordChatTurnPhase records how long a turn spent waiting on the model versus on tools
+// RecordChatTurnPhase records how long a turn spent in one of its phases: waiting on the model, on
+// tools, or getting its images ready
 func RecordChatTurnPhase(model, phase string, durationSec float64) {
 	chatTurnPhaseDuration.WithLabelValues(model, phase).Observe(durationSec)
 }

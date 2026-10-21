@@ -42,6 +42,10 @@ func TestUserTurnReadsBackAUserRow(t *testing.T) {
 	carol := QuotedMessage{EventID: "$carol", Sender: "@carol:x", SenderName: "Carol", SentAt: sentAt, Kind: QuoteImage}
 	dave := QuotedMessage{EventID: "$dave", Sender: "@dave:x", SenderName: "Dave", SentAt: sentAt, Kind: QuoteText, Body: "see this"}
 	erin := QuotedMessage{EventID: "$erin", Sender: "@erin:x", SenderName: "Erin", SentAt: sentAt, Kind: QuoteDeleted}
+	images := []ChatImage{
+		{EventID: "$carol", MIMEType: "image/jpeg", Width: 800, Height: 600},
+		{EventID: "$bob", MIMEType: "image/png", Width: 300, Height: 200},
+	}
 
 	row := ChatMessage{
 		RoomID: "!room:x", UserID: "@bob:x", Message: "what is this?", Role: "user", MessageType: "text",
@@ -52,6 +56,7 @@ func TestUserTurnReadsBackAUserRow(t *testing.T) {
 			{Relation: RelationLink, QuotedMessage: dave},
 			{Relation: RelationLink, QuotedMessage: erin},
 		},
+		Images: images,
 	}
 
 	turn := row.UserTurn()
@@ -63,6 +68,15 @@ func TestUserTurnReadsBackAUserRow(t *testing.T) {
 	}
 	if len(turn.Links) != 2 || turn.Links[0] != dave || turn.Links[1] != erin {
 		t.Errorf("UserTurn().Links = %#v, want Dave's and Erin's messages, in order", turn.Links)
+	}
+	if len(turn.Images) != 2 {
+		t.Errorf("UserTurn().Images = %#v, want Carol's image and Bob's own", turn.Images)
+	}
+	if image, ok := turn.ImageOf("$carol"); !ok || image.Width != 800 {
+		t.Errorf("ImageOf($carol) = %#v, %v, want Carol's image", image, ok)
+	}
+	if _, ok := turn.ImageOf("$dave"); ok {
+		t.Error("ImageOf($dave) found an image for a message that has none")
 	}
 
 	// Stored the way it reads back: the reply first, then the links in order

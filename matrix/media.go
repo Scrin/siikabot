@@ -101,8 +101,9 @@ func MessageImageURL(ctx context.Context, msg *Message) (string, map[string]any,
 	return "", nil, nil, fmt.Errorf("image URL not found")
 }
 
-// DownloadImageAsBase64 downloads an image from a Matrix URL and returns it as a base64 data URL.
-func DownloadImageAsBase64(ctx context.Context, imageURL string, encryptionInfo map[string]any, fullContent map[string]any) (string, error) {
+// DownloadImage downloads an image from a Matrix URL, decrypting it if it is encrypted, and returns
+// it as it was uploaded. What kind of image it is, if it is one at all, is for the caller to find out.
+func DownloadImage(ctx context.Context, imageURL string, encryptionInfo map[string]any, fullContent map[string]any) ([]byte, error) {
 	originalURL := imageURL
 	var lastError error
 
@@ -121,7 +122,7 @@ func DownloadImageAsBase64(ctx context.Context, imageURL string, encryptionInfo 
 		// Format: mxc://<server-name>/<media-id>
 		parts := strings.SplitN(strings.TrimPrefix(imageURL, "mxc://"), "/", 2)
 		if len(parts) != 2 {
-			return "", fmt.Errorf("invalid MXC URL format: %s", imageURL)
+			return nil, fmt.Errorf("invalid MXC URL format: %s", imageURL)
 		}
 		serverName, mediaID := parts[0], parts[1]
 
@@ -137,9 +138,9 @@ func DownloadImageAsBase64(ctx context.Context, imageURL string, encryptionInfo 
 	}
 
 	// Try to download the image using v3 endpoint
-	dataURL, err := downloadAndEncodeImage(ctx, imageURL)
+	data, err := downloadImage(ctx, imageURL)
 	if err == nil {
-		return dataURL, nil
+		return data, nil
 	}
 
 	lastError = err
@@ -159,9 +160,9 @@ func DownloadImageAsBase64(ctx context.Context, imageURL string, encryptionInfo 
 				Str("fallback_url", fallbackURL).
 				Msg("First attempt failed, trying r0 media endpoint")
 
-			dataURL, err = downloadAndEncodeImage(ctx, fallbackURL)
+			data, err = downloadImage(ctx, fallbackURL)
 			if err == nil {
-				return dataURL, nil
+				return data, nil
 			}
 
 			lastError = err
@@ -175,9 +176,9 @@ func DownloadImageAsBase64(ctx context.Context, imageURL string, encryptionInfo 
 				Str("direct_url", directURL).
 				Msg("Second attempt failed, trying direct download URL")
 
-			dataURL, err = downloadAndEncodeImage(ctx, directURL)
+			data, err = downloadImage(ctx, directURL)
 			if err == nil {
-				return dataURL, nil
+				return data, nil
 			}
 
 			lastError = err
@@ -185,17 +186,17 @@ func DownloadImageAsBase64(ctx context.Context, imageURL string, encryptionInfo 
 	}
 
 	// If we got here, all attempts failed
-	return "", fmt.Errorf("all download attempts failed, last error: %w", lastError)
+	return nil, fmt.Errorf("all download attempts failed, last error: %w", lastError)
 }
 
 // downloadAndDecryptMedia downloads and decrypts an encrypted media file
-func downloadAndDecryptMedia(ctx context.Context, encryptedURL string, encryptionInfo map[string]any, fullContent map[string]any) (string, error) {
+func downloadAndDecryptMedia(ctx context.Context, encryptedURL string, encryptionInfo map[string]any, fullContent map[string]any) ([]byte, error) {
 	// Check if the size info is available in the encryption info
 	if encryptionInfo != nil {
 		if size, ok := encryptionInfo["size"].(float64); ok {
 			const maxSize = 5 * 1024 * 1024 // 5MB
 			if int(size) > maxSize {
-				return "", fmt.Errorf("encrypted media is too large: %.0f bytes (max: 5MB)", size)
+				return nil, fmt.Errorf("encrypted media is too large: %.0f bytes (max: 5MB)", size)
 			}
 		}
 	}
@@ -206,7 +207,7 @@ func downloadAndDecryptMedia(ctx context.Context, encryptedURL string, encryptio
 			if size, ok := info["size"].(float64); ok {
 				const maxSize = 5 * 1024 * 1024 // 5MB
 				if int(size) > maxSize {
-					return "", fmt.Errorf("encrypted media is too large: %.0f bytes (max: 5MB)", size)
+					return nil, fmt.Errorf("encrypted media is too large: %.0f bytes (max: 5MB)", size)
 				}
 			}
 		}
@@ -218,7 +219,7 @@ func downloadAndDecryptMedia(ctx context.Context, encryptedURL string, encryptio
 		// Format: mxc://<server-name>/<media-id>
 		parts := strings.SplitN(strings.TrimPrefix(encryptedURL, "mxc://"), "/", 2)
 		if len(parts) != 2 {
-			return "", fmt.Errorf("invalid MXC URL format: %s", encryptedURL)
+			return nil, fmt.Errorf("invalid MXC URL format: %s", encryptedURL)
 		}
 		serverName, mediaID := parts[0], parts[1]
 
@@ -236,7 +237,7 @@ func downloadAndDecryptMedia(ctx context.Context, encryptedURL string, encryptio
 	// Create a new HTTP request
 	req, err := http.NewRequestWithContext(ctx, "GET", encryptedURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to create HTTP request: %w", err)
+		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
 	// Add authorization header for encrypted media
@@ -257,7 +258,7 @@ func downloadAndDecryptMedia(ctx context.Context, encryptedURL string, encryptio
 				Int("status_code", resp.StatusCode).
 				Msg("First attempt failed with non-OK status, trying r0 media endpoint for encrypted media")
 
-			return downloadAndDecryptMediaWithURL(ctx, fallbackURL, encryptionInfo, fullContent)
+			return downloadAndDecryptMediaWithURL(ctx, fallbackURL, encryptionInfo)
 		}
 
 		// Try direct download URL as a second fallback
@@ -270,10 +271,10 @@ func downloadAndDecryptMedia(ctx context.Context, encryptedURL string, encryptio
 				Int("status_code", resp.StatusCode).
 				Msg("First attempt failed with non-OK status, trying direct download URL for encrypted media")
 
-			return downloadAndDecryptMediaWithURL(ctx, directURL, encryptionInfo, fullContent)
+			return downloadAndDecryptMediaWithURL(ctx, directURL, encryptionInfo)
 		}
 
-		return "", fmt.Errorf("failed to download encrypted image: %w", err)
+		return nil, fmt.Errorf("failed to download encrypted image: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -289,7 +290,7 @@ func downloadAndDecryptMedia(ctx context.Context, encryptedURL string, encryptio
 				Int("status_code", resp.StatusCode).
 				Msg("First attempt failed with non-OK status, trying r0 media endpoint for encrypted media")
 
-			return downloadAndDecryptMediaWithURL(ctx, fallbackURL, encryptionInfo, fullContent)
+			return downloadAndDecryptMediaWithURL(ctx, fallbackURL, encryptionInfo)
 		}
 
 		// Try direct download URL as a second fallback
@@ -302,21 +303,21 @@ func downloadAndDecryptMedia(ctx context.Context, encryptedURL string, encryptio
 				Int("status_code", resp.StatusCode).
 				Msg("First attempt failed with non-OK status, trying direct download URL for encrypted media")
 
-			return downloadAndDecryptMediaWithURL(ctx, directURL, encryptionInfo, fullContent)
+			return downloadAndDecryptMediaWithURL(ctx, directURL, encryptionInfo)
 		}
 
-		return "", fmt.Errorf("failed to download encrypted image: status code %d", resp.StatusCode)
+		return nil, fmt.Errorf("failed to download encrypted image: status code %d", resp.StatusCode)
 	}
 
-	return decryptAndEncodeMedia(ctx, resp, encryptionInfo, fullContent)
+	return decryptMedia(ctx, resp, encryptionInfo)
 }
 
 // downloadAndDecryptMediaWithURL is a helper function to download and decrypt media with a specific URL
-func downloadAndDecryptMediaWithURL(ctx context.Context, url string, encryptionInfo map[string]any, fullContent map[string]any) (string, error) {
+func downloadAndDecryptMediaWithURL(ctx context.Context, url string, encryptionInfo map[string]any) ([]byte, error) {
 	// Create a new HTTP request
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to create HTTP request: %w", err)
+		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
 	// Add authorization header for encrypted media
@@ -327,42 +328,42 @@ func downloadAndDecryptMediaWithURL(ctx context.Context, url string, encryptionI
 	// Send the request
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to download encrypted image: %w", err)
+		return nil, fmt.Errorf("failed to download encrypted image: %w", err)
 	}
 	defer resp.Body.Close()
 
 	// Check if the response is successful
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("failed to download encrypted image: status code %d", resp.StatusCode)
+		return nil, fmt.Errorf("failed to download encrypted image: status code %d", resp.StatusCode)
 	}
 
 	// Check the Content-Length header to avoid downloading large files
 	contentLength := resp.ContentLength
 	if contentLength > 5*1024*1024 { // 5MB
-		return "", fmt.Errorf("encrypted media is too large: %d bytes (max: 5MB)", contentLength)
+		return nil, fmt.Errorf("encrypted media is too large: %d bytes (max: 5MB)", contentLength)
 	}
 
-	return decryptAndEncodeMedia(ctx, resp, encryptionInfo, fullContent)
+	return decryptMedia(ctx, resp, encryptionInfo)
 }
 
-// decryptAndEncodeMedia decrypts and encodes media data from an HTTP response
-func decryptAndEncodeMedia(ctx context.Context, resp *http.Response, encryptionInfo map[string]any, fullContent map[string]any) (string, error) {
+// decryptMedia decrypts media data from an HTTP response
+func decryptMedia(ctx context.Context, resp *http.Response, encryptionInfo map[string]any) ([]byte, error) {
 	// Read the encrypted data with a size limit
 	const maxSize = 5 * 1024 * 1024 // 5MB
 	limitedReader := io.LimitReader(resp.Body, maxSize+1)
 	encryptedData, err := io.ReadAll(limitedReader)
 	if err != nil {
-		return "", fmt.Errorf("failed to read encrypted data: %w", err)
+		return nil, fmt.Errorf("failed to read encrypted data: %w", err)
 	}
 
 	// Double-check the size after reading
 	if len(encryptedData) > maxSize {
-		return "", fmt.Errorf("encrypted media is too large: %d bytes (max: 5MB)", len(encryptedData))
+		return nil, fmt.Errorf("encrypted media is too large: %d bytes (max: 5MB)", len(encryptedData))
 	}
 
 	// Extract the encryption parameters from the encryption info
 	if encryptionInfo == nil {
-		return "", fmt.Errorf("encryption info is nil")
+		return nil, fmt.Errorf("encryption info is nil")
 	}
 
 	// Declare decryptedData variable
@@ -371,25 +372,25 @@ func decryptAndEncodeMedia(ctx context.Context, resp *http.Response, encryptionI
 	// Extract the key object
 	keyObj, ok := encryptionInfo["key"].(map[string]any)
 	if !ok {
-		return "", fmt.Errorf("missing key in encryption info")
+		return nil, fmt.Errorf("missing key in encryption info")
 	}
 
 	// Extract the IV (initialization vector)
 	ivStr, ok := encryptionInfo["iv"].(string)
 	if !ok {
-		return "", fmt.Errorf("missing iv in encryption info")
+		return nil, fmt.Errorf("missing iv in encryption info")
 	}
 
 	// Extract the key algorithm
 	keyAlgorithm, ok := keyObj["alg"].(string)
 	if !ok || keyAlgorithm != "A256CTR" {
-		return "", fmt.Errorf("unsupported key algorithm: %s", keyAlgorithm)
+		return nil, fmt.Errorf("unsupported key algorithm: %s", keyAlgorithm)
 	}
 
 	// Extract the key data
 	keyData, ok := keyObj["k"].(string)
 	if !ok {
-		return "", fmt.Errorf("missing key data in encryption info")
+		return nil, fmt.Errorf("missing key data in encryption info")
 	}
 
 	// Log the key data for debugging
@@ -400,7 +401,7 @@ func decryptAndEncodeMedia(ctx context.Context, resp *http.Response, encryptionI
 	// Decode the base64 key
 	key, err := tryBase64Decode(ctx, keyData, "key_data")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	// Log the decoded key for debugging
@@ -449,7 +450,7 @@ func decryptAndEncodeMedia(ctx context.Context, resp *http.Response, encryptionI
 	// Create a new AES cipher
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return "", fmt.Errorf("failed to create AES cipher: %w", err)
+		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
 	}
 
 	// Create a CTR stream
@@ -459,70 +460,7 @@ func decryptAndEncodeMedia(ctx context.Context, resp *http.Response, encryptionI
 	decryptedData = make([]byte, len(encryptedData))
 	stream.XORKeyStream(decryptedData, encryptedData)
 
-	// Validate that the decrypted data is a valid image
-	contentType := http.DetectContentType(decryptedData)
-	if !strings.HasPrefix(contentType, "image/") {
-		log.Warn().Ctx(ctx).
-			Str("content_type", contentType).
-			Int("data_size", len(decryptedData)).
-			Msg("Decrypted data does not appear to be a valid image")
-
-		// Try to extract image info from the full content
-		if fullContent != nil {
-			// First check if there's an info section with mimetype
-			if info, ok := fullContent["info"].(map[string]any); ok {
-				if mimetype, ok := info["mimetype"].(string); ok && strings.HasPrefix(mimetype, "image/") {
-					contentType = mimetype
-					log.Debug().Ctx(ctx).
-						Str("content_type", contentType).
-						Msg("Using mimetype from info section")
-				}
-			}
-
-			// If we still don't have a valid image content type, check if there's a direct mimetype
-			if !strings.HasPrefix(contentType, "image/") {
-				if mimetype, ok := fullContent["mimetype"].(string); ok && strings.HasPrefix(mimetype, "image/") {
-					contentType = mimetype
-					log.Debug().Ctx(ctx).
-						Str("content_type", contentType).
-						Msg("Using mimetype from content")
-				}
-			}
-		}
-
-		// If we still don't have a valid image content type, check if there's a direct mimetype
-		if !strings.HasPrefix(contentType, "image/") {
-			if info, ok := encryptionInfo["info"].(map[string]any); ok {
-				if mimetype, ok := info["mimetype"].(string); ok && strings.HasPrefix(mimetype, "image/") {
-					contentType = mimetype
-					log.Debug().Ctx(ctx).
-						Str("content_type", contentType).
-						Msg("Using mimetype from encryption info")
-				}
-			}
-		}
-
-		// If we still don't have a valid image content type, default to PNG
-		if !strings.HasPrefix(contentType, "image/") {
-			contentType = "image/png"
-			log.Debug().Ctx(ctx).
-				Msg("Using default image/png content type")
-		}
-	}
-
-	// Encode the image data as base64
-	base64Data := base64.StdEncoding.EncodeToString(decryptedData)
-
-	// Create the data URL
-	dataURL := fmt.Sprintf("data:%s;base64,%s", contentType, base64Data)
-
-	// Log the data URL length for debugging
-	log.Debug().Ctx(ctx).
-		Str("content_type", contentType).
-		Int("data_url_length", len(dataURL)).
-		Msg("Created data URL for image")
-
-	return dataURL, nil
+	return decryptedData, nil
 }
 
 // tryBase64Decode tries to decode a base64 string using different encodings
@@ -631,12 +569,12 @@ func tryBase64Decode(ctx context.Context, data string, name string) ([]byte, err
 	return nil, fmt.Errorf("failed to decode %s with any base64 encoding", name)
 }
 
-// downloadAndEncodeImage downloads an image from a URL and encodes it as a base64 data URL
-func downloadAndEncodeImage(ctx context.Context, imageURL string) (string, error) {
+// downloadImage downloads an image from a URL
+func downloadImage(ctx context.Context, imageURL string) ([]byte, error) {
 	// Create a new HTTP request
 	req, err := http.NewRequestWithContext(ctx, "GET", imageURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to create HTTP request: %w", err)
+		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
 	// Add authorization header if needed (for media endpoints)
@@ -647,19 +585,19 @@ func downloadAndEncodeImage(ctx context.Context, imageURL string) (string, error
 	// Send the request
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to download image: %w", err)
+		return nil, fmt.Errorf("failed to download image: %w", err)
 	}
 	defer resp.Body.Close()
 
 	// Check if the response is successful
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("failed to download image: status code %d", resp.StatusCode)
+		return nil, fmt.Errorf("failed to download image: status code %d", resp.StatusCode)
 	}
 
 	// Check the Content-Length header to avoid downloading large files
 	contentLength := resp.ContentLength
 	if contentLength > 5*1024*1024 { // 5MB
-		return "", fmt.Errorf("image is too large: %d bytes (max: 5MB)", contentLength)
+		return nil, fmt.Errorf("image is too large: %d bytes (max: 5MB)", contentLength)
 	}
 
 	// Read the image data with a size limit
@@ -667,26 +605,13 @@ func downloadAndEncodeImage(ctx context.Context, imageURL string) (string, error
 	limitedReader := io.LimitReader(resp.Body, maxSize+1)
 	imageData, err := io.ReadAll(limitedReader)
 	if err != nil {
-		return "", fmt.Errorf("failed to read image data: %w", err)
+		return nil, fmt.Errorf("failed to read image data: %w", err)
 	}
 
 	// Double-check the size after reading
 	if len(imageData) > maxSize {
-		return "", fmt.Errorf("image is too large: %d bytes (max: 5MB)", len(imageData))
+		return nil, fmt.Errorf("image is too large: %d bytes (max: 5MB)", len(imageData))
 	}
 
-	// Determine the content type
-	contentType := resp.Header.Get("Content-Type")
-	if contentType == "" {
-		// Try to detect content type from the image data
-		contentType = http.DetectContentType(imageData)
-	}
-
-	// Encode the image data as base64
-	base64Data := base64.StdEncoding.EncodeToString(imageData)
-
-	// Create the data URL
-	dataURL := fmt.Sprintf("data:%s;base64,%s", contentType, base64Data)
-
-	return dataURL, nil
+	return imageData, nil
 }

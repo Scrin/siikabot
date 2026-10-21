@@ -10,9 +10,9 @@ import (
 )
 
 // A message deleted from the room leaves the bot's chat history too. That covers a message that
-// triggered a turn, the bot's answer to one, and a message a turn quoted. A turn still running, or
-// waiting for the room, when its trigger is deleted stops: it stores nothing more and posts no
-// answer.
+// triggered a turn, the bot's answer to one, and a message a turn quoted or showed the image of. A
+// turn still running, or waiting for the room, when its trigger is deleted stops: it stores nothing
+// more and posts no answer.
 
 // redactionMemory is how long a redaction is remembered for turns that haven't finished yet. It has
 // to outlast any turn, including its wait for the room lock.
@@ -51,17 +51,18 @@ func isRedacted(eventID string) bool {
 func ForgetEvent(ctx context.Context, roomID, eventID string) {
 	markRedacted(eventID)
 
-	deleted, blanked, err := db.ForgetChatEvent(ctx, roomID, eventID)
+	deleted, blanked, images, err := db.ForgetChatEvent(ctx, roomID, eventID)
 	if err != nil {
 		// Already logged
 		return
 	}
-	if deleted > 0 || blanked > 0 {
+	if deleted > 0 || blanked > 0 || images > 0 {
 		log.Info().Ctx(ctx).
 			Str("room_id", roomID).
 			Str("event_id", eventID).
 			Int64("deleted_rows", deleted).
 			Int64("blanked_quotes", blanked).
+			Int64("deleted_images", images).
 			Msg("Removed a redacted event from the chat history")
 	}
 }
@@ -76,7 +77,7 @@ func forgotten(ctx context.Context, turn db.Turn) bool {
 
 	persistCtx, cancel := persistContext(ctx)
 	defer cancel()
-	if _, _, err := db.ForgetChatEvent(persistCtx, turn.RoomID, turn.EventID); err != nil {
+	if _, _, _, err := db.ForgetChatEvent(persistCtx, turn.RoomID, turn.EventID); err != nil {
 		// Already logged
 		_ = err
 	}

@@ -124,8 +124,24 @@ func cleanupChatUsage(ctx context.Context) {
 // the anchor as a side effect.
 func describeContextWindow(ctx context.Context, timeline db.Timeline, sender string, cfg db.ChatConfig) string {
 	window := currentContextWindow(ctx, timeline, threadSeed(ctx, timeline, sender))
-	return fmt.Sprintf("%d / %d tokens (currently ~%d tokens over %d messages)",
-		cfg.ContextHighTokens, cfg.ContextLowTokens, estimateHistoryTokens(window), len(window))
+	images, _ := historyImages(window)
+	return fmt.Sprintf("%d / %d tokens (currently ~%d tokens over %d %s, %d %s)",
+		cfg.ContextHighTokens, cfg.ContextLowTokens, estimateHistoryTokens(window),
+		len(window), plural(len(window), "message", "messages"), images, plural(images, "image", "images"))
+}
+
+// modelArgument reads the model name from the words of a !chat model command. A model name has no
+// spaces, so anything but exactly one more word is a mistake: in particular the old form, which named
+// the kind of model first and would otherwise set the model to "text".
+func modelArgument(split []string) (string, bool) {
+	if len(split) < 3 {
+		return "", false
+	}
+	words := strings.Fields(strings.Join(split[2:], " "))
+	if len(words) != 1 {
+		return "", false
+	}
+	return words[0], true
 }
 
 // updateConfig applies a change to the chat configuration and reports the outcome to the room.
@@ -140,8 +156,7 @@ func updateConfig(ctx context.Context, roomID string, change func(*db.ChatConfig
 	log.Info().Ctx(ctx).
 		Str("room_id", roomID).
 		Int64("config_id", cfg.ID).
-		Str("text_model", cfg.TextModel).
-		Str("image_model", cfg.ImageModel).
+		Str("llm_model", cfg.LLMModel).
 		Int("context_high_tokens", cfg.ContextHighTokens).
 		Int("context_low_tokens", cfg.ContextLowTokens).
 		Int("max_tokens", cfg.MaxTokens).
@@ -193,43 +208,28 @@ func Handle(ctx context.Context, roomID, sender, eventID, threadRootID, msg stri
 		}
 
 		matrix.SendMessageTo(ctx, roomID, here, fmt.Sprintf("Current chat configuration:\n"+
-			"Text model: %s\n"+
-			"Image model: %s\n"+
+			"Model: %s\n"+
 			"Context window: %s\n"+
 			"Max response tokens: %d\n"+
 			"Image detail: %s\n"+
 			"Max tool iterations: %d\n"+
 			"Max web content size: %d bytes",
-			cfg.TextModel, cfg.ImageModel, describeContextWindow(ctx, timeline, sender, cfg), cfg.MaxTokens,
+			cfg.LLMModel, describeContextWindow(ctx, timeline, sender, cfg), cfg.MaxTokens,
 			cfg.ImageDetail, cfg.MaxToolIterations, cfg.MaxWebContentSize), nil)
 	case "model":
-		if len(split) < 4 {
-			matrix.SendMessage(ctx, roomID, "Usage: !chat model [text|image] <model_name>")
+		newModel, ok := modelArgument(split)
+		if !ok {
+			matrix.SendMessage(ctx, roomID, "Usage: !chat model <model_name> (the model has to take images as well as text)")
 			return
 		}
 
 		if sender != config.Admin {
-			matrix.SendMessage(ctx, roomID, "Only admins can change the chat models")
+			matrix.SendMessage(ctx, roomID, "Only admins can change the chat model")
 			return
 		}
 
-		modelType := strings.TrimSpace(split[2])
-		newModel := strings.TrimSpace(split[3])
-		if newModel == "" {
-			matrix.SendMessage(ctx, roomID, "Usage: !chat model [text|image] <model_name>")
-			return
-		}
-
-		switch modelType {
-		case "text":
-			updateConfig(ctx, roomID, func(cfg *db.ChatConfig) { cfg.TextModel = newModel },
-				fmt.Sprintf("Text chat model changed to: %s", newModel), "Failed to set text chat model")
-		case "image":
-			updateConfig(ctx, roomID, func(cfg *db.ChatConfig) { cfg.ImageModel = newModel },
-				fmt.Sprintf("Image chat model changed to: %s", newModel), "Failed to set image chat model")
-		default:
-			matrix.SendMessage(ctx, roomID, "Usage: !chat model [text|image] <model_name>")
-		}
+		updateConfig(ctx, roomID, func(cfg *db.ChatConfig) { cfg.LLMModel = newModel },
+			fmt.Sprintf("Chat model changed to: %s", newModel), "Failed to set chat model")
 	case "context":
 		if len(split) < 4 {
 			matrix.SendMessage(ctx, roomID, "Usage: !chat context <high_tokens> <low_tokens>")

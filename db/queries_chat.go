@@ -37,6 +37,9 @@ type ChatMessage struct {
 	HasImage     *bool      `db:"has_image"`
 	// References are the messages a user row refers to, read from chat_references along with it
 	References []Reference `db:"-"`
+	// Images are the images a user row showed the model, read from chat_images along with it but
+	// without their data (see LoadChatImageData)
+	Images []ChatImage `db:"-"`
 
 	// Answer rows only
 	AnswerEventID *string `db:"answer_event_id"`
@@ -87,6 +90,9 @@ type UserTurn struct {
 	ReplyTo *QuotedMessage
 	// Links are the messages in the room this one links to, in the order it links to them
 	Links []QuotedMessage
+	// Images are the images the turn showed the model, at most one for each message: its own, and
+	// those of the messages it refers to
+	Images []ChatImage
 }
 
 // Kinds of message a user turn can quote
@@ -122,6 +128,28 @@ type QuotedMessage struct {
 	Body string
 }
 
+// ChatImage is an image a user turn showed the model, as prepared for it
+type ChatImage struct {
+	// EventID is the message the image is from: the turn's own, or one it refers to
+	EventID  string
+	MIMEType string
+	Width    int
+	Height   int
+	// Data is the encoded image. GetChatHistory reads only what the image is and leaves this nil, and
+	// LoadChatImageData reads it for the rows that need it.
+	Data []byte
+}
+
+// ImageOf returns the image of a message, if the turn showed the model one
+func (t UserTurn) ImageOf(eventID string) (ChatImage, bool) {
+	for _, image := range t.Images {
+		if image.EventID == eventID {
+			return image, true
+		}
+	}
+	return ChatImage{}, false
+}
+
 // UserTurn reads a user row back as the message it records.
 //
 // The chat_history_user_row_complete constraint guarantees that every field dereferenced here is
@@ -137,6 +165,7 @@ func (m ChatMessage) UserTurn() UserTurn {
 		Mentions:     m.Mentions,
 		UnseenBefore: *m.UnseenBefore,
 		HasImage:     *m.HasImage,
+		Images:       m.Images,
 	}
 	for _, reference := range m.References {
 		switch reference.Relation {
@@ -163,7 +192,8 @@ func (t UserTurn) references() []Reference {
 	return references
 }
 
-// SaveUserTurn stores the message that started a turn, with the messages it refers to
+// SaveUserTurn stores the message that started a turn, with the messages it refers to and the images
+// it showed. They go in together, so a stored turn never shows an image it doesn't have.
 func SaveUserTurn(ctx context.Context, turn UserTurn) error {
 	// Never nil: an empty list is stored as one, and the column is required on user rows
 	mentions := turn.Mentions
@@ -203,6 +233,11 @@ func SaveUserTurn(ctx context.Context, turn UserTurn) error {
 			return err
 		}
 	}
+	for _, image := range turn.Images {
+		if err := insertImage(ctx, tx, historyID, image); err != nil {
+			return err
+		}
+	}
 
 	if err := tx.Commit(ctx); err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("room_id", turn.RoomID).Str("turn_event_id", turn.EventID).
@@ -233,6 +268,22 @@ func insertReference(ctx context.Context, executor chatMessageExecutor, historyI
 			Str("relation", reference.Relation).
 			Str("event_id", reference.EventID).
 			Msg("Failed to save a message a turn refers to")
+	}
+	return err
+}
+
+// insertImage stores one of the images a user row showed the model
+func insertImage(ctx context.Context, executor chatMessageExecutor, historyID int64, image ChatImage) error {
+	_, err := executor.Exec(ctx,
+		`INSERT INTO chat_images (history_id, event_id, mime_type, width, height, data)
+		VALUES ($1, $2, $3, $4, $5, $6)`,
+		historyID, image.EventID, image.MIMEType, image.Width, image.Height, image.Data)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).
+			Int64("history_id", historyID).
+			Str("event_id", image.EventID).
+			Int("size_bytes", len(image.Data)).
+			Msg("Failed to save an image a turn showed")
 	}
 	return err
 }
@@ -400,6 +451,10 @@ func insertChatMessage(ctx context.Context, executor chatMessageExecutor, row Ch
 // Ordering is by timestamp with the id as a tiebreaker. The tiebreaker is required, not cosmetic:
 // rows written inside one transaction all take the transaction start time from NOW(), so ordering
 // by timestamp alone would return a tool call and its response in an arbitrary order.
+//
+// The images the user rows showed come without their data. Every row read needs their size, which
+// the token budget counts, but only the rows that make it into the context window need the images
+// themselves, and LoadChatImageData reads those.
 func GetChatHistory(ctx context.Context, timeline Timeline, seedTurnEventID string, maxMessages int) ([]ChatMessage, error) {
 	// The seed belongs to the main timeline, where the thread was started from
 	rows, err := pool.Query(ctx,
@@ -437,7 +492,23 @@ func GetChatHistory(ctx context.Context, timeline Timeline, seedTurnEventID stri
 	if err := loadReferences(ctx, timeline.RoomID, messages); err != nil {
 		return nil, err
 	}
+	if err := loadImages(ctx, timeline.RoomID, messages); err != nil {
+		return nil, err
+	}
 	return messages, nil
+}
+
+// userRows returns the ids of the user rows among messages, and where each of them is
+func userRows(messages []ChatMessage) ([]int64, map[int64]int) {
+	var ids []int64
+	byID := make(map[int64]int)
+	for i, msg := range messages {
+		if msg.Role == "user" {
+			byID[msg.ID] = i
+			ids = append(ids, msg.ID)
+		}
+	}
+	return ids, byID
 }
 
 // referenceRow is a row of chat_references
@@ -454,14 +525,7 @@ type referenceRow struct {
 
 // loadReferences reads the messages the user rows among messages refer to, in their order
 func loadReferences(ctx context.Context, roomID string, messages []ChatMessage) error {
-	byID := make(map[int64]int)
-	var ids []int64
-	for i, msg := range messages {
-		if msg.Role == "user" {
-			byID[msg.ID] = i
-			ids = append(ids, msg.ID)
-		}
-	}
+	ids, byID := userRows(messages)
 	if len(ids) == 0 {
 		return nil
 	}
@@ -493,6 +557,88 @@ func loadReferences(ctx context.Context, roomID string, messages []ChatMessage) 
 				Body:       stringOrEmpty(ref.Body),
 			},
 		})
+	}
+	return nil
+}
+
+// imageRow is a row of chat_images, without the image itself
+type imageRow struct {
+	HistoryID int64  `db:"history_id"`
+	EventID   string `db:"event_id"`
+	MIMEType  string `db:"mime_type"`
+	Width     int    `db:"width"`
+	Height    int    `db:"height"`
+}
+
+// loadImages reads which images the user rows among messages showed, without the images themselves
+func loadImages(ctx context.Context, roomID string, messages []ChatMessage) error {
+	ids, byID := userRows(messages)
+	if len(ids) == 0 {
+		return nil
+	}
+
+	rows, err := pool.Query(ctx,
+		`SELECT history_id, event_id, mime_type, width, height
+		FROM chat_images WHERE history_id = ANY($1) ORDER BY history_id, event_id`,
+		ids)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Msg("Failed to get the images chat turns showed")
+		return err
+	}
+	images, err := pgx.CollectRows(rows, pgx.RowToStructByName[imageRow])
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Msg("Failed to collect the images chat turns showed")
+		return err
+	}
+
+	for _, image := range images {
+		msg := &messages[byID[image.HistoryID]]
+		msg.Images = append(msg.Images, ChatImage{
+			EventID:  image.EventID,
+			MIMEType: image.MIMEType,
+			Width:    image.Width,
+			Height:   image.Height,
+		})
+	}
+	return nil
+}
+
+// imageDataRow is the image itself of a row of chat_images
+type imageDataRow struct {
+	HistoryID int64  `db:"history_id"`
+	EventID   string `db:"event_id"`
+	Data      []byte `db:"data"`
+}
+
+// LoadChatImageData reads the images that GetChatHistory left out of the user rows among messages,
+// changing the rows in place. An image that is gone by now, its message redacted in the meantime,
+// is left without data.
+func LoadChatImageData(ctx context.Context, roomID string, messages []ChatMessage) error {
+	ids, byID := userRows(messages)
+	if len(ids) == 0 {
+		return nil
+	}
+
+	rows, err := pool.Query(ctx,
+		"SELECT history_id, event_id, data FROM chat_images WHERE history_id = ANY($1)",
+		ids)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Msg("Failed to get the image data of chat turns")
+		return err
+	}
+	images, err := pgx.CollectRows(rows, pgx.RowToStructByName[imageDataRow])
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Msg("Failed to collect the image data of chat turns")
+		return err
+	}
+
+	for _, image := range images {
+		msg := &messages[byID[image.HistoryID]]
+		for i := range msg.Images {
+			if msg.Images[i].EventID == image.EventID {
+				msg.Images[i].Data = image.Data
+			}
+		}
 	}
 	return nil
 }
@@ -540,17 +686,17 @@ func HasChatTurn(ctx context.Context, roomID, eventID string) (bool, error) {
 
 // ForgetChatEvent removes a redacted event from the chat history. If the event triggered a turn,
 // or was the bot's answer to one, the whole turn goes. If a turn referred to it, the reference is
-// blanked and the turn stays. Returns how many rows were deleted and how many references were
-// blanked.
-func ForgetChatEvent(ctx context.Context, roomID, eventID string) (int64, int64, error) {
+// blanked and the turn stays, without the event's image if it showed it. Returns how many rows were
+// deleted, how many references were blanked and how many images were deleted.
+func ForgetChatEvent(ctx context.Context, roomID, eventID string) (int64, int64, int64, error) {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("event_id", eventID).Msg("Failed to begin transaction for forgetting an event")
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	defer tx.Rollback(ctx)
 
-	// The turn's references go with it
+	// The turn's references and images go with it
 	deleted, err := tx.Exec(ctx,
 		`DELETE FROM chat_history
 		WHERE room_id = $1 AND turn_event_id IN (
@@ -559,7 +705,7 @@ func ForgetChatEvent(ctx context.Context, roomID, eventID string) (int64, int64,
 		roomID, eventID)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("event_id", eventID).Msg("Failed to delete the turn of a redacted event")
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 
 	blanked, err := tx.Exec(ctx,
@@ -569,15 +715,24 @@ func ForgetChatEvent(ctx context.Context, roomID, eventID string) (int64, int64,
 		roomID, eventID)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("event_id", eventID).Msg("Failed to blank references to a redacted event")
-		return 0, 0, err
+		return 0, 0, 0, err
+	}
+
+	images, err := tx.Exec(ctx,
+		`DELETE FROM chat_images
+		WHERE event_id = $2 AND history_id IN (SELECT id FROM chat_history WHERE room_id = $1)`,
+		roomID, eventID)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("event_id", eventID).Msg("Failed to delete the images of a redacted event")
+		return 0, 0, 0, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("event_id", eventID).Msg("Failed to commit forgetting an event")
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 
-	return deleted.RowsAffected(), blanked.RowsAffected(), nil
+	return deleted.RowsAffected(), blanked.RowsAffected(), images.RowsAffected(), nil
 }
 
 // FollowChatEdit brings the chat history in line with an edit of a message: the text of a turn the

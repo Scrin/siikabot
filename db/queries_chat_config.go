@@ -15,8 +15,7 @@ import (
 type ChatConfig struct {
 	ID                int64     `db:"id"`
 	CreatedAt         time.Time `db:"created_at"`
-	TextModel         string    `db:"text_model"`
-	ImageModel        string    `db:"image_model"`
+	LLMModel          string    `db:"llm_model"`
 	ContextHighTokens int       `db:"context_high_tokens"`
 	ContextLowTokens  int       `db:"context_low_tokens"`
 	MaxToolIterations int       `db:"max_tool_iterations"`
@@ -65,18 +64,17 @@ func UpdateChatConfig(ctx context.Context, change func(*ChatConfig)) (ChatConfig
 
 	err = tx.QueryRow(ctx,
 		`INSERT INTO chat_config
-			(text_model, image_model, context_high_tokens, context_low_tokens,
+			(llm_model, context_high_tokens, context_low_tokens,
 			 max_tool_iterations, max_tokens, image_detail, max_web_content_size)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id, created_at`,
-		cfg.TextModel, cfg.ImageModel, cfg.ContextHighTokens, cfg.ContextLowTokens,
+		cfg.LLMModel, cfg.ContextHighTokens, cfg.ContextLowTokens,
 		cfg.MaxToolIterations, cfg.MaxTokens, cfg.ImageDetail, cfg.MaxWebContentSize,
 	).Scan(&cfg.ID, &cfg.CreatedAt)
 	if err != nil {
 		// Includes a change the table's checks reject, which leaves the configuration as it was
 		log.Error().Ctx(ctx).Err(err).
-			Str("text_model", cfg.TextModel).
-			Str("image_model", cfg.ImageModel).
+			Str("llm_model", cfg.LLMModel).
 			Int("context_high_tokens", cfg.ContextHighTokens).
 			Int("context_low_tokens", cfg.ContextLowTokens).
 			Int("max_tool_iterations", cfg.MaxToolIterations).
@@ -101,7 +99,7 @@ func UpdateChatConfig(ctx context.Context, change func(*ChatConfig)) (ChatConfig
 // Ordered by id rather than created_at: ids only ever increase, while timestamps can tie.
 func getLatestChatConfig(ctx context.Context, query queryFunc) (ChatConfig, error) {
 	rows, err := query(ctx,
-		`SELECT id, created_at, text_model, image_model, context_high_tokens, context_low_tokens,
+		`SELECT id, created_at, llm_model, context_high_tokens, context_low_tokens,
 			max_tool_iterations, max_tokens, image_detail, max_web_content_size
 		FROM chat_config
 		ORDER BY id DESC

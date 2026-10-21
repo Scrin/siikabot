@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"encoding/base64"
 	"fmt"
 	"regexp"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/db"
 )
@@ -51,10 +53,9 @@ func localTime(t time.Time) string {
 // when, the messages it refers to, then the message itself, with its own image if it is one.
 //
 // The same function renders the current turn and every replayed one, so a message looks the same
-// once it becomes history and the prompt prefix stays cacheable. The one difference is the images,
-// which are attached to the current turn only: attached says whose images are, by event ID, and is
-// nil for a replayed turn.
-func renderUserTurn(turn db.UserTurn, attached map[string]bool) string {
+// once it becomes history and the prompt prefix stays cacheable. An image is said to be attached
+// when the turn has it (turn.Images), and userContent attaches it.
+func renderUserTurn(turn db.UserTurn) string {
 	var b strings.Builder
 
 	b.WriteString("[" + person(turn.SenderName, turn.UserID) + " · " + localTime(turn.SentAt))
@@ -71,14 +72,14 @@ func renderUserTurn(turn db.UserTurn, attached map[string]bool) string {
 	b.WriteString("]\n")
 
 	if turn.ReplyTo != nil {
-		b.WriteString(renderQuote(*turn.ReplyTo, db.RelationReply, attached[turn.ReplyTo.EventID]))
+		b.WriteString(renderQuote(*turn.ReplyTo, db.RelationReply, hasImageOf(turn, turn.ReplyTo.EventID)))
 	}
 	for _, link := range turn.Links {
-		b.WriteString(renderQuote(link, db.RelationLink, attached[link.EventID]))
+		b.WriteString(renderQuote(link, db.RelationLink, hasImageOf(turn, link.EventID)))
 	}
 
 	if turn.HasImage {
-		if attached[turn.EventID] {
+		if hasImageOf(turn, turn.EventID) {
 			b.WriteString("[with an image]\n")
 		} else {
 			b.WriteString("[with an image, not attached]\n")
@@ -87,6 +88,58 @@ func renderUserTurn(turn db.UserTurn, attached map[string]bool) string {
 
 	b.WriteString(escapeHeaderLike(turn.Message))
 	return b.String()
+}
+
+// hasImageOf reports whether a turn has the image of a message to show the model
+func hasImageOf(turn db.UserTurn, eventID string) bool {
+	_, ok := turn.ImageOf(eventID)
+	return ok
+}
+
+// userContent is a user message as it is sent to the model: the turn as renderUserTurn renders it,
+// followed by the images it shows, in the order its text refers to them. The current turn and every
+// replayed one are sent this way, so a turn reads the same each time it is sent, images and all.
+// detail is the configured image detail.
+func userContent(turn db.UserTurn, detail string) any {
+	text := renderUserTurn(turn)
+	images := shownImages(turn)
+	if len(images) == 0 {
+		return text
+	}
+
+	parts := []aigateway.ContentPart{{Type: "text", Text: text}}
+	for _, image := range images {
+		parts = append(parts, aigateway.ContentPart{Type: "image_url", ImageURL: &aigateway.ImageURL{
+			URL:    "data:" + image.MIMEType + ";base64," + base64.StdEncoding.EncodeToString(image.Data),
+			Detail: requestImageDetail(detail),
+		}})
+	}
+	return parts
+}
+
+// shownImages returns the images a turn shows the model, in the order its text refers to them: that
+// of the message it replies to, those of the ones it links to, then its own. They are the ones its
+// text says are attached, and none other.
+func shownImages(turn db.UserTurn) []db.ChatImage {
+	var images []db.ChatImage
+	add := func(eventID string) {
+		if image, ok := turn.ImageOf(eventID); ok {
+			images = append(images, image)
+		}
+	}
+
+	if turn.ReplyTo != nil && turn.ReplyTo.Kind == db.QuoteImage {
+		add(turn.ReplyTo.EventID)
+	}
+	for _, link := range turn.Links {
+		if link.Kind == db.QuoteImage {
+			add(link.EventID)
+		}
+	}
+	if turn.HasImage {
+		add(turn.EventID)
+	}
+	return images
 }
 
 // renderQuote renders a message a turn refers to, the one it replies to or one it links to,

@@ -21,7 +21,7 @@ func textFrom(eventID, sender, body string) *matrix.Message {
 func TestReferencedMessagesWithoutReferences(t *testing.T) {
 	refs := referencedMessages(context.Background(), Trigger{RoomID: testRoomID, Body: "hi"}, testRoom("", alice, botSelf), true)
 
-	if refs.replyTo != nil || refs.links != nil || refs.images != nil || refs.notes != nil || len(refs.attached) != 0 {
+	if refs.replyTo != nil || refs.links != nil || refs.images != nil || refs.notes != nil {
 		t.Errorf("referencedMessages() = %#v, want nothing", refs)
 	}
 }
@@ -145,8 +145,8 @@ func TestReferencedMessagesQuoteAnImageWithItsCaption(t *testing.T) {
 	if refs.replyTo == nil || refs.replyTo.Kind != db.QuoteImage || refs.replyTo.Body != "" {
 		t.Errorf("replyTo = %#v, want an image without a caption", refs.replyTo)
 	}
-	if refs.images != nil || refs.attached["$image"] {
-		t.Errorf("images = %v, attached = %v, want nothing attached", refs.images, refs.attached)
+	if refs.images != nil {
+		t.Errorf("images = %v, want nothing attached", refs.images)
 	}
 }
 

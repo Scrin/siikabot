@@ -19,7 +19,6 @@ type ChatUsage struct {
 	CompletionTokens   int       `db:"completion_tokens"`
 	CachedPromptTokens int       `db:"cached_prompt_tokens"`
 	ToolIterations     int       `db:"tool_iterations"`
-	HasImage           bool      `db:"has_image"`
 	DurationMS         int       `db:"duration_ms"`
 	Outcome            string    `db:"outcome"`
 }
@@ -43,10 +42,10 @@ func SaveChatUsage(ctx context.Context, usage ChatUsage) error {
 	_, err := pool.Exec(ctx,
 		`INSERT INTO chat_usage
 			(room_id, user_id, model, prompt_tokens, completion_tokens, cached_prompt_tokens,
-			 tool_iterations, has_image, duration_ms, outcome)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			 tool_iterations, duration_ms, outcome)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 		usage.RoomID, usage.UserID, usage.Model, usage.PromptTokens, usage.CompletionTokens,
-		usage.CachedPromptTokens, usage.ToolIterations, usage.HasImage, usage.DurationMS, usage.Outcome)
+		usage.CachedPromptTokens, usage.ToolIterations, usage.DurationMS, usage.Outcome)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).
 			Str("room_id", usage.RoomID).
