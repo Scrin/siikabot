@@ -430,6 +430,7 @@ What the dashboard shows, and where the data comes from:
 | `RoomStats` (in `RoomsCard`, `AdminRoomsCard`) | `api/message_stats.go` | `message_stats` and `room_daily_stats`, written for every text message from anyone but the bot, edits aside (`bot/bot.go`), and read by the `get_message_stats` tool too. Only someone who has joined a room sees its stats, like its members |
 | `MessageActivityCard` | `api/message_stats.go` | `room_daily_stats` across every room, and the chat turns in `chat_usage` |
 | `ChatUsageCard` | `api/chat_usage.go` | `chat_usage`, written at the end of every chat turn (`commands/chat/turn_stats.go`) |
+| `ChatConfigCard` | `api/chat_config.go` | `chat_config`, written by `!chat set` and `!chat config revert` (`commands/chat/chat.go`), and read through the settings declared in `commands/chat/settings.go`. Read-only: the settings change only in a room |
 | `SystemStatusCard` | `api/healthcheck.go`, `api/metrics.go` | Process and connection pool stats |
 
 When a dashboard component or API endpoint is added, add it to this table.
@@ -503,7 +504,7 @@ All configuration is via environment variables (no config files). See `config/co
 
 `SIIKABOT_SOURCE_URL` and `SIIKABOT_FRONTEND_URL` are where the bot's source code repository and web dashboard are. The chat model gives them out as links, and reads the bot's own source code from the repository.
 
-The exception is the chat settings (the model, which has to take images as well as text, the context window budget, response and tool limits, how much of a web page one tool call returns, and how long a turn and each model call in it may take, with how many attempts a model call gets). They are global and live in the append-only `chat_config` table, where the latest row is the configuration in effect and older rows are its history. `!chat config` lists them, and the admin changes them with `!chat set <key> <value>`, each change appending a new row. Migration `0019__global-chat-config.sql` seeds the first row.
+The exception is the chat settings (the model, which has to take images as well as text, the context window budget, response and tool limits, how much of a web page one tool call returns, and how long a turn and each model call in it may take, with how many attempts a model call gets). They are global and live in the append-only `chat_config` table, where the latest row is the configuration in effect and older rows are its history. `!chat config` lists them, and the admin changes them with `!chat set <key> <value>`, each change appending a new row. `!chat config history` lists the changes, and `!chat config revert <id>` goes back to an earlier row by appending a copy of it, checked by today's rules. Migration `0019__global-chat-config.sql` seeds the first row.
 
 Each column of `chat_config` is a setting, declared in `commands/chat/settings.go` under the column's name, which is also its key in the commands and the logs. The declaration says what the setting means, the values it takes and how it's shown, and the listing, the help and the checks all come from it. A new column needs its declaration there, which a test checks. The turn hands its configuration to the tools in the context, so a tool never reads one of its own.
 

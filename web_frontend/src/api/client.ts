@@ -12,6 +12,7 @@ import type {
   MemoriesResponse,
   DeleteAllMemoriesResponse,
   ChatUsageResponse,
+  ChatConfigResponse,
   RoomStatsResponse,
   MessageActivityResponse,
 } from './types'
@@ -337,6 +338,32 @@ export async function fetchChatUsage(token: string, days: number): Promise<ChatU
     }
     const error = await response.json().catch(() => ({ error: response.statusText }))
     throw new Error(error.error || 'Failed to fetch chat usage')
+  }
+
+  return response.json()
+}
+
+/**
+ * Fetch the chat configuration in effect and the latest changes to it (admin only)
+ *
+ * Read-only: the settings are changed with !chat set in a room, which answers there.
+ */
+export async function fetchChatConfig(token: string): Promise<ChatConfigResponse> {
+  const response = await fetch(`${API_BASE}/admin/chat-config`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    if (response.status === 403) {
+      throw new Error('Admin access required')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to fetch chat configuration')
   }
 
   return response.json()

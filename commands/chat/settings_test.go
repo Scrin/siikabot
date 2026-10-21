@@ -494,3 +494,96 @@ func TestRedactionMemoryOutlastsTurns(t *testing.T) {
 			redactionMemory, maxTurnTimeout)
 	}
 }
+
+// configHistory is a history of three configurations, newest first: the seeded one, one that
+// lengthened the turns, and one that changed the model and the rounds of tool calls
+func configHistory() []db.ChatConfig {
+	first := seededConfig()
+	second := first
+	second.ID, second.CreatedAt, second.TurnTimeout = 2, first.CreatedAt.Add(time.Hour), 10*time.Minute
+	third := second
+	third.ID, third.CreatedAt, third.Model, third.MaxToolIterations = 3, second.CreatedAt.Add(time.Hour), "openrouter/openai/gpt-5.6-luna", 8
+	return []db.ChatConfig{third, second, first}
+}
+
+func TestDescribeHistory(t *testing.T) {
+	listing := describeHistory(configHistory(), defaultHistoryLength)
+	for _, want := range []string{
+		"- #3, 2026-09-25 14:27: `model` openrouter/deepseek/deepseek-v4.1-flash → openrouter/openai/gpt-5.6-luna, `max_tool_iterations` 5 → 8\n",
+		"- #2, 2026-09-25 13:27: `turn_timeout` 3m → 10m\n",
+		"- #1, 2026-09-25 12:27: the first configuration\n",
+		"`!chat config revert <id>`",
+	} {
+		if !strings.Contains(listing, want) {
+			t.Errorf("the history doesn't have %q:\n%s", want, listing)
+		}
+	}
+	if strings.Contains(listing, "earlier") {
+		t.Errorf("the history says there's more when it lists everything:\n%s", listing)
+	}
+
+	// Cut short, the last configuration listed still says what it changed, and the history says how
+	// to see the rest
+	short := describeHistory(configHistory(), 2)
+	if strings.Contains(short, "#1") || !strings.Contains(short, "`turn_timeout` 3m → 10m") ||
+		!strings.Contains(short, "1 earlier configuration, which `!chat config history 3` lists") {
+		t.Errorf("the history of the latest two:\n%s", short)
+	}
+}
+
+// TestApplyRevert verifies going back to an earlier configuration takes every one of its settings,
+// and only if they pass today's rules: a bound tightened since then refuses it
+func TestApplyRevert(t *testing.T) {
+	history := configHistory()
+
+	cfg := history[0]
+	if err := applyRevert(&cfg, history[2]); err != nil {
+		t.Fatalf("going back to #1 was refused: %v", err)
+	}
+	if changed := changedSettings(history[2], cfg); len(changed) != 0 {
+		t.Errorf("going back to #1 left %d settings as they were", len(changed))
+	}
+
+	tooMany := history[2]
+	tooMany.ID, tooMany.MaxToolIterations = 9, 50
+	cfg = history[0]
+	err := applyRevert(&cfg, tooMany)
+	if err == nil || !strings.Contains(err.Error(), "Can't go back to #9") || !strings.Contains(err.Error(), "`max_tool_iterations` takes 1 to 30") {
+		t.Errorf("going back to a configuration over today's bounds: %v", err)
+	}
+
+	tooSlow := history[2]
+	tooSlow.ID, tooSlow.ModelTimeout = 9, 2*time.Minute
+	cfg = history[0]
+	if err := applyRevert(&cfg, tooSlow); err == nil || !strings.Contains(err.Error(), "doesn't fit in `turn_timeout`") {
+		t.Errorf("going back to a configuration whose model call doesn't fit its turn: %v", err)
+	}
+}
+
+// TestSettingsCommandsWork verifies every command the dashboard shows is one !chat set takes
+func TestSettingsCommandsWork(t *testing.T) {
+	infos := Settings(seededConfig())
+	if len(infos) != len(settings) {
+		t.Fatalf("Settings() describes %d settings, want all %d", len(infos), len(settings))
+	}
+	for _, info := range infos {
+		changes, err := parseChanges(strings.Fields(strings.TrimPrefix(info.Command, "!chat set ")))
+		if err != nil {
+			t.Errorf("the command for %s, %q, doesn't parse: %v", info.Key, info.Command, err)
+			continue
+		}
+		cfg := seededConfig()
+		if err := applyChanges(&cfg, changes); err != nil {
+			t.Errorf("the command for %s, %q, is refused: %v", info.Key, info.Command, err)
+		}
+	}
+}
+
+func TestChatHelpListsEverySubcommand(t *testing.T) {
+	for _, subcommand := range []string{"`!chat config`", "`!chat config <key>`", "`!chat config history [n]`",
+		"`!chat set <key>", "`!chat config revert <id>`", "`!chat reset`"} {
+		if !strings.Contains(chatHelp, subcommand) {
+			t.Errorf("the help doesn't list %s", subcommand)
+		}
+	}
+}

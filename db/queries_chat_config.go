@@ -47,6 +47,7 @@ func GetChatConfig(ctx context.Context) (ChatConfig, error) {
 
 // GetChatConfigHistory returns every chat configuration on record, newest first: the one in effect,
 // then the ones it replaced. A row is added only when the admin changes a setting, so there are few.
+// There is always at least one, like for GetChatConfig.
 func GetChatConfigHistory(ctx context.Context) ([]ChatConfig, error) {
 	rows, err := pool.Query(ctx, `SELECT `+chatConfigColumns+` FROM chat_config ORDER BY id DESC`)
 	if err != nil {
@@ -54,11 +55,34 @@ func GetChatConfigHistory(ctx context.Context) ([]ChatConfig, error) {
 		return nil, err
 	}
 	history, err := pgx.CollectRows(rows, pgx.RowToStructByName[ChatConfig])
+	if err == nil && len(history) == 0 {
+		// The migration that creates the table seeds its first row and nothing deletes rows, so
+		// reaching this takes a manual edit
+		err = errors.New("chat_config has no rows")
+	}
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Msg("Failed to collect chat config history")
 		return nil, err
 	}
 	return history, nil
+}
+
+// GetChatConfigByID returns the chat configuration with the id, and whether there is one
+func GetChatConfigByID(ctx context.Context, id int64) (ChatConfig, bool, error) {
+	rows, err := pool.Query(ctx, `SELECT `+chatConfigColumns+` FROM chat_config WHERE id = $1`, id)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Int64("config_id", id).Msg("Failed to query chat config")
+		return ChatConfig{}, false, err
+	}
+	cfg, err := pgx.CollectOneRow(rows, pgx.RowToStructByName[ChatConfig])
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ChatConfig{}, false, nil
+	}
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Int64("config_id", id).Msg("Failed to collect chat config")
+		return ChatConfig{}, false, err
+	}
+	return cfg, true, nil
 }
 
 // UpdateChatConfig applies a change to the chat configuration and returns the result. The table is

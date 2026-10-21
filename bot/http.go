@@ -64,6 +64,7 @@ func initHTTP() {
 				adminGroup.GET("/rooms/:roomId/members", api.AdminRoomMembersHandler)
 				adminGroup.GET("/rooms/:roomId/stats", api.AdminRoomStatsHandler)
 				adminGroup.GET("/chat-usage", api.ChatUsageHandler)
+				adminGroup.GET("/chat-config", api.ChatConfigHandler)
 				adminGroup.GET("/message-activity", api.MessageActivityHandler)
 			}
 		}

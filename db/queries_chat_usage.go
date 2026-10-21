@@ -37,6 +37,14 @@ type ChatUsageSummary struct {
 	Silent int `db:"silent"`
 }
 
+// ChatUsageFailures is how many of a room and model's turns failed with one outcome
+type ChatUsageFailures struct {
+	RoomID  string `db:"room_id"`
+	Model   string `db:"model"`
+	Outcome string `db:"outcome"`
+	Turns   int    `db:"turns"`
+}
+
 // SaveChatUsage records the cost of a completed chat turn
 func SaveChatUsage(ctx context.Context, usage ChatUsage) error {
 	_, err := pool.Exec(ctx,
@@ -86,6 +94,32 @@ func GetChatUsageSummary(ctx context.Context, since time.Time) ([]ChatUsageSumma
 		return nil, err
 	}
 	return summaries, nil
+}
+
+// GetChatUsageFailures counts the failed turns since the given time by room, model and outcome, so
+// that a failure count can say how the turns failed. The outcomes that aren't failures, ok and
+// silent, are left out, as GetChatUsageSummary leaves them out of its failures.
+func GetChatUsageFailures(ctx context.Context, since time.Time) ([]ChatUsageFailures, error) {
+	rows, err := pool.Query(ctx,
+		`SELECT room_id, model, outcome, COUNT(*)::int AS turns
+		FROM chat_usage
+		WHERE timestamp >= $1 AND outcome NOT IN ('ok', 'silent')
+		GROUP BY room_id, model, outcome
+		ORDER BY room_id, model, outcome`,
+		since)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).
+			Time("since", since).
+			Msg("Failed to query chat usage failures")
+		return nil, err
+	}
+
+	failures, err := pgx.CollectRows(rows, pgx.RowToStructByName[ChatUsageFailures])
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Msg("Failed to collect chat usage failure rows")
+		return nil, err
+	}
+	return failures, nil
 }
 
 // CleanupOldChatUsage removes usage records older than the specified duration

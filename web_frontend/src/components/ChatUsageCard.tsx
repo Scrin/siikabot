@@ -101,6 +101,7 @@ function UsageTotals({ totals }: UsageTotalsProps) {
       {totals.failures > 0 && (
         <div className="mt-3 font-mono text-xs text-rose-400">
           {totals.failures} failed {totals.failures === 1 ? 'turn' : 'turns'}
+          {failureDetail(totals)}
         </div>
       )}
       {totals.silent > 0 && (
@@ -151,7 +152,9 @@ function UsageItem({ entry }: UsageItemProps) {
           {entry.failures > 0 && (
             <>
               <span className="text-slate-500">|</span>
-              <span className="text-rose-400">{entry.failures} failed</span>
+              <span className="text-rose-400">
+                {entry.failures} failed{failureDetail(entry)}
+              </span>
             </>
           )}
           {entry.silent > 0 && (
@@ -168,6 +171,45 @@ function UsageItem({ entry }: UsageItemProps) {
       </div>
     </motion.div>
   )
+}
+
+/**
+ * How a turn that failed with an outcome is described, and the chat setting that governs the
+ * outcome, if one does, so that a failure points at the setting to look at in the configuration
+ */
+const FAILURE_LABELS: Record<string, { label: string; setting?: string }> = {
+  turn_timeout: { label: 'timed out', setting: 'turn_timeout' },
+  tool_limit: { label: 'out of tool rounds', setting: 'max_tool_iterations' },
+  tool_failed: { label: 'tools failed' },
+  request_failed: { label: 'model call failed' },
+  no_choices: { label: 'no answer' },
+  empty_response: { label: 'no answer' },
+  not_delivered: { label: 'not delivered' },
+  config_unavailable: { label: 'no configuration' },
+}
+
+/**
+ * Say how the failed turns failed, to follow their count, or nothing without a breakdown. Outcomes
+ * described alike are counted together, and an outcome without a description goes by its own name,
+ * so that a new one still shows up.
+ *
+ * @example
+ * failureDetail(entry) // ": 2 timed out (turn_timeout), 1 out of tool rounds (max_tool_iterations)"
+ */
+function failureDetail(entry: ChatUsageEntry): string {
+  const counts = new Map<string, number>()
+  for (const [outcome, count] of Object.entries(entry.failures_by_outcome ?? {})) {
+    const known = FAILURE_LABELS[outcome]
+    const label = !known ? outcome : known.setting ? `${known.label} (${known.setting})` : known.label
+    counts.set(label, (counts.get(label) ?? 0) + count)
+  }
+  if (counts.size === 0) {
+    return ''
+  }
+  const described = [...counts.entries()]
+    .sort(([, a], [, b]) => b - a)
+    .map(([label, count]) => `${count} ${label}`)
+  return `: ${described.join(', ')}`
 }
 
 /**

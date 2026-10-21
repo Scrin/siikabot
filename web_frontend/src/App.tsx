@@ -19,6 +19,7 @@ import { MemoriesCard } from './components/MemoriesCard'
 import { RoomsCard } from './components/RoomsCard'
 import { AdminRoomsCard } from './components/AdminRoomsCard'
 import { ChatUsageCard } from './components/ChatUsageCard'
+import { ChatConfigCard } from './components/ChatConfigCard'
 import { MessageActivityCard } from './components/MessageActivityCard'
 import { ScanlineOverlay } from './components/ui/ScanlineOverlay'
 import { TiltCard } from './components/ui/TiltCard'
@@ -336,7 +337,7 @@ function AppContent() {
                         </div>
                       </FadeInSection>
 
-                      {/* Message Activity Section */}
+                      {/* AI Chat Configuration Section */}
                       <FadeInSection delay={0.6}>
                         <div className="mt-6 border-t border-slate-700/50 pt-6">
                           <motion.h3
@@ -346,6 +347,23 @@ function AppContent() {
                             }
                             animate={{ opacity: 1, x: 0 }}
                             transition={{ delay: 0.7 }}
+                          >
+                            AI Chat Configuration (Admin)
+                          </motion.h3>
+                          <ChatConfigCard />
+                        </div>
+                      </FadeInSection>
+
+                      {/* Message Activity Section */}
+                      <FadeInSection delay={0.7}>
+                        <div className="mt-6 border-t border-slate-700/50 pt-6">
+                          <motion.h3
+                            className="mb-4 font-mono text-sm tracking-wider text-purple-400 uppercase"
+                            initial={
+                              prefersReducedMotion ? {} : { opacity: 0, x: -10 }
+                            }
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: 0.8 }}
                           >
                             Message Activity (Admin)
                           </motion.h3>

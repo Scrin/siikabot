@@ -531,7 +531,7 @@ func describeConfig(cfg db.ChatConfig, window string) string {
 	b.WriteString("\nChange one or more: `!chat set <key> <value> [<key> <value> …]`, such as " +
 		"`!chat set context_high_tokens 32k context_low_tokens 16k`. Counts of tokens and bytes can be written " +
 		"with k and M, multiples of 1024.\n\n" +
-		"More about one: `!chat config <key>`")
+		"More about one: `!chat config <key>`. Earlier configurations: `!chat config history`")
 	return b.String()
 }
 
@@ -560,11 +560,120 @@ func lastChange(s setting, history []db.ChatConfig) db.ChatConfig {
 // describeChanges renders what a !chat set did: each setting it changed, from what to what, and the
 // configuration the changes made
 func describeChanges(before, after db.ChatConfig) string {
+	return fmt.Sprintf("Changed (#%d): %s", after.ID, changeList(before, after))
+}
+
+// changeList lists each setting that differs between two configurations, from what to what, or says
+// that none does
+func changeList(before, after db.ChatConfig) string {
 	var changes []string
 	for _, s := range changedSettings(before, after) {
 		changes = append(changes, fmt.Sprintf("`%s` %s → %s", s.key, s.show(before), s.value(after)))
 	}
-	return fmt.Sprintf("Changed (#%d): %s", after.ID, strings.Join(changes, ", "))
+	if len(changes) == 0 {
+		return "no change"
+	}
+	return strings.Join(changes, ", ")
+}
+
+// How many configurations !chat config history lists: unless told otherwise, and at most, so that
+// its answer stays a message
+const (
+	defaultHistoryLength = 10
+	maxHistoryLength     = 100
+)
+
+// historyUsage is how !chat config history is used
+var historyUsage = fmt.Sprintf("`!chat config history [n]` lists the latest n configurations, %d if not given, and at most %d",
+	defaultHistoryLength, maxHistoryLength)
+
+// describeHistory renders the latest count configurations for !chat config history, newest first,
+// each with what it changed from the one before it. history is every configuration on record, newest
+// first.
+func describeHistory(history []db.ChatConfig, count int) string {
+	var b strings.Builder
+	b.WriteString("**Chat configuration history**, newest first\n")
+	for i, cfg := range history[:min(count, len(history))] {
+		changes := "the first configuration"
+		if i+1 < len(history) {
+			changes = changeList(history[i+1], cfg)
+		}
+		fmt.Fprintf(&b, "- #%d, %s: %s\n", cfg.ID, localTime(cfg.CreatedAt), changes)
+	}
+	if earlier := len(history) - count; earlier > 0 {
+		fmt.Fprintf(&b, "\n%d earlier %s, which `!chat config history %d` lists.", earlier,
+			plural(earlier, "configuration", "configurations"), min(len(history), maxHistoryLength))
+	}
+	b.WriteString("\n\nGo back to one: `!chat config revert <id>`")
+	return b.String()
+}
+
+// revertUsage is how !chat config revert is used
+const revertUsage = "`!chat config revert <id>` goes back to an earlier configuration, by its id in `!chat config history`"
+
+// applyRevert makes a configuration what target was, under today's rules: each of target's values
+// has to be one its setting takes now, and the whole has to pass checkConfig, so a bound tightened
+// since target was made refuses it
+func applyRevert(cfg *db.ChatConfig, target db.ChatConfig) error {
+	for _, s := range settings {
+		if err := s.set(cfg, s.show(target)); err != nil {
+			return settingErrorf("Can't go back to #%d: %s", target.ID, err)
+		}
+	}
+	if err := checkConfig(*cfg); err != nil {
+		return settingErrorf("Can't go back to #%d: %s", target.ID, err)
+	}
+	return nil
+}
+
+// SettingInfo is a chat setting as it stands in a configuration, for showing outside the room, such
+// as on the dashboard
+type SettingInfo struct {
+	Key   string
+	Group string
+	// Value is without its unit, which Unit gives
+	Value   string
+	Unit    string
+	Summary string
+	// Command changes the setting, with an example value
+	Command string
+}
+
+// Settings describes every chat setting as it stands in a configuration, in the order !chat config
+// lists them
+func Settings(cfg db.ChatConfig) []SettingInfo {
+	infos := make([]SettingInfo, 0, len(settings))
+	for _, s := range settings {
+		infos = append(infos, SettingInfo{
+			Key:     s.key,
+			Group:   s.group,
+			Value:   s.show(cfg),
+			Unit:    s.unit,
+			Summary: s.summary,
+			Command: "!chat set " + s.key + " " + s.example,
+		})
+	}
+	return infos
+}
+
+// SettingChange is a setting whose value differs between two configurations, from what to what. The
+// values are without their unit, which Unit gives.
+type SettingChange struct {
+	Key  string
+	From string
+	To   string
+	Unit string
+}
+
+// Changes returns the settings whose values differ between two configurations, in the order !chat
+// config lists them
+func Changes(before, after db.ChatConfig) []SettingChange {
+	changed := changedSettings(before, after)
+	changes := make([]SettingChange, 0, len(changed))
+	for _, s := range changed {
+		changes = append(changes, SettingChange{Key: s.key, From: s.show(before), To: s.show(after), Unit: s.unit})
+	}
+	return changes
 }
 
 // withSettings adds every setting of a configuration to a log event, each as a field named by its key
@@ -575,18 +684,21 @@ func withSettings(event *zerolog.Event, cfg db.ChatConfig) *zerolog.Event {
 	return event
 }
 
-// withChanges adds the changes of a !chat set command to a log event, each as a field named by the
-// key of its setting
+// withChanges adds the changes a !chat set command asked for to a log event, as key=value pairs in a
+// field of their own, apart from the fields withSettings names after the settings
 func withChanges(event *zerolog.Event, changes []settingChange) *zerolog.Event {
+	requested := make([]string, 0, len(changes))
 	for _, change := range changes {
-		event = event.Str(change.setting.key, change.value)
+		requested = append(requested, change.setting.key+"="+change.value)
 	}
-	return event
+	return event.Strs("requested_changes", requested)
 }
 
 // chatHelp lists the !chat subcommands
 const chatHelp = "**Chat commands**\n" +
 	"- `!chat config`: the chat settings, and how to change them\n" +
 	"- `!chat config <key>`: one setting in full\n" +
+	"- `!chat config history [n]`: the latest configurations, and what each changed\n" +
 	"- `!chat set <key> <value> [<key> <value> …]`: change settings, for the admin only\n" +
+	"- `!chat config revert <id>`: go back to an earlier configuration, for the admin only\n" +
 	"- `!chat reset`: forget the conversation so far, in this room or in this thread"

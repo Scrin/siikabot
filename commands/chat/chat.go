@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/Scrin/siikabot/matrix"
 	"github.com/Scrin/siikabot/metrics"
 	"github.com/Scrin/siikabot/sourcecode"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -160,11 +162,6 @@ func showSetting(ctx context.Context, roomID, key string, reply func(string)) {
 	}
 
 	history, err := db.GetChatConfigHistory(ctx)
-	if err == nil && len(history) == 0 {
-		// The migration that creates the table seeds its first row and nothing deletes rows, so
-		// reaching this takes a manual edit
-		err = errors.New("chat_config has no rows")
-	}
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("key", s.key).Msg("Failed to load chat config history")
 		reply("Failed to load the chat configuration")
@@ -173,9 +170,30 @@ func showSetting(ctx context.Context, roomID, key string, reply func(string)) {
 	reply(describeSetting(s, history))
 }
 
+// showHistory answers !chat config history [n]: the latest n configurations, each with what it
+// changed, given as the words that follow "history"
+func showHistory(ctx context.Context, roomID string, words []string, reply func(string)) {
+	count := defaultHistoryLength
+	if len(words) > 0 {
+		n, err := strconv.Atoi(words[0])
+		if err != nil || n < 1 || n > maxHistoryLength || len(words) > 1 {
+			reply(historyUsage)
+			return
+		}
+		count = n
+	}
+
+	history, err := db.GetChatConfigHistory(ctx)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Msg("Failed to load chat config history")
+		reply("Failed to load the chat configuration")
+		return
+	}
+	reply(describeHistory(history, count))
+}
+
 // setConfig answers !chat set: the settings given as key and value pairs in words are changed
-// together, as one new configuration, so the previous configuration stays on record. The changes are
-// applied and checked under the table's lock, on the configuration as it then is.
+// together, as one new configuration
 func setConfig(ctx context.Context, roomID string, words []string, reply func(string)) {
 	changes, err := parseChanges(words)
 	if err != nil {
@@ -183,27 +201,84 @@ func setConfig(ctx context.Context, roomID string, words []string, reply func(st
 		return
 	}
 
+	updateConfig(ctx, roomID, reply,
+		func(cfg *db.ChatConfig) error {
+			before := *cfg
+			if err := applyChanges(cfg, changes); err != nil {
+				return err
+			}
+			if len(changedSettings(before, *cfg)) == 0 {
+				return unchanged(before, changes)
+			}
+			return nil
+		},
+		func(event *zerolog.Event) *zerolog.Event { return withChanges(event, changes) },
+		describeChanges)
+}
+
+// revertConfig answers !chat config revert <id>, with the id as the words that follow "revert": the
+// configuration with the id becomes the one in effect again, as a new configuration that copies it,
+// so the one it replaces stays on record as well
+func revertConfig(ctx context.Context, roomID string, words []string, reply func(string)) {
+	if len(words) != 1 {
+		reply(revertUsage)
+		return
+	}
+	id, err := strconv.ParseInt(strings.TrimPrefix(words[0], "#"), 10, 64)
+	if err != nil {
+		reply(revertUsage)
+		return
+	}
+
+	target, found, err := db.GetChatConfigByID(ctx, id)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Int64("config_id", id).Msg("Failed to load chat config")
+		reply("Failed to load the chat configuration")
+		return
+	}
+	if !found {
+		reply(fmt.Sprintf("There's no configuration #%d. `!chat config history` lists them.", id))
+		return
+	}
+
+	updateConfig(ctx, roomID, reply,
+		func(cfg *db.ChatConfig) error {
+			before := *cfg
+			if err := applyRevert(cfg, target); err != nil {
+				return err
+			}
+			if len(changedSettings(before, *cfg)) == 0 {
+				return settingErrorf("No change: the configuration in effect is already as #%d has it", target.ID)
+			}
+			return nil
+		},
+		func(event *zerolog.Event) *zerolog.Event { return event.Int64("reverted_to_config_id", target.ID) },
+		func(before, after db.ChatConfig) string {
+			return fmt.Sprintf("Back to #%d, as #%d: %s", target.ID, after.ID, changeList(before, after))
+		})
+}
+
+// updateConfig applies a change to the chat configuration as one new row, which keeps the previous
+// configuration on record, and tells the room how it went. The change is applied and checked under
+// the table's lock, on the configuration as it then is, and refuses with a settingError, which the
+// room is told. asked adds what the command asked for to the log, and done says what the change did.
+func updateConfig(ctx context.Context, roomID string, reply func(string), change func(*db.ChatConfig) error,
+	asked func(*zerolog.Event) *zerolog.Event, done func(before, after db.ChatConfig) string) {
 	var before db.ChatConfig
 	after, err := db.UpdateChatConfig(ctx, func(cfg *db.ChatConfig) error {
 		before = *cfg
-		if err := applyChanges(cfg, changes); err != nil {
-			return err
-		}
-		if len(changedSettings(before, *cfg)) == 0 {
-			return unchanged(before, changes)
-		}
-		return nil
+		return change(cfg)
 	})
 
 	var refused settingError
 	if errors.As(err, &refused) {
-		withChanges(log.Debug().Ctx(ctx).Str("room_id", roomID).Str("reason", refused.Error()), changes).
+		asked(log.Debug().Ctx(ctx).Str("room_id", roomID).Str("reason", refused.Error())).
 			Msg("Chat config change refused")
 		reply(refused.Error())
 		return
 	}
 	if err != nil {
-		withChanges(log.Error().Ctx(ctx).Err(err).Str("room_id", roomID), changes).Msg("Failed to change chat config")
+		asked(log.Error().Ctx(ctx).Err(err).Str("room_id", roomID)).Msg("Failed to change chat config")
 		reply("Failed to change the chat configuration")
 		return
 	}
@@ -214,9 +289,9 @@ func setConfig(ctx context.Context, roomID string, words []string, reply func(st
 		keys = append(keys, s.key)
 		metrics.RecordChatConfigChange(s.key)
 	}
-	withSettings(log.Info().Ctx(ctx).Str("room_id", roomID).Int64("config_id", after.ID).Strs("changed_keys", keys), after).
+	withSettings(asked(log.Info().Ctx(ctx).Str("room_id", roomID).Int64("config_id", after.ID).Strs("changed_keys", keys)), after).
 		Msg("Chat config changed")
-	reply(describeChanges(before, after))
+	reply(done(before, after))
 }
 
 // Handle handles the !chat command. The command acts on the timeline it was sent in, the main
@@ -256,11 +331,20 @@ func Handle(ctx context.Context, roomID, sender, eventID, threadRootID, msg stri
 		}
 		matrix.SendMessageTo(ctx, roomID, here, fmt.Sprintf("%s reset (%d messages deleted)", what, count), nil)
 	case "config":
-		if len(words) > 2 {
+		switch {
+		case len(words) > 2 && words[2] == "history":
+			showHistory(ctx, roomID, words[3:], reply)
+		case len(words) > 2 && words[2] == "revert":
+			if sender != config.Admin {
+				reply("Only the admin can change the chat configuration")
+				return
+			}
+			revertConfig(ctx, roomID, words[3:], reply)
+		case len(words) > 2:
 			showSetting(ctx, roomID, words[2], reply)
-			return
+		default:
+			showConfig(ctx, sender, timeline, reply)
 		}
-		showConfig(ctx, sender, timeline, reply)
 	case "set":
 		switch {
 		case len(words) == 3:

@@ -13,6 +13,7 @@ import {
   deleteMemory,
   deleteAllMemories,
   fetchChatUsage,
+  fetchChatConfig,
   fetchRoomStats,
   fetchAdminRoomStats,
   fetchMessageActivity,
@@ -32,6 +33,7 @@ export const queryKeys = {
   adminRoomMembers: (roomId: string) => ['adminRoomMembers', roomId] as const,
   memories: ['memories'] as const,
   chatUsage: (days: number) => ['chatUsage', days] as const,
+  chatConfig: ['chatConfig'] as const,
   roomStats: (roomId: string, days: number) => ['roomStats', roomId, days] as const,
   adminRoomStats: (roomId: string, days: number) => ['adminRoomStats', roomId, days] as const,
   messageActivity: (days: number) => ['messageActivity', days] as const,
@@ -188,6 +190,20 @@ export function useChatUsage(days: number) {
   return useQuery({
     queryKey: queryKeys.chatUsage(days),
     queryFn: () => fetchChatUsage(token!, days),
+    enabled: isAuthenticated && !!token && authorizations?.admin === true,
+    refetchInterval: 60000,
+  })
+}
+
+/**
+ * The chat configuration in effect and the latest changes to it (admin only)
+ */
+export function useChatConfig() {
+  const { token, isAuthenticated, authorizations } = useAuth()
+
+  return useQuery({
+    queryKey: queryKeys.chatConfig,
+    queryFn: () => fetchChatConfig(token!),
     enabled: isAuthenticated && !!token && authorizations?.admin === true,
     refetchInterval: 60000,
   })

@@ -118,6 +118,8 @@ export interface ChatUsageEntry {
   failures: number
   /** Turns that ended without an answer because the message was a reply that needed none */
   silent: number
+  /** How the failed turns failed: their count by outcome, such as turn_timeout or tool_limit */
+  failures_by_outcome: Record<string, number>
 }
 
 export interface ChatUsageResponse {
@@ -125,6 +127,46 @@ export interface ChatUsageResponse {
   days: number
   entries: ChatUsageEntry[]
   totals: ChatUsageEntry
+}
+
+// Chat configuration types
+
+/** One chat setting as it stands in the configuration in effect */
+export interface ChatSetting {
+  key: string
+  /** The heading the setting is listed under, as in !chat config */
+  group: string
+  /** The value without its unit */
+  value: string
+  unit: string
+  summary: string
+  /** The command that changes the setting in a room, with an example value */
+  command: string
+}
+
+/** A change of one setting from one configuration to the next, the values without their unit */
+export interface ChatSettingChange {
+  key: string
+  from: string
+  to: string
+  unit: string
+}
+
+/** A configuration on record, with what it changed from the one before it */
+export interface ChatConfigVersion {
+  id: number
+  created_at: string
+  changes: ChatSettingChange[]
+  /** The first configuration, which had nothing to change */
+  first: boolean
+}
+
+export interface ChatConfigResponse {
+  id: number
+  created_at: string
+  settings: ChatSetting[]
+  /** The latest configurations, newest first, the one in effect included */
+  history: ChatConfigVersion[]
 }
 
 // Message stats types

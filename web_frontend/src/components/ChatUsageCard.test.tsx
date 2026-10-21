@@ -26,6 +26,7 @@ function entry(overrides: Partial<ChatUsageEntry> = {}): ChatUsageEntry {
     tool_iterations: 20,
     failures: 0,
     silent: 0,
+    failures_by_outcome: {},
     ...overrides,
   }
 }
@@ -135,6 +136,44 @@ describe('ChatUsageCard', () => {
       expect(screen.getByText('3 failed')).toBeInTheDocument()
     })
 
+    // How the turns failed says which limit they ran into, and the setting to look at for it
+    it('should say how the turns failed, with the setting that governs each limit', () => {
+      mockUsage({
+        isLoading: false,
+        data: response({
+          entries: [
+            entry({ failures: 3, failures_by_outcome: { tool_limit: 1, turn_timeout: 2 } }),
+          ],
+        }),
+        error: null,
+      })
+
+      render(<ChatUsageCard />)
+      expect(
+        screen.getByText(
+          '3 failed: 2 timed out (turn_timeout), 1 out of tool rounds (max_tool_iterations)'
+        )
+      ).toBeInTheDocument()
+    })
+
+    it('should count outcomes described alike together, and show unknown ones by name', () => {
+      mockUsage({
+        isLoading: false,
+        data: response({
+          entries: [
+            entry({
+              failures: 4,
+              failures_by_outcome: { empty_response: 1, no_choices: 2, something_new: 1 },
+            }),
+          ],
+        }),
+        error: null,
+      })
+
+      render(<ChatUsageCard />)
+      expect(screen.getByText('4 failed: 3 no answer, 1 something_new')).toBeInTheDocument()
+    })
+
     // A turn the bot stayed silent on went as it should, so it isn't shown as a failure
     it('should show silent turns apart from failures', () => {
       mockUsage({
@@ -192,6 +231,19 @@ describe('ChatUsageCard', () => {
       expect(screen.getByText('40')).toBeInTheDocument()
       expect(screen.getByText('100k')).toBeInTheDocument()
       expect(screen.getByText('2 failed turns')).toBeInTheDocument()
+    })
+
+    it('should say how the failed turns of the whole period failed', () => {
+      mockUsage({
+        isLoading: false,
+        data: response({
+          totals: entry({ model: 'all', failures: 2, failures_by_outcome: { turn_timeout: 2 } }),
+        }),
+        error: null,
+      })
+
+      render(<ChatUsageCard />)
+      expect(screen.getByText('2 failed turns: 2 timed out (turn_timeout)')).toBeInTheDocument()
     })
 
     it('should use the singular for a single failure', () => {

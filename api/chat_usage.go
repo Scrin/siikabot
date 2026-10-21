@@ -31,6 +31,9 @@ type ChatUsageEntry struct {
 	Failures           int     `json:"failures"`
 	// Silent are the turns that ended without an answer because the message needed none
 	Silent int `json:"silent"`
+	// FailuresByOutcome breaks the failures down by how the turns failed, such as turn_timeout or
+	// tool_limit, which says which of the chat settings a turn ran into
+	FailuresByOutcome map[string]int `json:"failures_by_outcome"`
 }
 
 // ChatUsageResponse is the chat usage report
@@ -67,8 +70,14 @@ func ChatUsageHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "Failed to fetch chat usage"})
 		return
 	}
+	failures, err := db.GetChatUsageFailures(ctx, since)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Int("days", days).Msg("Failed to fetch chat usage failures")
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "Failed to fetch chat usage"})
+		return
+	}
 
-	entries, totals := usageEntries(summaries, func(roomID string) string {
+	entries, totals := usageEntries(summaries, failures, func(roomID string) string {
 		return matrix.GetRoomName(ctx, roomID)
 	})
 
@@ -80,12 +89,30 @@ func ChatUsageHandler(c *gin.Context) {
 	})
 }
 
-// usageEntries turns the usage summaries into the report's entries, one per room and model, and
-// adds them up into its totals
-func usageEntries(summaries []db.ChatUsageSummary, roomName func(roomID string) string) ([]ChatUsageEntry, ChatUsageEntry) {
+// usageEntries turns the usage summaries into the report's entries, one per room and model, with how
+// their turns failed, and adds them up into its totals
+func usageEntries(summaries []db.ChatUsageSummary, failures []db.ChatUsageFailures, roomName func(roomID string) string) ([]ChatUsageEntry, ChatUsageEntry) {
+	type roomModel struct{ roomID, model string }
+	outcomes := make(map[roomModel]map[string]int)
+	for _, failure := range failures {
+		key := roomModel{failure.RoomID, failure.Model}
+		if outcomes[key] == nil {
+			outcomes[key] = make(map[string]int)
+		}
+		outcomes[key][failure.Outcome] += failure.Turns
+	}
+
 	entries := make([]ChatUsageEntry, 0, len(summaries))
-	totals := ChatUsageEntry{Model: "all"}
+	totals := ChatUsageEntry{Model: "all", FailuresByOutcome: make(map[string]int)}
 	for _, summary := range summaries {
+		byOutcome := outcomes[roomModel{summary.RoomID, summary.Model}]
+		if byOutcome == nil {
+			byOutcome = make(map[string]int)
+		}
+		for outcome, turns := range byOutcome {
+			totals.FailuresByOutcome[outcome] += turns
+		}
+
 		entries = append(entries, ChatUsageEntry{
 			RoomID:             summary.RoomID,
 			RoomName:           roomName(summary.RoomID),
@@ -98,6 +125,7 @@ func usageEntries(summaries []db.ChatUsageSummary, roomName func(roomID string) 
 			ToolIterations:     summary.ToolIterations,
 			Failures:           summary.Failures,
 			Silent:             summary.Silent,
+			FailuresByOutcome:  byOutcome,
 		})
 
 		totals.Turns += summary.Turns
