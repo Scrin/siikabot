@@ -102,6 +102,11 @@ func TestStripFormatting(t *testing.T) {
 			expected: "\"quoted\"",
 		},
 		{
+			name:     "escaped text that looks like a tag is kept",
+			input:    "<code>!chat set &lt;key&gt; &lt;value&gt;</code>",
+			expected: "!chat set <key> <value>",
+		},
+		{
 			name:     "bold tag stripped",
 			input:    "<b>bold</b>",
 			expected: "bold",

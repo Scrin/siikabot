@@ -503,7 +503,9 @@ All configuration is via environment variables (no config files). See `config/co
 
 `SIIKABOT_SOURCE_URL` and `SIIKABOT_FRONTEND_URL` are where the bot's source code repository and web dashboard are. The chat model gives them out as links, and reads the bot's own source code from the repository.
 
-The exception is the chat parameters (the model, which has to take images as well as text, the context window budget, response and tool limits, web content size). They are global and live in the append-only `chat_config` table, where the latest row is the configuration in effect and older rows are its history. The admin changes them with the `!chat` subcommands, and each change appends a new row. Migration `0019__global-chat-config.sql` seeds the first row.
+The exception is the chat settings (the model, which has to take images as well as text, the context window budget, response and tool limits, and how much of a web page one tool call returns). They are global and live in the append-only `chat_config` table, where the latest row is the configuration in effect and older rows are its history. `!chat config` lists them, and the admin changes them with `!chat set <key> <value>`, each change appending a new row. Migration `0019__global-chat-config.sql` seeds the first row.
+
+Each column of `chat_config` is a setting, declared in `commands/chat/settings.go` under the column's name, which is also its key in the commands and the logs. The declaration says what the setting means, the values it takes and how it's shown, and the listing, the help and the checks all come from it. A new column needs its declaration there, which a test checks. The turn hands its configuration to the tools in the context, so a tool never reads one of its own.
 
 ### Database Migrations
 

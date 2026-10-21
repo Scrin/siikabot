@@ -3,6 +3,7 @@ package llmtools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -61,13 +62,13 @@ func handleWebToolCall(ctx context.Context, arguments string) (string, error) {
 		return "", fmt.Errorf("URL is required")
 	}
 
-	// The size of a part is in the chat configuration, which has no fallback values to use instead
-	chatConfig, err := db.GetChatConfig(ctx)
-	if err != nil {
-		// Already logged
-		return "", fmt.Errorf("failed to load chat configuration: %w", err)
+	// The size of a part is in the configuration the turn runs on, which it hands its tools, so that a
+	// change made while the turn runs doesn't reach it half way through
+	chatConfig, ok := ctx.Value("chat_config").(db.ChatConfig)
+	if !ok {
+		return "", errors.New("chat configuration not found in context")
 	}
 
 	result := webfetch.Fetch(ctx, args.URL)
-	return webfetch.Render(result, args.Offset, chatConfig.MaxWebContentSize), nil
+	return webfetch.Render(result, args.Offset, chatConfig.WebPartBytes), nil
 }

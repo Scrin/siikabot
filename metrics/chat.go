@@ -114,11 +114,29 @@ var chatRequestDuration = makeCollector(prometheus.NewHistogramVec(prometheus.Hi
 	Buckets: []float64{0.5, 1, 2, 5, 10, 30, 60, 120},
 }, []string{"model"}))
 
+// The buckets reach 30, the most rounds of tool calls the max_tool_iterations setting allows
 var chatToolIterations = makeCollector(prometheus.NewHistogram(prometheus.HistogramOpts{
 	Name:    metricPrefix + "chat_tool_iterations",
 	Help:    "Number of tool iterations per chat request",
-	Buckets: []float64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+	Buckets: []float64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30},
 }))
+
+// Counts the changes of each chat setting, so that a change in cost or latency can be lined up with
+// the change of configuration behind it
+var chatConfigChanges = makeCollector(prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: metricPrefix + "chat_config_changes_count",
+	Help: "Number of times each chat setting was changed",
+}, []string{"key"}))
+
+// InitializeChatConfigKey initializes the change count of a chat setting to zero
+func InitializeChatConfigKey(key string) {
+	chatConfigChanges.WithLabelValues(key)
+}
+
+// RecordChatConfigChange records a change of a chat setting
+func RecordChatConfigChange(key string) {
+	chatConfigChanges.WithLabelValues(key).Inc()
+}
 
 var chatImagesProcessed = makeCollector(prometheus.NewCounter(prometheus.CounterOpts{
 	Name: metricPrefix + "chat_images_processed_count",

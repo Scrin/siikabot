@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/llmtools"
 	"github.com/Scrin/siikabot/matrix"
+	"github.com/Scrin/siikabot/metrics"
 	"github.com/Scrin/siikabot/sourcecode"
 	"github.com/rs/zerolog/log"
 )
@@ -63,6 +65,10 @@ func Init(ctx context.Context) {
 	toolRegistry.RegisterTool(llmtools.RoomMembersToolDefinition)
 	toolRegistry.RegisterTool(llmtools.MessageStatsToolDefinition)
 	toolRegistry.RegisterTool(llmtools.SourceCodeToolDefinition)
+
+	for _, s := range settings {
+		metrics.InitializeChatConfigKey(s.key)
+	}
 
 	// The source code can be looked up only in a repository on GitHub. Elsewhere the model still links to
 	// the repository, but the tool tells it that it can't read anything there.
@@ -116,71 +122,122 @@ func cleanupChatUsage(ctx context.Context) {
 	}
 }
 
-// describeContextWindow renders the context window settings and the size of the window of the
-// timeline the command was sent in as it currently stands, since a token budget on its own is hard
-// to picture.
+// describeWindowNow says how full the context window of a timeline is as it currently stands, since
+// a token budget on its own is hard to picture.
 //
 // Deliberately reads the window without maintaining it: showing the configuration should not move
 // the anchor as a side effect.
-func describeContextWindow(ctx context.Context, timeline db.Timeline, sender string, cfg db.ChatConfig) string {
+func describeWindowNow(ctx context.Context, timeline db.Timeline, sender string, cfg db.ChatConfig) string {
 	window := currentContextWindow(ctx, timeline, threadSeed(ctx, timeline, sender), cfg.ContextHighTokens)
 	images, _ := historyImages(window)
-	return fmt.Sprintf("%d / %d tokens (currently ~%d tokens over %d %s, %d %s)",
-		cfg.ContextHighTokens, cfg.ContextLowTokens, estimateHistoryTokens(window, time.Now()),
+	where := "This room"
+	if timeline.ThreadRootID != "" {
+		where = "This thread"
+	}
+	return fmt.Sprintf("%s now: ~%d tokens in %d %s and %d %s", where, estimateHistoryTokens(window, time.Now()),
 		len(window), plural(len(window), "message", "messages"), images, plural(images, "image", "images"))
 }
 
-// modelArgument reads the model name from the words of a !chat model command. A model name has no
-// spaces, so anything but exactly one more word is a mistake: in particular the old form, which named
-// the kind of model first and would otherwise set the model to "text".
-func modelArgument(split []string) (string, bool) {
-	if len(split) < 3 {
-		return "", false
-	}
-	words := strings.Fields(strings.Join(split[2:], " "))
-	if len(words) != 1 {
-		return "", false
-	}
-	return words[0], true
-}
-
-// updateConfig applies a change to the chat configuration and reports the outcome to the room.
-// Every change is recorded as a new configuration row, so the previous configuration stays on record.
-func updateConfig(ctx context.Context, roomID string, change func(*db.ChatConfig), changedMsg, failedMsg string) {
-	cfg, err := db.UpdateChatConfig(ctx, change)
+// showConfig answers !chat config: the configuration in effect, and how full the context window of
+// the timeline the command was sent in is
+func showConfig(ctx context.Context, sender string, timeline db.Timeline, reply func(string)) {
+	cfg, err := db.GetChatConfig(ctx)
 	if err != nil {
-		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Msg("Failed to update chat config")
-		matrix.SendMessage(ctx, roomID, failedMsg)
+		log.Error().Ctx(ctx).Err(err).Str("room_id", timeline.RoomID).Msg("Failed to load chat config")
+		reply("Failed to load the chat configuration")
 		return
 	}
-	log.Info().Ctx(ctx).
-		Str("room_id", roomID).
-		Int64("config_id", cfg.ID).
-		Str("llm_model", cfg.LLMModel).
-		Int("context_high_tokens", cfg.ContextHighTokens).
-		Int("context_low_tokens", cfg.ContextLowTokens).
-		Int("max_tokens", cfg.MaxTokens).
-		Str("image_detail", cfg.ImageDetail).
-		Int("max_tool_iterations", cfg.MaxToolIterations).
-		Int("max_web_content_size", cfg.MaxWebContentSize).
+	reply(describeConfig(cfg, describeWindowNow(ctx, timeline, sender, cfg)))
+}
+
+// showSetting answers !chat config <key>: the setting the key names, in full, with since when it has
+// had its value
+func showSetting(ctx context.Context, roomID, key string, reply func(string)) {
+	s, ok := settingByKey(key)
+	if !ok {
+		reply(unknownSetting(key).Error())
+		return
+	}
+
+	history, err := db.GetChatConfigHistory(ctx)
+	if err == nil && len(history) == 0 {
+		// The migration that creates the table seeds its first row and nothing deletes rows, so
+		// reaching this takes a manual edit
+		err = errors.New("chat_config has no rows")
+	}
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("key", s.key).Msg("Failed to load chat config history")
+		reply("Failed to load the chat configuration")
+		return
+	}
+	reply(describeSetting(s, history))
+}
+
+// setConfig answers !chat set: the settings given as key and value pairs in words are changed
+// together, as one new configuration, so the previous configuration stays on record. The changes are
+// applied and checked under the table's lock, on the configuration as it then is.
+func setConfig(ctx context.Context, roomID string, words []string, reply func(string)) {
+	changes, err := parseChanges(words)
+	if err != nil {
+		reply(err.Error())
+		return
+	}
+
+	var before db.ChatConfig
+	after, err := db.UpdateChatConfig(ctx, func(cfg *db.ChatConfig) error {
+		before = *cfg
+		if err := applyChanges(cfg, changes); err != nil {
+			return err
+		}
+		if len(changedSettings(before, *cfg)) == 0 {
+			return unchanged(before, changes)
+		}
+		return nil
+	})
+
+	var refused settingError
+	if errors.As(err, &refused) {
+		withChanges(log.Debug().Ctx(ctx).Str("room_id", roomID).Str("reason", refused.Error()), changes).
+			Msg("Chat config change refused")
+		reply(refused.Error())
+		return
+	}
+	if err != nil {
+		withChanges(log.Error().Ctx(ctx).Err(err).Str("room_id", roomID), changes).Msg("Failed to change chat config")
+		reply("Failed to change the chat configuration")
+		return
+	}
+
+	changed := changedSettings(before, after)
+	keys := make([]string, 0, len(changed))
+	for _, s := range changed {
+		keys = append(keys, s.key)
+		metrics.RecordChatConfigChange(s.key)
+	}
+	withSettings(log.Info().Ctx(ctx).Str("room_id", roomID).Int64("config_id", after.ID).Strs("changed_keys", keys), after).
 		Msg("Chat config changed")
-	matrix.SendMessage(ctx, roomID, changedMsg)
+	reply(describeChanges(before, after))
 }
 
 // Handle handles the !chat command. The command acts on the timeline it was sent in, the main
-// timeline or a thread, which eventID and threadRootID say.
+// timeline or a thread, which eventID and threadRootID say, and is answered there.
 func Handle(ctx context.Context, roomID, sender, eventID, threadRootID, msg string) {
-	split := strings.Split(msg, " ")
-	if len(split) < 2 {
-		return
-	}
+	words := strings.Fields(msg)
 
 	timeline := db.Timeline{RoomID: roomID, ThreadRootID: threadRootID}
-	// Where the command was sent. What is about that timeline is answered there, so that a reset
-	// in a thread, say, says so in the thread.
+	// Where the command was sent. It is answered there, so that a reset in a thread, say, says so in
+	// the thread.
 	here := matrix.Target{ThreadRootID: threadRootID, InReplyTo: eventID}
+	reply := func(text string) {
+		matrix.SendMarkdownFormattedNoticeTo(ctx, roomID, here, text, nil, nil)
+	}
 
-	switch strings.TrimSpace(split[1]) {
+	var subcommand string
+	if len(words) > 1 {
+		subcommand = words[1]
+	}
+
+	switch subcommand {
 	case "reset":
 		count, err := db.ResetChatTimeline(ctx, timeline)
 		if err != nil {
@@ -199,147 +256,22 @@ func Handle(ctx context.Context, roomID, sender, eventID, threadRootID, msg stri
 		}
 		matrix.SendMessageTo(ctx, roomID, here, fmt.Sprintf("%s reset (%d messages deleted)", what, count), nil)
 	case "config":
-		// Show the current configuration
-		cfg, err := db.GetChatConfig(ctx)
-		if err != nil {
-			log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Msg("Failed to load chat config")
-			matrix.SendMessage(ctx, roomID, "Failed to load chat configuration")
+		if len(words) > 2 {
+			showSetting(ctx, roomID, words[2], reply)
 			return
 		}
-
-		matrix.SendMessageTo(ctx, roomID, here, fmt.Sprintf("Current chat configuration:\n"+
-			"Model: %s\n"+
-			"Context window: %s\n"+
-			"Max response tokens: %d\n"+
-			"Image detail: %s\n"+
-			"Max tool iterations: %d\n"+
-			"Max web content size: %d bytes",
-			cfg.LLMModel, describeContextWindow(ctx, timeline, sender, cfg), cfg.MaxTokens,
-			cfg.ImageDetail, cfg.MaxToolIterations, cfg.MaxWebContentSize), nil)
-	case "model":
-		newModel, ok := modelArgument(split)
-		if !ok {
-			matrix.SendMessage(ctx, roomID, "Usage: !chat model <model_name> (the model has to take images as well as text)")
-			return
+		showConfig(ctx, sender, timeline, reply)
+	case "set":
+		switch {
+		case len(words) == 3:
+			// A key without a value asks what the setting is, as !chat config <key> does
+			showSetting(ctx, roomID, words[2], reply)
+		case sender != config.Admin:
+			reply("Only the admin can change the chat configuration")
+		default:
+			setConfig(ctx, roomID, words[2:], reply)
 		}
-
-		if sender != config.Admin {
-			matrix.SendMessage(ctx, roomID, "Only admins can change the chat model")
-			return
-		}
-
-		updateConfig(ctx, roomID, func(cfg *db.ChatConfig) { cfg.LLMModel = newModel },
-			fmt.Sprintf("Chat model changed to: %s", newModel), "Failed to set chat model")
-	case "context":
-		if len(split) < 4 {
-			matrix.SendMessage(ctx, roomID, "Usage: !chat context <high_tokens> <low_tokens>")
-			return
-		}
-
-		if sender != config.Admin {
-			matrix.SendMessage(ctx, roomID, "Only admins can change the context window")
-			return
-		}
-
-		var highTokens, lowTokens int
-		if _, err := fmt.Sscanf(split[2], "%d", &highTokens); err != nil || highTokens <= 0 {
-			matrix.SendMessage(ctx, roomID, "High mark must be a positive integer")
-			return
-		}
-		if _, err := fmt.Sscanf(split[3], "%d", &lowTokens); err != nil || lowTokens <= 0 {
-			matrix.SendMessage(ctx, roomID, "Low mark must be a positive integer")
-			return
-		}
-		// The window grows to the high mark then drops back to the low mark, so the marks have to
-		// straddle a usable range or the window would be trimmed on every single turn
-		if lowTokens >= highTokens {
-			matrix.SendMessage(ctx, roomID, "Low mark must be below the high mark")
-			return
-		}
-
-		updateConfig(ctx, roomID, func(cfg *db.ChatConfig) {
-			cfg.ContextHighTokens = highTokens
-			cfg.ContextLowTokens = lowTokens
-		}, fmt.Sprintf("Context window changed to: %d / %d tokens", highTokens, lowTokens), "Failed to set context window")
-	case "maxtokens":
-		if len(split) < 3 {
-			matrix.SendMessage(ctx, roomID, "Usage: !chat maxtokens <tokens>")
-			return
-		}
-
-		if sender != config.Admin {
-			matrix.SendMessage(ctx, roomID, "Only admins can change the max response tokens")
-			return
-		}
-
-		var maxTokens int
-		if _, err := fmt.Sscanf(split[2], "%d", &maxTokens); err != nil || maxTokens <= 0 {
-			matrix.SendMessage(ctx, roomID, "Max response tokens must be a positive integer")
-			return
-		}
-
-		updateConfig(ctx, roomID, func(cfg *db.ChatConfig) { cfg.MaxTokens = maxTokens },
-			fmt.Sprintf("Max response tokens changed to: %d", maxTokens), "Failed to set max response tokens")
-	case "imagedetail":
-		if len(split) < 3 {
-			matrix.SendMessage(ctx, roomID, "Usage: !chat imagedetail [low|high|auto]")
-			return
-		}
-
-		if sender != config.Admin {
-			matrix.SendMessage(ctx, roomID, "Only admins can change the image detail")
-			return
-		}
-
-		detail := strings.TrimSpace(split[2])
-		if detail != "low" && detail != "high" && detail != imageDetailAuto {
-			matrix.SendMessage(ctx, roomID, "Usage: !chat imagedetail [low|high|auto]")
-			return
-		}
-
-		updateConfig(ctx, roomID, func(cfg *db.ChatConfig) { cfg.ImageDetail = detail },
-			fmt.Sprintf("Image detail changed to: %s", detail), "Failed to set image detail")
-	case "tools":
-		if len(split) < 3 {
-			matrix.SendMessage(ctx, roomID, "Usage: !chat tools <max_iterations>")
-			return
-		}
-
-		if sender != config.Admin {
-			matrix.SendMessage(ctx, roomID, "Only admins can change the max tool iterations")
-			return
-		}
-
-		var maxIterations int
-		_, err := fmt.Sscanf(split[2], "%d", &maxIterations)
-		if err != nil || maxIterations <= 0 {
-			matrix.SendMessage(ctx, roomID, "Max iterations must be a positive integer")
-			return
-		}
-
-		updateConfig(ctx, roomID, func(cfg *db.ChatConfig) { cfg.MaxToolIterations = maxIterations },
-			fmt.Sprintf("Max tool iterations changed to: %d", maxIterations), "Failed to set max tool iterations")
-	case "web":
-		if len(split) < 3 {
-			matrix.SendMessage(ctx, roomID, "Usage: !chat web <max_size_bytes>")
-			return
-		}
-
-		if sender != config.Admin {
-			matrix.SendMessage(ctx, roomID, "Only admins can change the max web content size")
-			return
-		}
-
-		var maxSize int
-		_, err := fmt.Sscanf(split[2], "%d", &maxSize)
-		if err != nil || maxSize <= 0 {
-			matrix.SendMessage(ctx, roomID, "Max web content size must be a positive integer")
-			return
-		}
-
-		updateConfig(ctx, roomID, func(cfg *db.ChatConfig) { cfg.MaxWebContentSize = maxSize },
-			fmt.Sprintf("Max web content size changed to: %d bytes", maxSize), "Failed to set max web content size")
 	default:
-		matrix.SendMessage(ctx, roomID, "Unknown command")
+		reply(chatHelp)
 	}
 }

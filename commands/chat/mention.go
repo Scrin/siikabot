@@ -203,7 +203,7 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 	composition.record(ctx)
 
 	// One model answers every turn, so it has to take the images in the prompt as well as the text
-	model := cfg.LLMModel
+	model := cfg.Model
 
 	turnSpan.SetAttributes(
 		attribute.String("siikabot.chat.model", model),
@@ -213,7 +213,7 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 	)
 
 	// Cap the response length, so a runaway generation is not billed in full
-	maxTokens := cfg.MaxTokens
+	maxTokens := cfg.MaxResponseTokens
 
 	// Recorded by Cloudflare as span attributes and log fields, which is the only way its side of a
 	// turn knows which room and user it belonged to
@@ -297,7 +297,7 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 
 		// Process tool calls iteratively
 		iterationCount, messages, finalResp, failure = processToolCalls(
-			ctx, toolContext(ctx, trigger, prompt.room, target), turn, sender, model, cfg,
+			ctx, toolContext(ctx, trigger, prompt.room, target, cfg), turn, sender, model, cfg,
 			chatResp, messages, tools, stats,
 		)
 	}
@@ -460,15 +460,17 @@ func requestFailure(ctx context.Context) string {
 }
 
 // toolContext carries what tools need to act for the turn: the room, the sender they act for,
-// whether the room is a DM (which scopes memories), where anything they post goes, and the room's
-// members for the member lookup, when the room could be looked up
-func toolContext(ctx context.Context, trigger Trigger, room roomInfo, target matrix.Target) context.Context {
+// whether the room is a DM (which scopes memories), where anything they post goes, the room's
+// members for the member lookup, when the room could be looked up, and the configuration the turn
+// runs on, so that a change made while the turn runs doesn't reach its tools half way through
+func toolContext(ctx context.Context, trigger Trigger, room roomInfo, target matrix.Target, cfg db.ChatConfig) context.Context {
 	ctx = context.WithValue(ctx, "room_id", trigger.RoomID)
 	ctx = context.WithValue(ctx, "sender", trigger.Sender)
 	ctx = context.WithValue(ctx, "room_is_dm", room.isDM())
 	if room.known {
 		ctx = context.WithValue(ctx, "room_members", room.toolMembers())
 	}
+	ctx = context.WithValue(ctx, "chat_config", cfg)
 	return context.WithValue(ctx, "reply_target", target)
 }
 
@@ -834,7 +836,7 @@ func processToolCalls(
 	currentResp := chatResp
 	iterationCount := 1 // by the time we're here, we've already made one request
 
-	maxTokens := cfg.MaxTokens
+	maxTokens := cfg.MaxResponseTokens
 	maxIterations := cfg.MaxToolIterations
 	for iterationCount < maxIterations {
 		iterationCount++

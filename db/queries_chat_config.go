@@ -12,17 +12,24 @@ import (
 
 // ChatConfig is one row of the append-only chat configuration. The latest row is the configuration
 // in effect, and the older rows are the history of what was set when.
+//
+// Each column is a chat setting, and its name is the key the setting goes by everywhere else: in
+// !chat config and !chat set, and in the logs.
 type ChatConfig struct {
 	ID                int64     `db:"id"`
 	CreatedAt         time.Time `db:"created_at"`
-	LLMModel          string    `db:"llm_model"`
+	Model             string    `db:"model"`
 	ContextHighTokens int       `db:"context_high_tokens"`
 	ContextLowTokens  int       `db:"context_low_tokens"`
 	MaxToolIterations int       `db:"max_tool_iterations"`
-	MaxTokens         int       `db:"max_tokens"`
+	MaxResponseTokens int       `db:"max_response_tokens"`
 	ImageDetail       string    `db:"image_detail"`
-	MaxWebContentSize int       `db:"max_web_content_size"`
+	WebPartBytes      int       `db:"web_part_bytes"`
 }
+
+// chatConfigColumns are the columns of a ChatConfig, as every query of the table reads them
+const chatConfigColumns = `id, created_at, model, context_high_tokens, context_low_tokens,
+	max_tool_iterations, max_response_tokens, image_detail, web_part_bytes`
 
 // GetChatConfig returns the chat configuration currently in effect
 func GetChatConfig(ctx context.Context) (ChatConfig, error) {
@@ -34,14 +41,34 @@ func GetChatConfig(ctx context.Context) (ChatConfig, error) {
 	return cfg, nil
 }
 
+// GetChatConfigHistory returns every chat configuration on record, newest first: the one in effect,
+// then the ones it replaced. A row is added only when the admin changes a setting, so there are few.
+func GetChatConfigHistory(ctx context.Context) ([]ChatConfig, error) {
+	rows, err := pool.Query(ctx, `SELECT `+chatConfigColumns+` FROM chat_config ORDER BY id DESC`)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Msg("Failed to query chat config history")
+		return nil, err
+	}
+	history, err := pgx.CollectRows(rows, pgx.RowToStructByName[ChatConfig])
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Msg("Failed to collect chat config history")
+		return nil, err
+	}
+	return history, nil
+}
+
 // UpdateChatConfig applies a change to the chat configuration and returns the result. The table is
 // append-only, so the change is applied to a copy of the latest row and inserted as a new row,
 // leaving every earlier configuration on record.
 //
+// The change can refuse to apply, by returning an error. Nothing is written then, and the error is
+// returned as it is, for the caller to tell apart from a failure of the database.
+//
 // The copy and the insert happen under a table lock. Each command runs in its own goroutine, and two
 // changes made at the same moment would otherwise both copy the same row, the second silently
-// undoing the first. The lock only holds off other writers: plain reads are not blocked by it.
-func UpdateChatConfig(ctx context.Context, change func(*ChatConfig)) (ChatConfig, error) {
+// undoing the first. Checks that the change makes run under the lock as well, on the row as it then
+// is. The lock only holds off other writers: plain reads are not blocked by it.
+func UpdateChatConfig(ctx context.Context, change func(*ChatConfig) error) (ChatConfig, error) {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Msg("Failed to begin transaction for chat config update")
@@ -60,28 +87,23 @@ func UpdateChatConfig(ctx context.Context, change func(*ChatConfig)) (ChatConfig
 		return ChatConfig{}, err
 	}
 
-	change(&cfg)
+	if err := change(&cfg); err != nil {
+		return ChatConfig{}, err
+	}
 
 	err = tx.QueryRow(ctx,
 		`INSERT INTO chat_config
-			(llm_model, context_high_tokens, context_low_tokens,
-			 max_tool_iterations, max_tokens, image_detail, max_web_content_size)
+			(model, context_high_tokens, context_low_tokens,
+			 max_tool_iterations, max_response_tokens, image_detail, web_part_bytes)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id, created_at`,
-		cfg.LLMModel, cfg.ContextHighTokens, cfg.ContextLowTokens,
-		cfg.MaxToolIterations, cfg.MaxTokens, cfg.ImageDetail, cfg.MaxWebContentSize,
+		cfg.Model, cfg.ContextHighTokens, cfg.ContextLowTokens,
+		cfg.MaxToolIterations, cfg.MaxResponseTokens, cfg.ImageDetail, cfg.WebPartBytes,
 	).Scan(&cfg.ID, &cfg.CreatedAt)
 	if err != nil {
-		// Includes a change the table's checks reject, which leaves the configuration as it was
-		log.Error().Ctx(ctx).Err(err).
-			Str("llm_model", cfg.LLMModel).
-			Int("context_high_tokens", cfg.ContextHighTokens).
-			Int("context_low_tokens", cfg.ContextLowTokens).
-			Int("max_tool_iterations", cfg.MaxToolIterations).
-			Int("max_tokens", cfg.MaxTokens).
-			Str("image_detail", cfg.ImageDetail).
-			Int("max_web_content_size", cfg.MaxWebContentSize).
-			Msg("Failed to insert chat config")
+		// Includes a change the table's checks reject, which leaves the configuration as it was. The
+		// caller logs the settings it tried to change.
+		log.Error().Ctx(ctx).Err(err).Int64("based_on_config_id", cfg.ID).Msg("Failed to insert chat config")
 		return ChatConfig{}, err
 	}
 
@@ -98,12 +120,7 @@ func UpdateChatConfig(ctx context.Context, change func(*ChatConfig)) (ChatConfig
 //
 // Ordered by id rather than created_at: ids only ever increase, while timestamps can tie.
 func getLatestChatConfig(ctx context.Context, query queryFunc) (ChatConfig, error) {
-	rows, err := query(ctx,
-		`SELECT id, created_at, llm_model, context_high_tokens, context_low_tokens,
-			max_tool_iterations, max_tokens, image_detail, max_web_content_size
-		FROM chat_config
-		ORDER BY id DESC
-		LIMIT 1`)
+	rows, err := query(ctx, `SELECT `+chatConfigColumns+` FROM chat_config ORDER BY id DESC LIMIT 1`)
 	if err != nil {
 		return ChatConfig{}, err
 	}

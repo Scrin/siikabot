@@ -261,5 +261,7 @@ func stripFormatting(s string) string {
 	s = strings.Replace(s, "<br>", "\n", -1)
 	s = strings.Replace(s, "<br/>", "\n", -1)
 	s = strings.Replace(s, "<br />", "\n", -1)
-	return strip.StripTags(html.UnescapeString(s))
+	// Tags go before entities are decoded: decoded first, text that only looks like a tag, such as
+	// the <key> of a usage line, would go with them
+	return html.UnescapeString(strip.StripTags(s))
 }
