@@ -6,7 +6,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/db"
 	"github.com/rs/zerolog"
 )
@@ -52,6 +54,7 @@ var settingGroups = []settingGroup{
 	{name: "Model"},
 	{name: windowGroup, note: "The history of a room, and of each of its threads, grows to the high mark. " +
 		"Its oldest turns are then dropped until it's under the low mark."},
+	{name: "Time"},
 	{name: "Tools"},
 	{name: "Images"},
 }
@@ -65,6 +68,15 @@ const (
 	maxToolIterationsBound = 30
 	minWebPartBytes        = 1 << 10   // 1024
 	maxWebPartBytes        = 256 << 10 // 262144
+	maxModelAttemptsBound  = 5
+)
+
+// The bounds of the settings of time. The most model_timeout can be is aigateway.MaxCallTimeout,
+// which the client's own backstop is set above.
+const (
+	minTurnTimeout  = 30 * time.Second
+	maxTurnTimeout  = 20 * time.Minute
+	minModelTimeout = 10 * time.Second
 )
 
 // imageDetails are the image details a configuration can have
@@ -145,6 +157,62 @@ var settings = []setting{
 		},
 	},
 	{
+		key:     "turn_timeout",
+		group:   "Time",
+		summary: "the longest one turn may take, tools included",
+		help: "How long one turn may take, from starting on a message to its answer, with every model call and tool " +
+			"call in between. A turn that runs out of time stops, and the room is told it took too long.\n\n" +
+			"Turns run one at a time in each room, so a turn that gets stuck holds up the messages after it for this " +
+			"long. More rounds of tool calls (max_tool_iterations) and slower models need more time. A model call " +
+			"with every attempt it may get has to fit in it: model_attempts attempts of model_timeout, and the " +
+			"waits between them.",
+		allowed: func(cfg db.ChatConfig) string {
+			return fmt.Sprintf("%s to %s, and longer than a model call can take with every attempt (%s)",
+				formatDuration(minTurnTimeout), formatDuration(maxTurnTimeout),
+				formatDuration(roundUpToSecond(aigateway.WorstCaseCall(cfg.ModelTimeout, cfg.ModelAttempts))))
+		},
+		example: "10m",
+		show:    func(cfg db.ChatConfig) string { return formatDuration(cfg.TurnTimeout) },
+		set: func(cfg *db.ChatConfig, value string) error {
+			return setDuration(&cfg.TurnTimeout, "turn_timeout", value, minTurnTimeout, maxTurnTimeout)
+		},
+	},
+	{
+		key:     "model_timeout",
+		group:   "Time",
+		summary: "the longest one attempt at a model call may take",
+		help: "How long one attempt at a model call may take. The AI Gateway is asked to give up at the same point. A " +
+			"slow model, or one that reasons at length, needs more. An attempt that runs out of time is made again, " +
+			"up to model_attempts times, and all of the attempts have to fit in turn_timeout.\n\n" +
+			"To give a slow model more time: `!chat set model_timeout 2m turn_timeout 10m`",
+		allowed: func(cfg db.ChatConfig) string {
+			return fmt.Sprintf("%s to %s, with %d attempts of it fitting in `turn_timeout` (%s)",
+				formatDuration(minModelTimeout), formatDuration(aigateway.MaxCallTimeout), cfg.ModelAttempts,
+				formatDuration(cfg.TurnTimeout))
+		},
+		example: "30s",
+		show:    func(cfg db.ChatConfig) string { return formatDuration(cfg.ModelTimeout) },
+		set: func(cfg *db.ChatConfig, value string) error {
+			return setDuration(&cfg.ModelTimeout, "model_timeout", value, minModelTimeout, aigateway.MaxCallTimeout)
+		},
+	},
+	{
+		key:     "model_attempts",
+		group:   "Time",
+		summary: "the attempts a model call gets when it fails for a passing reason",
+		help: "How many times a model call is tried when it fails for a reason that may pass: the network, a timeout, " +
+			"a rate limit, or the provider failing. A request the provider rejects isn't tried again, since it would " +
+			"fail the same way. The wait before each retry starts at about half a second and doubles, up to a few " +
+			"seconds, and all of the attempts have to fit in turn_timeout. The AI Gateway also retries a failed " +
+			"request once by itself, before the bot sees the failure.",
+		allowed: func(db.ChatConfig) string { return fmt.Sprintf("1 to %d", maxModelAttemptsBound) },
+		example: "2",
+		show:    func(cfg db.ChatConfig) string { return strconv.Itoa(cfg.ModelAttempts) },
+		set: func(cfg *db.ChatConfig, value string) error {
+			return setCount(&cfg.ModelAttempts, "model_attempts", "", value, 1, maxModelAttemptsBound)
+		},
+	},
+	{
 		key:     "max_tool_iterations",
 		group:   "Tools",
 		summary: "the rounds of tool calls one turn may make",
@@ -203,6 +271,21 @@ func checkConfig(cfg db.ChatConfig) error {
 		return settingErrorf("`context_low_tokens` (%d) has to be below `context_high_tokens` (%d). To change both "+
 			"at once: `!chat set context_high_tokens 32k context_low_tokens 16k`", cfg.ContextLowTokens, cfg.ContextHighTokens)
 	}
+
+	// A model call with every attempt it may get, and the waits between them, has to fit in the turn,
+	// or the retries meant to carry a call over a passing failure would never get to run. The advice
+	// gives all three settings, so that it works as it stands whichever of them the command changed.
+	if call := aigateway.WorstCaseCall(cfg.ModelTimeout, cfg.ModelAttempts); call >= cfg.TurnTimeout {
+		shown := roundUpToSecond(call)
+		advice := "Lower `model_timeout` or `model_attempts`"
+		if fits := shown.Truncate(time.Minute) + time.Minute; fits <= maxTurnTimeout {
+			advice = fmt.Sprintf("Change them together, such as `!chat set model_timeout %s model_attempts %d turn_timeout %s`, "+
+				"or lower `model_timeout` or `model_attempts`", formatDuration(cfg.ModelTimeout), cfg.ModelAttempts, formatDuration(fits))
+		}
+		return settingErrorf("A model call can take up to %s: %d attempts of `model_timeout` (%s), and the waits between "+
+			"them. That doesn't fit in `turn_timeout` (%s). %s.", formatDuration(shown), cfg.ModelAttempts,
+			formatDuration(cfg.ModelTimeout), formatDuration(cfg.TurnTimeout), advice)
+	}
 	return nil
 }
 
@@ -251,6 +334,41 @@ func parseCount(value string, multiples bool) (int, bool) {
 		return 0, false
 	}
 	return int(count * multiplier), true
+}
+
+// setDuration parses a duration, such as 90s, 3m or 1m30s, into field for the setting key, taking it
+// only from least to most
+func setDuration(field *time.Duration, key, value string, least, most time.Duration) error {
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		return settingErrorf("`%s` takes a duration, such as 90s, 3m or 1m30s, not `%s`", key, value)
+	}
+	if duration < least || duration > most {
+		return settingErrorf("`%s` takes %s to %s, not %s", key, formatDuration(least), formatDuration(most),
+			formatDuration(duration))
+	}
+	*field = duration
+	return nil
+}
+
+// formatDuration renders a duration the way !chat set takes it: 3m rather than Go's 3m0s
+func formatDuration(d time.Duration) string {
+	s := d.String()
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s
+}
+
+// roundUpToSecond rounds a duration up to a whole second, so that what is shown of it is never less
+func roundUpToSecond(d time.Duration) time.Duration {
+	if rounded := d.Truncate(time.Second); rounded < d {
+		return rounded + time.Second
+	}
+	return d
 }
 
 // withUnit joins a value and its unit, if it has one

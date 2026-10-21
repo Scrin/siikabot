@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/Scrin/siikabot/config"
@@ -17,6 +18,9 @@ import (
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// testAttemptTimeout is how long an attempt in these tests may take
+const testAttemptTimeout = 37 * time.Second
 
 // captureRequest runs sendOnce against a canned response and returns the request it produced
 func captureRequest(t *testing.T, ctx context.Context, body string, status int) (*http.Request, *ChatResponse, error) {
@@ -44,7 +48,7 @@ func captureRequest(t *testing.T, ctx context.Context, body string, status int) 
 
 	resp, _, err := sendOnce(ctx, "openai/gpt-4o-mini",
 		map[string]string{"room_id": "!room:example.org"},
-		[]byte(`{"model":"openai/gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}`), 1)
+		[]byte(`{"model":"openai/gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}`), 1, testAttemptTimeout)
 	return captured, resp, err
 }
 
@@ -94,6 +98,12 @@ func TestSendOnceBuildsTheRequest(t *testing.T) {
 		}
 		if got := req.Header.Get("Authorization"); got != "" {
 			t.Errorf("Authorization should be left for a provider key, got %q", got)
+		}
+	})
+
+	t.Run("asks the gateway to give up when the attempt does", func(t *testing.T) {
+		if got := req.Header.Get("cf-aig-request-timeout"); got != "37000" {
+			t.Errorf("cf-aig-request-timeout = %q, want the attempt's 37000 ms", got)
 		}
 	})
 
@@ -205,7 +215,7 @@ func kindOf(t *testing.T, ctx context.Context, body string, status int) ErrorKin
 	})}
 	t.Cleanup(func() { httpClient = original })
 
-	_, kind, _ := sendOnce(ctx, "deepseek/deepseek-v4-pro", nil, []byte(`{}`), 1)
+	_, kind, _ := sendOnce(ctx, "deepseek/deepseek-v4-pro", nil, []byte(`{}`), 1, testAttemptTimeout)
 	return kind
 }
 
@@ -249,5 +259,75 @@ func TestSuccessfulStatusWithBadBodyIsStillAParseError(t *testing.T) {
 
 	if got := kindOf(t, ctx, "this is not json", 200); got != ErrorKindParseError {
 		t.Errorf("error kind = %q, want %q", got, ErrorKindParseError)
+	}
+}
+
+// countRequests stands a fake gateway answering with the status in for the network, with no wait
+// between attempts, and returns how many requests reach it
+func countRequests(t *testing.T, status int) *int {
+	t.Helper()
+
+	config.CloudflareAccountID = "acct123"
+	config.CloudflareAIGatewayID = "siikabot"
+	config.CloudflareAPIToken = "cf-token"
+
+	requests := 0
+	original := httpClient
+	httpClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: status,
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"the provider failed"}}`)),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	t.Cleanup(func() { httpClient = original })
+
+	// The waits between attempts are tested on their own, and here would only make the test slow
+	originalWait := waitForRetry
+	waitForRetry = func(context.Context, int) bool { return true }
+	t.Cleanup(func() { waitForRetry = originalWait })
+
+	return &requests
+}
+
+// TestSendChatRequestMakesTheAttemptsItIsGiven verifies a request is tried as many times as it says,
+// and only after a failure that may pass: a request the provider rejected is never sent again
+func TestSendChatRequestMakesTheAttemptsItIsGiven(t *testing.T) {
+	for _, tt := range []struct {
+		status, attempts, want int
+	}{
+		{http.StatusServiceUnavailable, 1, 1},
+		{http.StatusServiceUnavailable, 2, 2},
+		{http.StatusServiceUnavailable, 5, 5},
+		{http.StatusBadRequest, 3, 1},
+	} {
+		requests := countRequests(t, tt.status)
+		_, err := SendChatRequest(context.Background(), ChatRequest{
+			Model: "openai/gpt-4o-mini", Timeout: time.Second, Attempts: tt.attempts,
+		})
+		if err == nil {
+			t.Errorf("HTTP %d: the request succeeded, want it to fail", tt.status)
+		}
+		if *requests != tt.want {
+			t.Errorf("HTTP %d with %d attempts: sent %d times, want %d", tt.status, tt.attempts, *requests, tt.want)
+		}
+	}
+}
+
+// TestSendChatRequestNeedsTimeoutAndAttempts verifies a request without them is refused rather than
+// sent with limits nobody chose
+func TestSendChatRequestNeedsTimeoutAndAttempts(t *testing.T) {
+	requests := countRequests(t, http.StatusOK)
+	for _, req := range []ChatRequest{
+		{Model: "openai/gpt-4o-mini", Attempts: 3},
+		{Model: "openai/gpt-4o-mini", Timeout: time.Minute},
+	} {
+		if _, err := SendChatRequest(context.Background(), req); err == nil {
+			t.Errorf("a request with a timeout of %s and %d attempts was taken", req.Timeout, req.Attempts)
+		}
+	}
+	if *requests != 0 {
+		t.Errorf("%d requests were sent, want none", *requests)
 	}
 }

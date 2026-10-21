@@ -3,6 +3,7 @@ package chat
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/Scrin/siikabot/aigateway"
 )
@@ -44,8 +45,13 @@ func TestToolLimitRequest(t *testing.T) {
 	messages[0] = aigateway.Message{Role: "system", Content: "You are a bot."}
 	messages[1] = aigateway.Message{Role: "tool", Content: "Results", ToolCallID: "call_1"}
 
-	req := toolLimitRequest("test-model", messages, tools, 2048, map[string]string{"iteration": "5"})
+	cfg := seededConfig()
+	req := toolLimitRequest(cfg, messages, tools, map[string]string{"iteration": "5"})
 
+	if req.Model != cfg.Model || req.Timeout != 45*time.Second || req.Attempts != 3 {
+		t.Errorf("the request is for %s with %s and %d attempts, want the turn's model and limits",
+			req.Model, req.Timeout, req.Attempts)
+	}
 	if len(req.Tools) != 1 {
 		t.Errorf("the request offers %d tools, want the turn's tools", len(req.Tools))
 	}

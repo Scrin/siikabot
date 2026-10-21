@@ -15,8 +15,11 @@ import (
 // more and posts no answer.
 
 // redactionMemory is how long a redaction is remembered for turns that haven't finished yet. It has
-// to outlast any turn, including its wait for the room lock.
-const redactionMemory = time.Hour
+// to outlast any turn, including its wait for the room lock: a turn that outlived it would write a
+// redacted trigger back into the history. Turns may take up to maxTurnTimeout each and queue behind
+// each other, so it is many times that. Remembering costs one entry per redaction, pruned as more
+// come in.
+const redactionMemory = 6 * time.Hour
 
 var redactions = struct {
 	sync.Mutex

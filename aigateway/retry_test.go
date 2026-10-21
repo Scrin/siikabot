@@ -80,41 +80,45 @@ func TestRetryDelayBacksOffWithinBounds(t *testing.T) {
 	}
 }
 
-// TestRetryBudgetFitsInsideTurn checks the timeouts compose: the worst case for a single call,
-// retries and backoff included, has to leave room inside a turn for more than one call.
-func TestRetryBudgetFitsInsideTurn(t *testing.T) {
-	// Mirrors the turn deadline in the chat package. Kept as a literal on purpose, so that changing
-	// one side without the other trips this test rather than silently making retries unreachable.
-	const turnTimeout = 3 * time.Minute
-
-	worstCaseBackoff := time.Duration(0)
-	for attempt := 1; attempt < maxAttempts; attempt++ {
-		delay := retryBaseDelay << (attempt - 1)
-		if delay > retryMaxDelay {
-			delay = retryMaxDelay
+// TestWorstCaseCall checks the longest a request can take: every attempt running out of time, and
+// the longest wait before each retry, which is one and a half times its nominal delay
+func TestWorstCaseCall(t *testing.T) {
+	for _, tt := range []struct {
+		timeout  time.Duration
+		attempts int
+		want     time.Duration
+	}{
+		// A single attempt never waits
+		{45 * time.Second, 1, 45 * time.Second},
+		// What the constants this replaced added up to: three attempts of 45 seconds, and waits of at
+		// most 0.75 and 1.5 seconds
+		{45 * time.Second, 3, 135*time.Second + 2250*time.Millisecond},
+		// The waits double up to their ceiling of 4 seconds, which is 6 with the jitter
+		{10 * time.Second, 5, 50*time.Second + 750*time.Millisecond + 1500*time.Millisecond + 3*time.Second + 6*time.Second},
+	} {
+		if got := WorstCaseCall(tt.timeout, tt.attempts); got != tt.want {
+			t.Errorf("WorstCaseCall(%s, %d) = %s, want %s", tt.timeout, tt.attempts, got, tt.want)
 		}
-		worstCaseBackoff += time.Duration(float64(delay) * 1.5)
 	}
 
-	worstCaseCall := time.Duration(maxAttempts)*callTimeout + worstCaseBackoff
-	if worstCaseCall >= turnTimeout {
-		t.Errorf("a single fully retried call can take %s, which exceeds the %s turn budget",
-			worstCaseCall, turnTimeout)
+	// No wait is longer than the worst case allows for it, so a caller that allows the worst case
+	// always has room for the retries
+	for attempt := 1; attempt <= 8; attempt++ {
+		allowed := WorstCaseCall(0, attempt+1) - WorstCaseCall(0, attempt)
+		for range 50 {
+			if delay := retryDelay(attempt); delay > allowed {
+				t.Fatalf("the wait after attempt %d was %s, more than the %s the worst case allows", attempt, delay, allowed)
+			}
+		}
 	}
 }
 
-// TestHTTPTimeoutIsBackstopOnly verifies the client timeout sits above the per-attempt deadline, so
-// the per-attempt context is what actually fires and the error classifies as a timeout
+// TestHTTPTimeoutIsBackstopOnly verifies the client timeout sits above the longest attempt a request
+// may be given, so the per-attempt context is what actually fires and the error classifies as a
+// timeout
 func TestHTTPTimeoutIsBackstopOnly(t *testing.T) {
-	if httpTimeout <= callTimeout {
-		t.Errorf("httpTimeout (%s) must be above callTimeout (%s) or it pre-empts the per-attempt deadline",
-			httpTimeout, callTimeout)
-	}
-}
-
-// TestGatewayTimeoutMatchesCallTimeout verifies the gateway is asked to give up when the client does
-func TestGatewayTimeoutMatchesCallTimeout(t *testing.T) {
-	if want := int(callTimeout / time.Millisecond); gatewayTimeoutMS != want {
-		t.Errorf("gatewayTimeoutMS = %d, want %d", gatewayTimeoutMS, want)
+	if httpTimeout <= MaxCallTimeout {
+		t.Errorf("httpTimeout (%s) must be above MaxCallTimeout (%s) or it pre-empts the per-attempt deadline",
+			httpTimeout, MaxCallTimeout)
 	}
 }

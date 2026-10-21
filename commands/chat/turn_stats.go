@@ -215,17 +215,28 @@ func gatewayMetadata(roomID, sender string, iteration int) map[string]string {
 	}
 }
 
-// failureDebugData is the debug blob attached to a failure reply.
+// failureDebugData is the debug blob attached to a failure reply: what failed, the trace to find
+// the turn by, and the configuration the turn ran on, which says what limit it ran into if it ran
+// into one.
 //
 // Failures previously carried none at all, which meant the one reply you would most want to
 // investigate was the only one with no trace id attached to it.
-func failureDebugData(ctx context.Context, model, outcome string) map[string]any {
+func failureDebugData(ctx context.Context, model, outcome string, cfg db.ChatConfig) map[string]any {
 	debugData := map[string]any{
 		"model":   model,
 		"outcome": outcome,
 	}
 	if traceID := tracing.TraceID(ctx); traceID != "" {
 		debugData["trace_id"] = traceID
+	}
+	// A turn that couldn't read its configuration has none to give
+	if cfg.ID != 0 {
+		values := make(map[string]string, len(settings))
+		for _, s := range settings {
+			values[s.key] = s.show(cfg)
+		}
+		debugData["config_id"] = cfg.ID
+		debugData["config"] = values
 	}
 	return debugData
 }

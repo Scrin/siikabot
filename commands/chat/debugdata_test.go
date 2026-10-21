@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/Scrin/siikabot/db"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -49,13 +50,35 @@ func TestReplyDebugDataCarriesTraceID(t *testing.T) {
 func TestFailureDebugDataCarriesTraceID(t *testing.T) {
 	ctx, traceHex := ctxWithSpan(t)
 
-	debugData := failureDebugData(ctx, "openai/gpt-4o-mini", "turn_timeout")
+	debugData := failureDebugData(ctx, "openai/gpt-4o-mini", "turn_timeout", seededConfig())
 
 	if debugData["trace_id"] != traceHex {
 		t.Errorf("trace_id = %v, want %q", debugData["trace_id"], traceHex)
 	}
 	if debugData["outcome"] != "turn_timeout" {
 		t.Errorf("outcome = %v, want the failure reason", debugData["outcome"])
+	}
+}
+
+// TestFailureDebugDataCarriesTheConfiguration verifies a failure says what configuration its turn ran
+// on, so that the limit it ran into can be read off it, and that a turn which couldn't read its
+// configuration doesn't make one up
+func TestFailureDebugDataCarriesTheConfiguration(t *testing.T) {
+	debugData := failureDebugData(context.Background(), "openai/gpt-4o-mini", "turn_timeout", seededConfig())
+
+	if debugData["config_id"] != int64(1) {
+		t.Errorf("config_id = %v, want 1", debugData["config_id"])
+	}
+	config, _ := debugData["config"].(map[string]string)
+	for key, want := range map[string]string{"turn_timeout": "3m", "model_timeout": "45s", "model_attempts": "3", "max_tool_iterations": "5"} {
+		if config[key] != want {
+			t.Errorf("config[%s] = %q, want %q", key, config[key], want)
+		}
+	}
+
+	without := failureDebugData(context.Background(), "", "config_unavailable", db.ChatConfig{})
+	if _, ok := without["config"]; ok {
+		t.Errorf("a turn without a configuration reported one: %v", without["config"])
 	}
 }
 

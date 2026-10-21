@@ -36,10 +36,6 @@ func lockRoom(roomID string) func() {
 	return mutex.Unlock
 }
 
-// turnTimeout bounds a whole turn, tools and all. Without it a turn can run for the product of the
-// per-call timeout and the iteration limit, during which the user has no idea anything is wrong.
-const turnTimeout = 3 * time.Minute
-
 // persistTimeout bounds the writes that record what a turn did
 const persistTimeout = 5 * time.Second
 
@@ -121,11 +117,6 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 		return
 	}
 
-	// Bound the whole turn, so a stuck model or a long tool loop fails in a knowable time instead
-	// of grinding on invisibly. Applied after the lock so queueing does not eat into the budget.
-	ctx, cancelTurn := context.WithTimeout(ctx, turnTimeout)
-	defer cancelTurn()
-
 	ctx, turnSpan := tracer.Start(ctx, "chat.turn", trace.WithAttributes(
 		attribute.String("matrix.room_id", roomID),
 		attribute.String("matrix.sender", sender),
@@ -134,6 +125,21 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 	defer turnSpan.End()
 
 	startTime := time.Now()
+
+	// Read once and used for the whole turn, so a change made with !chat while a turn is running
+	// cannot leave that turn on a mix of old and new settings. Read first, since how long the turn
+	// may take is one of them.
+	cfg, cfgErr := db.GetChatConfig(ctx)
+
+	// Bound the whole turn, so a stuck model or a long tool loop fails in a knowable time instead
+	// of grinding on invisibly: without a bound, a turn could take every attempt of every model call
+	// for every round of tool calls. Applied after the lock so queueing does not eat into the budget.
+	// A turn without its configuration has no budget, and ends as soon as it has told the room.
+	if cfgErr == nil {
+		var cancelTurn context.CancelFunc
+		ctx, cancelTurn = context.WithTimeout(ctx, cfg.TurnTimeout)
+		defer cancelTurn()
+	}
 
 	log.Debug().Ctx(ctx).
 		Str("room_id", roomID).
@@ -163,13 +169,10 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 		stats.outcome = outcome
 		stats.finish(ctx, roomID, sender, model, duration)
 		stats.recordOnSpan(turnSpan)
-		matrix.SendMessageTo(ctx, roomID, target, failureMessage(outcome), failureDebugData(ctx, model, outcome))
+		matrix.SendMessageTo(ctx, roomID, target, failureMessage(outcome, cfg), failureDebugData(ctx, model, outcome, cfg))
 	}
 
-	// Read once and used for the whole turn, so a change made with !chat while a turn is running
-	// cannot leave that turn on a mix of old and new settings
-	cfg, err := db.GetChatConfig(ctx)
-	if err != nil {
+	if cfgErr != nil {
 		// Already logged. There is nothing to fall back to: the database is the only source of the
 		// configuration, and without it there is no model to ask.
 		fail("config_unavailable", "")
@@ -212,21 +215,12 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 		attribute.Int("siikabot.chat.prompt_tokens_estimated", composition.total()),
 	)
 
-	// Cap the response length, so a runaway generation is not billed in full
-	maxTokens := cfg.MaxResponseTokens
-
 	// Recorded by Cloudflare as span attributes and log fields, which is the only way its side of a
 	// turn knows which room and user it belonged to
 	metadata := gatewayMetadata(roomID, sender, 1)
 
 	// Create the initial request
-	req := aigateway.ChatRequest{
-		Model:     model,
-		Messages:  messages,
-		Tools:     tools,
-		MaxTokens: &maxTokens,
-		Metadata:  metadata,
-	}
+	req := chatRequest(cfg, messages, tools, metadata)
 
 	// Estimated size of the whole prompt, compared against the reported usage below so the accuracy
 	// of the heuristic driving the context window stays visible
@@ -384,6 +378,22 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 	})
 }
 
+// chatRequest is a request to the model of the turn's configuration, under the limits it sets: the
+// length of the answer, so a runaway generation is not billed in full, and the time and attempts
+// each call gets
+func chatRequest(cfg db.ChatConfig, messages []aigateway.Message, tools []aigateway.ToolDefinition, metadata map[string]string) aigateway.ChatRequest {
+	maxTokens := cfg.MaxResponseTokens
+	return aigateway.ChatRequest{
+		Model:     cfg.Model,
+		Messages:  messages,
+		Tools:     tools,
+		MaxTokens: &maxTokens,
+		Metadata:  metadata,
+		Timeout:   cfg.ModelTimeout,
+		Attempts:  cfg.ModelAttempts,
+	}
+}
+
 // answerTarget places the answer to a trigger, and any failure message with it: in the thread the
 // trigger was sent in, or the main timeline, and as a reply to the trigger if anything was posted
 // there after it. An answer still queued when its trigger is redacted is dropped.
@@ -433,21 +443,36 @@ func isNoReply(answer string) bool {
 	return strings.EqualFold(strings.Trim(answer, " \t\r\n`*_\"'.!"), noReply)
 }
 
-// failureMessage is what the room is told, in place of an answer, when a turn fails with the
-// outcome
-func failureMessage(outcome string) string {
+// failureMessage is what the room is told, in place of an answer, when a turn on the configuration
+// fails with the outcome. A turn that ran into one of the configuration's limits says what it was.
+func failureMessage(outcome string, cfg db.ChatConfig) string {
 	switch outcome {
 	case "turn_timeout":
-		return "That took too long to answer, so I gave up. Try again, or ask something narrower."
+		return fmt.Sprintf("That took too long to answer, so I gave up after %s. Try again, or ask something narrower.",
+			durationInWords(cfg.TurnTimeout))
 	case "no_choices", "empty_response":
 		return "No response from chat API"
 	case "tool_failed":
 		return "Failed to process tool calls"
 	case "tool_limit":
-		return "That needed more tool calls than one answer allows, so I stopped before finishing. Try again, or ask something narrower."
+		return fmt.Sprintf("That needed more tool calls than the %d %s one answer allows, so I stopped before finishing. "+
+			"Try again, or ask something narrower.", cfg.MaxToolIterations, plural(cfg.MaxToolIterations, "round", "rounds"))
 	default:
 		return "Failed to process chat request"
 	}
+}
+
+// durationInWords says a duration the way the room reads it: 3 minutes, or 90 seconds
+func durationInWords(d time.Duration) string {
+	switch {
+	case d >= time.Minute && d%time.Minute == 0:
+		minutes := int(d / time.Minute)
+		return fmt.Sprintf("%d %s", minutes, plural(minutes, "minute", "minutes"))
+	case d%time.Second == 0:
+		seconds := int(d / time.Second)
+		return fmt.Sprintf("%d %s", seconds, plural(seconds, "second", "seconds"))
+	}
+	return formatDuration(d)
 }
 
 // requestFailure is the outcome of a model call that failed: the turn ran out of time, or the call
@@ -836,7 +861,6 @@ func processToolCalls(
 	currentResp := chatResp
 	iterationCount := 1 // by the time we're here, we've already made one request
 
-	maxTokens := cfg.MaxResponseTokens
 	maxIterations := cfg.MaxToolIterations
 	for iterationCount < maxIterations {
 		iterationCount++
@@ -876,13 +900,7 @@ func processToolCalls(
 		}
 
 		// Update the request with the new messages
-		req := aigateway.ChatRequest{
-			Model:     model,
-			Messages:  messages,
-			Tools:     tools,
-			MaxTokens: &maxTokens,
-			Metadata:  gatewayMetadata(roomID, sender, iterationCount),
-		}
+		req := chatRequest(cfg, messages, tools, gatewayMetadata(roomID, sender, iterationCount))
 
 		// Log the request for debugging
 		log.Debug().Ctx(ctx).
@@ -980,7 +998,7 @@ func processToolCalls(
 		}
 
 		// Final request, which tells the model the tools are spent and doesn't let it call them
-		req := toolLimitRequest(model, messages, tools, maxTokens, gatewayMetadata(roomID, sender, iterationCount))
+		req := toolLimitRequest(cfg, messages, tools, gatewayMetadata(roomID, sender, iterationCount))
 		messages = req.Messages
 
 		// Log the final request

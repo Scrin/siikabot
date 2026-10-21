@@ -88,19 +88,6 @@ func TestKeepAliveStopsWithTheContext(t *testing.T) {
 	}
 }
 
-// TestTurnBudgetExceedsASingleCall verifies the turn deadline leaves room for more than one model
-// call, so a turn is not cut off before it can use a tool result
-func TestTurnBudgetExceedsASingleCall(t *testing.T) {
-	// Mirrors aigateway.callTimeout. Kept as a literal because importing that package here would be
-	// a cycle; the aigateway side has the matching check against the turn budget.
-	const callTimeout = 45 * time.Second
-
-	if turnTimeout <= 2*callTimeout {
-		t.Errorf("turn budget %s leaves no room for a tool loop on top of a %s call",
-			turnTimeout, callTimeout)
-	}
-}
-
 // TestPersistTimeoutIsShort verifies the write that records a turn cannot itself hold things up for
 // long, since it runs on a context deliberately detached from the turn's cancellation
 func TestPersistTimeoutIsShort(t *testing.T) {

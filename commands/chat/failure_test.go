@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,17 +46,40 @@ func TestExtractAssistantResponse(t *testing.T) {
 	}
 }
 
-// Every way a turn can fail tells the room something, and a timeout says what the user can do
+// Every way a turn can fail tells the room something, a timeout says what the user can do, and a
+// turn that ran into one of the configuration's limits says what it was
 func TestFailureMessage(t *testing.T) {
+	cfg := seededConfig()
 	outcomes := []string{"config_unavailable", "request_failed", "turn_timeout", "no_choices", "tool_failed", "tool_limit", "empty_response"}
 	for _, outcome := range outcomes {
-		if failureMessage(outcome) == "" {
+		if failureMessage(outcome, cfg) == "" {
 			t.Errorf("failureMessage(%q) is empty", outcome)
 		}
 	}
 
-	if got := failureMessage("turn_timeout"); got == failureMessage("request_failed") {
+	if got := failureMessage("turn_timeout", cfg); got == failureMessage("request_failed", cfg) {
 		t.Errorf("a timeout is reported like any other failure: %q", got)
+	}
+	if got := failureMessage("turn_timeout", cfg); !strings.Contains(got, "after 3 minutes") {
+		t.Errorf("the timeout message doesn't say how long the turn had: %q", got)
+	}
+	if got := failureMessage("tool_limit", cfg); !strings.Contains(got, "the 5 rounds") {
+		t.Errorf("the tool limit message doesn't say how many rounds the turn had: %q", got)
+	}
+}
+
+func TestDurationInWords(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		3 * time.Minute:         "3 minutes",
+		time.Minute:             "1 minute",
+		20 * time.Minute:        "20 minutes",
+		90 * time.Second:        "90 seconds",
+		time.Second:             "1 second",
+		1500 * time.Millisecond: "1.5s",
+	} {
+		if got := durationInWords(d); got != want {
+			t.Errorf("durationInWords(%s) = %q, want %q", d, got, want)
+		}
 	}
 }
 

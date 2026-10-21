@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Scrin/siikabot/aigateway"
+	"github.com/Scrin/siikabot/db"
 )
 
 // toolLimitNotice tells the model that the turn has used up its tool iterations, in the last
@@ -16,21 +17,18 @@ import (
 const toolLimitNotice = "You have used every round of tool calls this turn allows, so no more tools can be called. " +
 	"Answer now from what you have found so far, and say what you could not find out."
 
-// toolLimitRequest is the last request of a turn that has used up its tool iterations.
+// toolLimitRequest is the last request of a turn that has used up its tool iterations, under the
+// same limits as the rest of the turn's requests.
 //
 // It still offers the tools, with tool_choice none. Leaving them out used to make the model write
 // its tool calls as text, which was then posted to the room as the answer: without tools in the
 // request, the provider neither tells the model about them nor parses the calls it makes. Offering
 // them also keeps the request on the same cached prefix as the rest of the turn.
-func toolLimitRequest(model string, messages []aigateway.Message, tools []aigateway.ToolDefinition, maxTokens int, metadata map[string]string) aigateway.ChatRequest {
-	return aigateway.ChatRequest{
-		Model:      model,
-		Messages:   append(slices.Clip(messages), aigateway.Message{Role: "system", Content: toolLimitNotice}),
-		Tools:      tools,
-		ToolChoice: "none",
-		MaxTokens:  &maxTokens,
-		Metadata:   metadata,
-	}
+func toolLimitRequest(cfg db.ChatConfig, messages []aigateway.Message, tools []aigateway.ToolDefinition, metadata map[string]string) aigateway.ChatRequest {
+	req := chatRequest(cfg, append(slices.Clip(messages), aigateway.Message{Role: "system", Content: toolLimitNotice}),
+		tools, metadata)
+	req.ToolChoice = "none"
+	return req
 }
 
 // asksOnlyForTools says whether a response is nothing but tool calls, with no answer written

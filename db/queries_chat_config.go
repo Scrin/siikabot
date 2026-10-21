@@ -16,20 +16,24 @@ import (
 // Each column is a chat setting, and its name is the key the setting goes by everywhere else: in
 // !chat config and !chat set, and in the logs.
 type ChatConfig struct {
-	ID                int64     `db:"id"`
-	CreatedAt         time.Time `db:"created_at"`
-	Model             string    `db:"model"`
-	ContextHighTokens int       `db:"context_high_tokens"`
-	ContextLowTokens  int       `db:"context_low_tokens"`
-	MaxToolIterations int       `db:"max_tool_iterations"`
-	MaxResponseTokens int       `db:"max_response_tokens"`
-	ImageDetail       string    `db:"image_detail"`
-	WebPartBytes      int       `db:"web_part_bytes"`
+	ID                int64         `db:"id"`
+	CreatedAt         time.Time     `db:"created_at"`
+	Model             string        `db:"model"`
+	ContextHighTokens int           `db:"context_high_tokens"`
+	ContextLowTokens  int           `db:"context_low_tokens"`
+	MaxToolIterations int           `db:"max_tool_iterations"`
+	MaxResponseTokens int           `db:"max_response_tokens"`
+	ImageDetail       string        `db:"image_detail"`
+	WebPartBytes      int           `db:"web_part_bytes"`
+	TurnTimeout       time.Duration `db:"turn_timeout"`
+	ModelTimeout      time.Duration `db:"model_timeout"`
+	ModelAttempts     int           `db:"model_attempts"`
 }
 
 // chatConfigColumns are the columns of a ChatConfig, as every query of the table reads them
 const chatConfigColumns = `id, created_at, model, context_high_tokens, context_low_tokens,
-	max_tool_iterations, max_response_tokens, image_detail, web_part_bytes`
+	max_tool_iterations, max_response_tokens, image_detail, web_part_bytes,
+	turn_timeout, model_timeout, model_attempts`
 
 // GetChatConfig returns the chat configuration currently in effect
 func GetChatConfig(ctx context.Context) (ChatConfig, error) {
@@ -94,11 +98,13 @@ func UpdateChatConfig(ctx context.Context, change func(*ChatConfig) error) (Chat
 	err = tx.QueryRow(ctx,
 		`INSERT INTO chat_config
 			(model, context_high_tokens, context_low_tokens,
-			 max_tool_iterations, max_response_tokens, image_detail, web_part_bytes)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+			 max_tool_iterations, max_response_tokens, image_detail, web_part_bytes,
+			 turn_timeout, model_timeout, model_attempts)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING id, created_at`,
 		cfg.Model, cfg.ContextHighTokens, cfg.ContextLowTokens,
 		cfg.MaxToolIterations, cfg.MaxResponseTokens, cfg.ImageDetail, cfg.WebPartBytes,
+		cfg.TurnTimeout, cfg.ModelTimeout, cfg.ModelAttempts,
 	).Scan(&cfg.ID, &cfg.CreatedAt)
 	if err != nil {
 		// Includes a change the table's checks reject, which leaves the configuration as it was. The

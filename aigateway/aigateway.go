@@ -21,25 +21,17 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// callTimeout bounds a single attempt. A chat bot that has not heard back within this is not going
-// to produce something the user still wants, and leaving the call open only delays the retry.
-//
-// Chosen so that a fully retried call still fits inside the caller's turn budget: three attempts
-// plus backoff has to leave room for the turn to do something with the answer. TestRetryBudget
-// FitsInsideTurn checks that relationship holds.
-const callTimeout = 45 * time.Second
+// MaxCallTimeout is the longest one attempt at a request may be given, which is as far as the
+// model_timeout chat setting goes
+const MaxCallTimeout = 10 * time.Minute
 
-// httpTimeout is a backstop slightly above callTimeout, for the case where the per-attempt context
-// somehow does not fire
-const httpTimeout = 60 * time.Second
+// httpTimeout is a backstop above the longest attempt a request may be given, for the case where
+// the per-attempt context somehow does not fire
+const httpTimeout = MaxCallTimeout + 15*time.Second
 
-// gatewayTimeoutMS asks the gateway to give up at the same point the client does, so a stalled
-// upstream is abandoned on both sides rather than only locally
-const gatewayTimeoutMS = int(callTimeout / time.Millisecond)
-
-// Retry settings for transient failures. Kept small deliberately: a user is waiting, and a request
-// that has already failed twice is unlikely to succeed on a third attempt soon enough to matter.
-const maxAttempts = 3
+// The wait before retrying a request that failed for a passing reason: it doubles from the base
+// delay with each attempt, up to the ceiling. How long each attempt may take, and how many a request
+// gets, is up to the caller.
 const retryBaseDelay = 500 * time.Millisecond
 const retryMaxDelay = 4 * time.Second
 
@@ -117,6 +109,12 @@ type ChatRequest struct {
 	// Metadata travels in the cf-aig-metadata header rather than the body, and Cloudflare turns it
 	// into attributes on its own span and filterable fields in its logs
 	Metadata map[string]string `json:"-"`
+
+	// Timeout bounds each attempt at the request, and Attempts is how many it gets when it fails for
+	// a passing reason. Neither has a default: like the rest of the request, they come from the chat
+	// configuration. Neither goes in the body, and the gateway is told the timeout in a header.
+	Timeout  time.Duration `json:"-"`
+	Attempts int           `json:"-"`
 }
 
 // Choice represents a choice in the chat API response
@@ -260,10 +258,15 @@ func setTraceHeaders(ctx context.Context, req *http.Request) {
 }
 
 // setInferenceHeaders sets the per-request gateway behaviour for an inference call: a timeout
-// matching the client's own, and a small number of gateway-side retries that absorb a transient
-// upstream failure without a client round trip
-func setInferenceHeaders(req *http.Request) {
-	req.Header.Set("cf-aig-request-timeout", strconv.Itoa(gatewayTimeoutMS))
+// matching the client's own for the attempt, and a small number of gateway-side retries that absorb
+// a transient upstream failure without a client round trip.
+//
+// The gateway measures its timeout to the first part of the response, which for a request that
+// isn't streamed is the whole answer, and it waits out its own last retry however long that takes,
+// so the client's deadline is what bounds that one
+// (developers.cloudflare.com/ai-gateway/configuration/request-handling).
+func setInferenceHeaders(req *http.Request, timeout time.Duration) {
+	req.Header.Set("cf-aig-request-timeout", strconv.FormatInt(timeout.Milliseconds(), 10))
 	req.Header.Set("cf-aig-max-attempts", gatewayMaxAttempts)
 	req.Header.Set("cf-aig-retry-delay", gatewayRetryDelayMS)
 	req.Header.Set("cf-aig-backoff", gatewayBackoff)
@@ -330,10 +333,17 @@ func firstError(errs []apiError) (int, string) {
 	return errs[0].Code, errs[0].Message
 }
 
-// SendChatRequest sends a request to the AI Gateway chat API
+// SendChatRequest sends a request to the AI Gateway chat API, in up to req.Attempts attempts of at
+// most req.Timeout each
 func SendChatRequest(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
-	// ChatRequest is already the OpenAI request shape the compat endpoint expects, and Metadata is
-	// tagged json:"-" because it travels as a header, so this marshals to exactly the right body
+	if req.Timeout <= 0 || req.Attempts <= 0 {
+		err := fmt.Errorf("chat request needs a timeout and attempts, got %s and %d", req.Timeout, req.Attempts)
+		log.Error().Ctx(ctx).Err(err).Str("model", req.Model).Msg("Invalid chat request")
+		return nil, err
+	}
+
+	// ChatRequest is already the OpenAI request shape the compat endpoint expects, and the fields
+	// that aren't part of it are tagged json:"-", so this marshals to exactly the right body
 	jsonData, err := json.Marshal(req)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("model", req.Model).Msg("Failed to marshal chat request")
@@ -352,18 +362,18 @@ func SendChatRequest(ctx context.Context, req ChatRequest) (*ChatResponse, error
 	// Retry transient failures. Only the HTTP call is retried, never anything around it: by the
 	// time a caller is in a tool loop the tools have already run, and some of them write.
 	var lastErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		chatResp, kind, err := sendOnce(ctx, req.Model, req.Metadata, jsonData, attempt)
+	for attempt := 1; attempt <= req.Attempts; attempt++ {
+		chatResp, kind, err := sendOnce(ctx, req.Model, req.Metadata, jsonData, attempt, req.Timeout)
 		if err == nil {
 			recordResponseAttributes(span, chatResp)
 			return chatResp, nil
 		}
 		lastErr = err
 
-		if !isRetryable(kind) || attempt == maxAttempts {
+		if !isRetryable(kind) || attempt == req.Attempts {
 			break
 		}
-		if !waitBeforeRetry(ctx, attempt) {
+		if !waitForRetry(ctx, attempt) {
 			// The turn's deadline passed or it was cancelled, so there is nobody left to answer
 			break
 		}
@@ -377,7 +387,7 @@ func SendChatRequest(ctx context.Context, req ChatRequest) (*ChatResponse, error
 			Str("model", req.Model).
 			Str("error_kind", string(kind)).
 			Int("attempt", attempt).
-			Int("max_attempts", maxAttempts).
+			Int("max_attempts", req.Attempts).
 			Msg("Retrying chat request after a transient failure")
 	}
 
@@ -420,9 +430,32 @@ func isRetryable(kind ErrorKind) bool {
 // retryDelay returns the backoff for an attempt: exponential growth up to a ceiling, jittered
 // between half and one and a half of the nominal delay so concurrent turns do not retry in lockstep
 func retryDelay(attempt int) time.Duration {
-	delay := min(retryBaseDelay<<(attempt-1), retryMaxDelay)
-	return time.Duration(float64(delay) * (0.5 + rand.Float64()))
+	return time.Duration(float64(nominalRetryDelay(attempt)) * (0.5 + rand.Float64()))
 }
+
+// nominalRetryDelay is the backoff for an attempt before its jitter: the base delay, doubled for
+// every attempt before it, up to the ceiling
+func nominalRetryDelay(attempt int) time.Duration {
+	delay := retryBaseDelay
+	for i := 1; i < attempt && delay < retryMaxDelay; i++ {
+		delay *= 2
+	}
+	return min(delay, retryMaxDelay)
+}
+
+// WorstCaseCall is the longest a request can take with the given timeout and attempts: every
+// attempt running out of time, with the longest jittered wait before each retry. A caller with a
+// deadline of its own has to allow more than this, or the retries would never get to run.
+func WorstCaseCall(timeout time.Duration, attempts int) time.Duration {
+	total := time.Duration(attempts) * timeout
+	for attempt := 1; attempt < attempts; attempt++ {
+		total += nominalRetryDelay(attempt) * 3 / 2
+	}
+	return total
+}
+
+// waitForRetry waits before a retry. Tests replace it, so that retrying takes no real time.
+var waitForRetry = waitBeforeRetry
 
 // waitBeforeRetry sleeps for the backoff delay, returning false if the context finished first
 func waitBeforeRetry(ctx context.Context, attempt int) bool {
@@ -437,15 +470,16 @@ func waitBeforeRetry(ctx context.Context, attempt int) bool {
 	}
 }
 
-// sendOnce performs a single attempt, returning the response or the failure with its classification
-func sendOnce(ctx context.Context, model string, metadata map[string]string, jsonData []byte, attempt int) (*ChatResponse, ErrorKind, error) {
+// sendOnce performs a single attempt of at most timeout, returning the response or the failure with
+// its classification
+func sendOnce(ctx context.Context, model string, metadata map[string]string, jsonData []byte, attempt int, timeout time.Duration) (*ChatResponse, ErrorKind, error) {
 	ctx, span := tracer.Start(ctx, "gen_ai.chat.attempt",
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(attribute.Int(attrAttempt, attempt)))
 	defer span.End()
 
 	// Each attempt gets its own timeout, bounded by the caller's deadline for the whole turn
-	callCtx, cancel := context.WithTimeout(ctx, callTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	httpReq, err := http.NewRequestWithContext(callCtx, "POST", chatCompletionsURL(), bytes.NewBuffer(jsonData))
@@ -456,7 +490,7 @@ func sendOnce(ctx context.Context, model string, metadata map[string]string, jso
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	setInferenceAuthHeader(httpReq)
-	setInferenceHeaders(httpReq)
+	setInferenceHeaders(httpReq, timeout)
 	// Both use the attempt's context, so Cloudflare's span hangs off this attempt rather than off
 	// the enclosing call — a retry is then visibly its own subtree
 	setTraceHeaders(ctx, httpReq)

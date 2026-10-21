@@ -30,10 +30,11 @@ var chatAPIRetries = makeCollector(prometheus.NewCounterVec(prometheus.CounterOp
 	Help: "Total number of chat API calls retried after a transient failure",
 }, []string{"model", "error_kind"}))
 
+// The buckets reach 10 minutes, the longest the model_timeout setting lets one attempt take
 var chatAPICallDuration = makeCollector(prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	Name:    metricPrefix + "chat_api_call_duration_seconds",
 	Help:    "Duration of individual chat API calls in seconds",
-	Buckets: []float64{0.25, 0.5, 1, 2, 4, 8, 15, 30, 60},
+	Buckets: []float64{0.25, 0.5, 1, 2, 4, 8, 15, 30, 60, 120, 180, 300, 600},
 }, []string{"model"}))
 
 // Cached prompt tokens are the only direct evidence that the stable-prefix work is paying off
@@ -108,10 +109,11 @@ func InitializeTool(tool string) {
 	toolLatencyHistogram.WithLabelValues(tool)
 }
 
+// The buckets reach 20 minutes, the longest the turn_timeout setting lets a turn take
 var chatRequestDuration = makeCollector(prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	Name:    metricPrefix + "chat_request_duration_seconds",
 	Help:    "End-to-end duration of chat requests in seconds",
-	Buckets: []float64{0.5, 1, 2, 5, 10, 30, 60, 120},
+	Buckets: []float64{0.5, 1, 2, 5, 10, 30, 60, 120, 180, 300, 600, 900, 1200},
 }, []string{"model"}))
 
 // The buckets reach 30, the most rounds of tool calls the max_tool_iterations setting allows
@@ -167,11 +169,12 @@ var chatContextAnchorAdvances = makeCollector(prometheus.NewCounter(prometheus.C
 }))
 
 // Splits a turn into waiting on the model, waiting on tools, and getting the images it was sent
-// ready, so "slow when many tool calls are involved" can be attributed rather than guessed at
+// ready, so "slow when many tool calls are involved" can be attributed rather than guessed at. The
+// buckets reach 20 minutes, as those of a whole turn do, since a phase can take most of one.
 var chatTurnPhaseDuration = makeCollector(prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	Name:    metricPrefix + "chat_turn_phase_duration_seconds",
 	Help:    "Time spent in each phase of a chat turn in seconds",
-	Buckets: []float64{0.25, 0.5, 1, 2, 4, 8, 15, 30, 60, 120},
+	Buckets: []float64{0.25, 0.5, 1, 2, 4, 8, 15, 30, 60, 120, 300, 600, 1200},
 }, []string{"model", "phase"}))
 
 // Shows which part of the prompt the tokens are actually going to, so trimming can be aimed. The

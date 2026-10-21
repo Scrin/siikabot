@@ -3,10 +3,12 @@ package chat
 import (
 	"math"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/metrics"
 	"github.com/prometheus/client_golang/prometheus"
@@ -24,6 +26,9 @@ func seededConfig() db.ChatConfig {
 		MaxResponseTokens: 2048,
 		ImageDetail:       "low",
 		WebPartBytes:      10240,
+		TurnTimeout:       3 * time.Minute,
+		ModelTimeout:      45 * time.Second,
+		ModelAttempts:     3,
 	}
 }
 
@@ -119,6 +124,21 @@ func TestSettingValues(t *testing.T) {
 		{"image_detail", "AUTO", "auto"},
 		{"image_detail", "medium", ""},
 		{"model", "openrouter/openai/gpt-5.6-luna", "openrouter/openai/gpt-5.6-luna"},
+		{"turn_timeout", "10m", "10m"},
+		{"turn_timeout", "90s", "1m30s"},
+		{"turn_timeout", "20m", "20m"},
+		{"turn_timeout", "25m", ""},
+		{"turn_timeout", "20s", ""},
+		{"turn_timeout", "-3m", ""},
+		{"turn_timeout", "3", ""},
+		{"turn_timeout", "3M", ""},
+		{"model_timeout", "2m", "2m"},
+		{"model_timeout", "10m", "10m"},
+		{"model_timeout", "11m", ""},
+		{"model_timeout", "5s", ""},
+		{"model_attempts", "5", "5"},
+		{"model_attempts", "6", ""},
+		{"model_attempts", "0", ""},
 	} {
 		s, ok := settingByKey(tt.key)
 		if !ok {
@@ -242,6 +262,9 @@ func TestDescribeConfig(t *testing.T) {
 
 	for _, want := range []string{
 		"**Chat configuration #27**, set 2026-09-25 12:27",
+		"- `turn_timeout`: 3m — ",
+		"- `model_timeout`: 45s — ",
+		"- `model_attempts`: 3 — ",
 		"- `model`: openrouter/deepseek/deepseek-v4.1-flash — ",
 		"- `max_response_tokens`: 2048 tokens — ",
 		"- `context_high_tokens`: 16384 tokens — ",
@@ -259,7 +282,7 @@ func TestDescribeConfig(t *testing.T) {
 
 	// The window's fill is listed with the marks it is measured against
 	window := strings.Index(listing, "This thread now")
-	if window < strings.Index(listing, "`context_low_tokens`") || window > strings.Index(listing, "**Tools**") {
+	if window < strings.Index(listing, "`context_low_tokens`") || window > strings.Index(listing, "**Time**") {
 		t.Errorf("the window's fill isn't listed with the context window settings:\n%s", listing)
 	}
 }
@@ -316,6 +339,9 @@ func TestMetricBucketsCoverTheSettings(t *testing.T) {
 	metrics.RecordChatToolIterations(0)
 	metrics.RecordChatContextWindowTokens("test", 0)
 	metrics.RecordChatPromptComponent(componentHistory, 0)
+	metrics.RecordChatRequestDuration("test", 0)
+	metrics.RecordChatTurnPhase("test", phaseModel, 0)
+	metrics.RecordChatAPICallDuration("test", 0)
 
 	families, err := prometheus.DefaultGatherer.Gather()
 	if err != nil {
@@ -332,13 +358,139 @@ func TestMetricBucketsCoverTheSettings(t *testing.T) {
 		}
 	}
 
-	for name, bound := range map[string]int{
-		"siikabot_chat_tool_iterations":         maxToolIterationsBound,
-		"siikabot_chat_context_window_tokens":   maxContextTokensBound,
-		"siikabot_chat_prompt_component_tokens": maxContextTokensBound,
+	for name, bound := range map[string]float64{
+		"siikabot_chat_tool_iterations":             maxToolIterationsBound,
+		"siikabot_chat_context_window_tokens":       maxContextTokensBound,
+		"siikabot_chat_prompt_component_tokens":     maxContextTokensBound,
+		"siikabot_chat_request_duration_seconds":    maxTurnTimeout.Seconds(),
+		"siikabot_chat_turn_phase_duration_seconds": maxTurnTimeout.Seconds(),
+		"siikabot_chat_api_call_duration_seconds":   aigateway.MaxCallTimeout.Seconds(),
 	} {
-		if top, ok := tops[name]; !ok || top < float64(bound) {
-			t.Errorf("the buckets of %s reach %v, short of the bound of %d", name, top, bound)
+		if top, ok := tops[name]; !ok || top < bound {
+			t.Errorf("the buckets of %s reach %v, short of the bound of %v", name, top, bound)
 		}
+	}
+}
+
+// TestModelCallHasToFitInTheTurn verifies a model call with every attempt it may get, and the waits
+// between them, has to fit in the turn, whichever of the three settings a command changes. The advice
+// given with a refusal has to work as it stands.
+func TestModelCallHasToFitInTheTurn(t *testing.T) {
+	for _, words := range []string{
+		"model_timeout 2m turn_timeout 10m",
+		"model_attempts 1 model_timeout 10m turn_timeout 11m",
+		"turn_timeout 2m30s",
+	} {
+		changes, err := parseChanges(strings.Fields(words))
+		if err != nil {
+			t.Fatalf("%s: %v", words, err)
+		}
+		cfg := seededConfig()
+		if err := applyChanges(&cfg, changes); err != nil {
+			t.Errorf("%s was refused: %v", words, err)
+		}
+	}
+
+	for _, tt := range []struct {
+		words string
+		// advice is the command the refusal gives, empty for none
+		advice string
+	}{
+		{"model_timeout 4m", "!chat set model_timeout 4m model_attempts 3 turn_timeout 13m"},
+		{"turn_timeout 2m", "!chat set model_timeout 45s model_attempts 3 turn_timeout 3m"},
+		{"model_attempts 5", "!chat set model_timeout 45s model_attempts 5 turn_timeout 4m"},
+		// Exactly as long as the worst case isn't enough: the turn has to have more
+		{"model_attempts 1 turn_timeout 45s", "!chat set model_timeout 45s model_attempts 1 turn_timeout 1m"},
+		// Longer than any turn may be, so only lowering the others can make it fit
+		{"model_timeout 10m", ""},
+	} {
+		changes, err := parseChanges(strings.Fields(tt.words))
+		if err != nil {
+			t.Fatalf("%s: %v", tt.words, err)
+		}
+		cfg := seededConfig()
+		err = applyChanges(&cfg, changes)
+		if err == nil {
+			t.Errorf("%s was taken, want it refused", tt.words)
+			continue
+		}
+		refusal := err.Error()
+		if !strings.Contains(refusal, "`turn_timeout`") || !strings.Contains(refusal, "`model_timeout`") {
+			t.Errorf("refusing %s doesn't name the settings involved: %s", tt.words, refusal)
+		}
+		if tt.advice == "" {
+			if strings.Contains(refusal, "!chat set") {
+				t.Errorf("refusing %s advises a command no turn could take: %s", tt.words, refusal)
+			}
+			continue
+		}
+		if !strings.Contains(refusal, "`"+tt.advice+"`") {
+			t.Errorf("refusing %s advises something else: %s, want `%s`", tt.words, refusal, tt.advice)
+			continue
+		}
+		advised, err := parseChanges(strings.Fields(strings.TrimPrefix(tt.advice, "!chat set ")))
+		if err != nil {
+			t.Fatalf("the advice %q doesn't parse: %v", tt.advice, err)
+		}
+		fixed := seededConfig()
+		if err := applyChanges(&fixed, advised); err != nil {
+			t.Errorf("the advice %q is refused in turn: %v", tt.advice, err)
+		}
+	}
+}
+
+// TestHelpExamplesWork verifies every command the help texts give as an example is one !chat set
+// takes, so the help doesn't tell anyone to run a command that would be refused
+func TestHelpExamplesWork(t *testing.T) {
+	examples := regexp.MustCompile("`!chat set ([^`<]+)`")
+	found := 0
+	for _, s := range settings {
+		for _, example := range examples.FindAllStringSubmatch(s.help, -1) {
+			found++
+			changes, err := parseChanges(strings.Fields(example[1]))
+			if err != nil {
+				t.Errorf("the help of %s gives %q, which doesn't parse: %v", s.key, example[0], err)
+				continue
+			}
+			cfg := seededConfig()
+			if err := applyChanges(&cfg, changes); err != nil {
+				t.Errorf("the help of %s gives %q, which is refused: %v", s.key, example[0], err)
+			}
+		}
+	}
+	if found == 0 {
+		t.Error("found no examples in the help texts")
+	}
+}
+
+func TestFormatDuration(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		3 * time.Minute:                "3m",
+		20 * time.Minute:               "20m",
+		45 * time.Second:               "45s",
+		10 * time.Second:               "10s",
+		90 * time.Second:               "1m30s",
+		time.Hour:                      "1h",
+		time.Hour + 30*time.Minute:     "1h30m",
+		2250 * time.Millisecond:        "2.25s",
+		2*time.Minute + 17*time.Second: "2m17s",
+	} {
+		if got := formatDuration(d); got != want {
+			t.Errorf("formatDuration(%s) = %q, want %q", d, got, want)
+		}
+		// What the listing shows, !chat set takes back
+		if parsed, err := time.ParseDuration(formatDuration(d)); err != nil || parsed != d {
+			t.Errorf("formatDuration(%s) = %q, which reads back as %s, %v", d, formatDuration(d), parsed, err)
+		}
+	}
+}
+
+// TestRedactionMemoryOutlastsTurns ties how long a redaction is remembered to how long turns may take.
+// A turn still running, or queued behind others, when the redaction of its trigger is forgotten would
+// write the redacted message back into the history, which the chat privacy invariant forbids.
+func TestRedactionMemoryOutlastsTurns(t *testing.T) {
+	if redactionMemory < 10*maxTurnTimeout {
+		t.Errorf("a redaction is remembered for %s, less than ten turns of the longest %s allowed",
+			redactionMemory, maxTurnTimeout)
 	}
 }
