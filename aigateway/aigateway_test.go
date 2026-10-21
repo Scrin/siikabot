@@ -90,6 +90,31 @@ func TestChatRequestOmitsEmptyOptionalFields(t *testing.T) {
 	if _, ok := got["max_tokens"]; ok {
 		t.Error("max_tokens should be omitted when unset")
 	}
+	if _, ok := got["tool_choice"]; ok {
+		t.Error("tool_choice should be omitted when unset")
+	}
+}
+
+// TestChatRequestToolChoice verifies tool_choice reaches the body as the plain string the OpenAI
+// shape takes
+func TestChatRequestToolChoice(t *testing.T) {
+	data, err := json.Marshal(ChatRequest{
+		Model:      "openrouter/deepseek/deepseek-v4.1-flash",
+		Messages:   []Message{{Role: "user", Content: "Hello"}},
+		ToolChoice: "none",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got["tool_choice"] != "none" {
+		t.Errorf("tool_choice = %v, want none", got["tool_choice"])
+	}
 }
 
 // TestChatCompletionsURL verifies the inference URL targets the Unified API, which is the only

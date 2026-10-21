@@ -110,6 +110,10 @@ type ChatRequest struct {
 	Tools     []ToolDefinition `json:"tools,omitempty"`
 	MaxTokens *int             `json:"max_tokens,omitempty"`
 
+	// ToolChoice "none" offers the tools without letting the model call them. Left empty, the
+	// provider decides, which with tools offered means the model may call them.
+	ToolChoice string `json:"tool_choice,omitempty"`
+
 	// Metadata travels in the cf-aig-metadata header rather than the body, and Cloudflare turns it
 	// into attributes on its own span and filterable fields in its logs
 	Metadata map[string]string `json:"-"`

@@ -47,7 +47,7 @@ func TestExtractAssistantResponse(t *testing.T) {
 
 // Every way a turn can fail tells the room something, and a timeout says what the user can do
 func TestFailureMessage(t *testing.T) {
-	outcomes := []string{"config_unavailable", "request_failed", "turn_timeout", "no_choices", "tool_failed", "empty_response"}
+	outcomes := []string{"config_unavailable", "request_failed", "turn_timeout", "no_choices", "tool_failed", "tool_limit", "empty_response"}
 	for _, outcome := range outcomes {
 		if failureMessage(outcome) == "" {
 			t.Errorf("failureMessage(%q) is empty", outcome)

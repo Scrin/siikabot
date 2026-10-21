@@ -438,6 +438,8 @@ func failureMessage(outcome string) string {
 		return "No response from chat API"
 	case "tool_failed":
 		return "Failed to process tool calls"
+	case "tool_limit":
+		return "That needed more tool calls than one answer allows, so I stopped before finishing. Try again, or ask something narrower."
 	default:
 		return "Failed to process chat request"
 	}
@@ -942,15 +944,15 @@ func processToolCalls(
 
 	// After iterations are complete or max iterations reached, get the final response
 	if currentResp.Choices[0].FinishReason == "tool_calls" && iterationCount >= maxIterations {
-		// We hit the maximum number of iterations but the model still wants to use tools
-		// Make one final request without tools to get a text response
+		// We hit the maximum number of iterations but the model still wants to use tools. Run the
+		// calls it made, then make one final request that can't call any more.
 		log.Debug().Ctx(ctx).
 			Str("room_id", roomID).
 			Str("sender", sender).
 			Str("model", model).
 			Bool("has_image", hasImage).
 			Int("iteration", iterationCount).
-			Msg("Reached maximum tool iterations, making final request without tools")
+			Msg("Reached maximum tool iterations, making final request that can't call tools")
 
 		// Add the last assistant message with tool calls
 		messages = append(messages, aigateway.Message{
@@ -989,13 +991,9 @@ func processToolCalls(
 			})
 		}
 
-		// Final request without tools
-		req := aigateway.ChatRequest{
-			Model:     model,
-			Messages:  messages,
-			MaxTokens: &maxTokens,
-			Metadata:  gatewayMetadata(roomID, sender, iterationCount),
-		}
+		// Final request, which tells the model the tools are spent and doesn't let it call them
+		req := toolLimitRequest(model, messages, tools, maxTokens, gatewayMetadata(roomID, sender, iterationCount))
+		messages = req.Messages
 
 		// Log the final request
 		log.Debug().Ctx(ctx).
@@ -1004,7 +1002,7 @@ func processToolCalls(
 			Str("model", model).
 			Bool("has_image", hasImage).
 			Int("message_count", len(messages)).
-			Msg("Sending final request without tools")
+			Msg("Sending final request that can't call tools")
 
 		// Send the final request to the AI Gateway
 		callStart := time.Now()
@@ -1024,6 +1022,20 @@ func processToolCalls(
 				Bool("has_image", hasImage).
 				Msg("Final chat API returned no choices")
 			return iterationCount, messages, nil, "no_choices"
+		}
+
+		// The model may still try to call a tool, from a provider that ignores tool_choice. There is
+		// nothing to run the call with, and no answer.
+		if asksOnlyForTools(finalResp) {
+			log.Warn().Ctx(ctx).
+				Str("room_id", roomID).
+				Str("model", model).
+				Bool("has_image", hasImage).
+				Int("iteration", iterationCount).
+				Int("tool_calls", len(finalResp.Choices[0].Message.ToolCalls)).
+				Str("finish_reason", finalResp.Choices[0].FinishReason).
+				Msg("Model asked for more tools after reaching the tool iteration limit")
+			return iterationCount, messages, nil, "tool_limit"
 		}
 
 		currentResp = finalResp
