@@ -163,7 +163,7 @@ describe('useInterpolatedUptime', () => {
 
   describe('interval cleanup', () => {
     it('should clear interval on unmount', () => {
-      const clearIntervalSpy = vi.spyOn(global, 'clearInterval')
+      const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval')
       const { unmount } = renderHook(() => useInterpolatedUptime('1h0m0s'))
 
       unmount()

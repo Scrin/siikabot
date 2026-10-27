@@ -1,4 +1,4 @@
-FROM node:22-bookworm AS frontend-builder
+FROM node:26-trixie AS frontend-builder
 
 WORKDIR /build/web_frontend
 

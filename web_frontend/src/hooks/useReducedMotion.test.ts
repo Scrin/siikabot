@@ -22,7 +22,7 @@ describe('useReducedMotion', () => {
       removeEventListener: vi.fn(),
       dispatchEvent: vi.fn(),
     }))
-    window.matchMedia = mockMatchMedia
+    window.matchMedia = mockMatchMedia as unknown as typeof window.matchMedia
   })
 
   it('should return false when user does not prefer reduced motion', () => {

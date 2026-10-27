@@ -17,7 +17,7 @@ import {
 describe('API Client', () => {
   beforeEach(() => {
     vi.resetAllMocks()
-    global.fetch = vi.fn()
+    globalThis.fetch = vi.fn()
   })
 
   describe('AuthError', () => {
