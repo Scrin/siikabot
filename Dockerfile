@@ -10,7 +10,7 @@ RUN npm ci --ignore-scripts
 COPY web_frontend/ ./
 RUN npm run build
 
-FROM golang:1.25 AS builder
+FROM golang:1.27-trixie AS builder
 
 RUN apt-get update && apt-get install -y libolm-dev && apt-get clean
 
@@ -29,7 +29,7 @@ COPY --from=frontend-builder /build/web_frontend/dist ./bot/frontend/dist
 # Build the Go binary with embedded frontend
 RUN CGO_ENABLED=1 go build -tags embed -o /go/bin/siikabot
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 RUN apt-get update && \
   apt-get install -y --no-install-recommends libolm3 ca-certificates inetutils-ping traceroute && \

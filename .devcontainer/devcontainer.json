@@ -6,8 +6,8 @@
   "workspaceFolder": "/workspace",
   "remoteUser": "node",
   "features": {
-    // Go backend toolchain. Pinned to the same minor as go.mod's `go 1.25.0` and
-    // the `golang:1.25` builder stage in the repo-root Dockerfile, so a local
+    // Go backend toolchain. Pinned to the same minor as go.mod's `go 1.27.0` and
+    // the `golang:1.27-trixie` builder stage in the repo-root Dockerfile, so a local
     // `go build` fails and succeeds for the same reasons CI does.
     //
     // The base image is javascript-node, which ships no Go at all — without this
@@ -16,7 +16,7 @@
     // Only `version` and `golangciLintVersion` are valid options (feature v1.3.4);
     // the feature sets GOROOT=/usr/local/go, GOPATH=/go and extends PATH itself.
     "ghcr.io/devcontainers/features/go:1": {
-      "version": "1.25"
+      "version": "1.27"
     }
   },
   "containerEnv": {

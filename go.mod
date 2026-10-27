@@ -1,6 +1,6 @@
 module github.com/Scrin/siikabot
 
-go 1.25.0
+go 1.27.0
 
 require (
 	codeberg.org/readeck/go-readability/v2 v2.1.3

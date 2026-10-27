@@ -26,9 +26,9 @@ const (
 )
 
 var (
-	ErrChallengeNotFound  = errors.New("challenge not found or expired")
-	ErrTooManyChallenges  = errors.New("too many pending challenges")
-	ErrInvalidPollSecret  = errors.New("invalid poll secret")
+	ErrChallengeNotFound = errors.New("challenge not found or expired")
+	ErrTooManyChallenges = errors.New("too many pending challenges")
+	ErrInvalidPollSecret = errors.New("invalid poll secret")
 )
 
 // challengeEntry stores a pending authentication challenge
