@@ -2,6 +2,8 @@ package matrix
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -9,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"maunium.net/go/mautrix"
 )
 
 // TestSendOutcomeMarksFailuresOnTheSpan is the regression test for A4.
@@ -139,5 +142,36 @@ func TestDisplayNameLookupRoundTrips(t *testing.T) {
 	entry, ok := lookupDisplayName(mxid)
 	if !ok || entry.name != "Stored" {
 		t.Errorf("lookupDisplayName = %+v, %v", entry, ok)
+	}
+}
+
+// TestDisplayNameFallsBackToTheUserID covers someone without a display name. The homeserver answers
+// M_NOT_FOUND, which mautrix turns into an empty name rather than an error, and an empty name would
+// leave a reminder's pill without any text.
+func TestDisplayNameFallsBackToTheUserID(t *testing.T) {
+	const mxid = "@nameless:example.org"
+
+	homeserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"errcode":"M_NOT_FOUND","error":"Profile field not found"}`))
+	}))
+	t.Cleanup(homeserver.Close)
+
+	testClient, err := mautrix.NewClient(homeserver.URL, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := client
+	client = testClient
+	t.Cleanup(func() {
+		client = previous
+		displayNameCache.Lock()
+		delete(displayNameCache.entries, mxid)
+		displayNameCache.Unlock()
+	})
+
+	if got := GetDisplayName(context.Background(), mxid); got != mxid {
+		t.Errorf("GetDisplayName = %q, want %q", got, mxid)
 	}
 }

@@ -1,11 +1,32 @@
 package matrix
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"maunium.net/go/mautrix/event"
+	"maunium.net/go/mautrix/id"
 )
+
+// The crypto machine reads a room's history visibility through the state store, which answers from
+// the same cache the visibility check uses
+func TestGetHistoryVisibilityReadsTheCache(t *testing.T) {
+	const roomID = "!history:example.com"
+
+	historyVisibilityCache.Lock()
+	historyVisibilityCache.entries[roomID] = historyVisibilityEntry{visibility: event.HistoryVisibilityJoined, fetchedAt: time.Now()}
+	historyVisibilityCache.Unlock()
+	t.Cleanup(func() { invalidateHistoryVisibility(roomID) })
+
+	content, err := NewStateStore().GetHistoryVisibility(context.Background(), id.RoomID(roomID))
+	if err != nil {
+		t.Fatalf("GetHistoryVisibility() error = %v", err)
+	}
+	if content == nil || content.HistoryVisibility != event.HistoryVisibilityJoined {
+		t.Errorf("GetHistoryVisibility() = %#v, want joined", content)
+	}
+}
 
 func TestRoomMemberReadsAMembershipEvent(t *testing.T) {
 	sent := time.Date(2026, 9, 25, 14, 2, 0, 0, time.UTC)

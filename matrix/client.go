@@ -96,12 +96,17 @@ func GetDisplayName(ctx context.Context, mxid string) string {
 	if dn == nil {
 		return mxid
 	}
+	// Someone without a display name goes by their user ID, as in clients
+	name := dn.DisplayName
+	if name == "" {
+		name = mxid
+	}
 
 	displayNameCache.Lock()
-	displayNameCache.entries[mxid] = displayNameEntry{name: dn.DisplayName, fetchedAt: time.Now()}
+	displayNameCache.entries[mxid] = displayNameEntry{name: name, fetchedAt: time.Now()}
 	displayNameCache.Unlock()
 
-	return dn.DisplayName
+	return name
 }
 
 func GetRoomName(ctx context.Context, roomID string) string {
@@ -178,6 +183,7 @@ func Init(ctx context.Context, handleEvent func(ctx context.Context, evt *event.
 	})
 	syncer.OnEventType(event.StateHistoryVisibility, func(ctx context.Context, evt *event.Event) {
 		invalidateHistoryVisibility(evt.RoomID.String())
+		olmMachine.HandleHistoryVisibility(ctx, evt)
 	})
 	syncer.OnEventType(event.StateEncryption, func(ctx context.Context, evt *event.Event) {
 		stateStore.SetEncryptionEvent(ctx, evt)

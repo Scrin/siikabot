@@ -22,7 +22,10 @@ func NewCryptoStore() *CryptoStore {
 		return nil
 	}
 	cs := crypto.NewSQLCryptoStore(database, &dbLogger{}, config.UserID, "siikabot", []byte(config.PickleKey))
-	cs.DB.Upgrade(context.Background())
+	ctx := context.Background()
+	if err := cs.DB.Upgrade(ctx); err != nil {
+		log.Error().Ctx(ctx).Err(err).Msg("Failed to upgrade crypto store")
+	}
 	return &CryptoStore{SQLCryptoStore: cs}
 }
 

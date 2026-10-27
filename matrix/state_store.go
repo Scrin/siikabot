@@ -39,6 +39,17 @@ func (store *StateStore) SetEncryptionEvent(ctx context.Context, event *event.Ev
 	return db.SaveEncryptionEvent(ctx, event.RoomID, &event.Content)
 }
 
+// GetHistoryVisibility returns who a room shows its history to. The crypto machine asks when it starts
+// a Megolm session, to mark whether the session's keys may be shared along with the room's history.
+func (store *StateStore) GetHistoryVisibility(ctx context.Context, roomID mid.RoomID) (*event.HistoryVisibilityEventContent, error) {
+	visibility, err := historyVisibility(ctx, roomID.String())
+	if err != nil {
+		// Already logged
+		return nil, err
+	}
+	return &event.HistoryVisibilityEventContent{HistoryVisibility: visibility}, nil
+}
+
 func (store *StateStore) FindSharedRooms(ctx context.Context, userId mid.UserID) ([]mid.RoomID, error) {
 	return db.FindSharedRooms(ctx, userId)
 }
