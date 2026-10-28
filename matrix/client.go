@@ -35,6 +35,8 @@ type simpleMessage struct {
 	FormattedBody string           `json:"formatted_body,omitempty"`
 	RelatesTo     *event.RelatesTo `json:"m.relates_to,omitempty"`
 	DebugData     map[string]any   `json:"fi.2kgwf.debug,omitempty"`
+	// WebhookOrigin is the webhook a message was relayed from, nil for the bot's own words
+	WebhookOrigin *WebhookOrigin `json:"fi.2kgwf.webhook,omitempty"`
 }
 
 func JoinRoom(ctx context.Context, roomID string) {

@@ -254,3 +254,44 @@ export interface MessageActivityResponse {
   /** The rooms with anything counted or any chat turns in the period, most messages first */
   rooms: RoomActivity[]
 }
+
+// Webhook types
+
+/** A webhook that posts the messages sent to its URL into a room (admin only) */
+export interface WebhookResponse {
+  id: string
+  /** Shown in brackets before every message the webhook posts */
+  name: string
+  room_id: string
+  room_name?: string
+  /** Whether the bot is in the room. Until it is back, or the webhook is moved, nothing can be posted. */
+  bot_in_room: boolean
+  /** Where messages are sent, with the webhook's token as a bearer token */
+  url: string
+  created_at: string
+  /** When a message was last delivered, null if none has been */
+  last_used_at: string | null
+}
+
+export interface WebhooksResponse {
+  webhooks: WebhookResponse[]
+}
+
+/** A new webhook. The token is only ever sent: the server keeps its hash, so it can't be read back. */
+export interface CreateWebhookRequest {
+  name: string
+  room_id: string
+  token: string
+}
+
+/** The changes to a webhook. Only the fields given change, and a new token replaces the old one. */
+export interface UpdateWebhookRequest {
+  name?: string
+  room_id?: string
+  token?: string
+}
+
+/** A webhook as it was created or changed */
+export interface SavedWebhookResponse {
+  webhook: WebhookResponse
+}

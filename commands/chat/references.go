@@ -109,6 +109,7 @@ func quoteOf(ctx context.Context, roomID string, msg *matrix.Message, room roomI
 		Sender:     msg.Sender,
 		SenderName: room.nameOf(ctx, msg.Sender),
 		SentAt:     msg.Timestamp,
+		RelayedBy:  msg.RelayedBy(),
 	}
 	if isImage {
 		quote.Kind = db.QuoteImage

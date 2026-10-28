@@ -126,6 +126,9 @@ type QuotedMessage struct {
 	Kind string
 	// Body is the quoted text, or the caption of an image, if it has one
 	Body string
+	// RelayedBy is the name of the webhook the bot relayed the message from, empty for any other
+	// message
+	RelayedBy string
 }
 
 // ChatImage is an image a user turn showed the model, as prepared for it
@@ -258,10 +261,10 @@ func insertReference(ctx context.Context, executor chatMessageExecutor, historyI
 	}
 
 	_, err := executor.Exec(ctx,
-		`INSERT INTO chat_references (history_id, position, relation, event_id, sender, sender_name, sent_at, kind, body)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		`INSERT INTO chat_references (history_id, position, relation, event_id, sender, sender_name, sent_at, kind, body, relayed_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, ''))`,
 		historyID, position, reference.Relation, reference.EventID, reference.Sender, reference.SenderName,
-		reference.SentAt, reference.Kind, body)
+		reference.SentAt, reference.Kind, body, reference.RelayedBy)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).
 			Int64("history_id", historyID).
@@ -526,6 +529,7 @@ type referenceRow struct {
 	SentAt     time.Time `db:"sent_at"`
 	Kind       string    `db:"kind"`
 	Body       *string   `db:"body"`
+	RelayedBy  *string   `db:"relayed_by"`
 }
 
 // loadReferences reads the messages the user rows among messages refer to, in their order
@@ -536,7 +540,7 @@ func loadReferences(ctx context.Context, roomID string, messages []ChatMessage) 
 	}
 
 	rows, err := pool.Query(ctx,
-		`SELECT history_id, relation, event_id, sender, sender_name, sent_at, kind, body
+		`SELECT history_id, relation, event_id, sender, sender_name, sent_at, kind, body, relayed_by
 		FROM chat_references WHERE history_id = ANY($1) ORDER BY history_id, position`,
 		ids)
 	if err != nil {
@@ -560,6 +564,7 @@ func loadReferences(ctx context.Context, roomID string, messages []ChatMessage) 
 				SentAt:     ref.SentAt,
 				Kind:       ref.Kind,
 				Body:       stringOrEmpty(ref.Body),
+				RelayedBy:  stringOrEmpty(ref.RelayedBy),
 			},
 		})
 	}

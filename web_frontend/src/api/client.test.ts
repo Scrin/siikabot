@@ -11,6 +11,10 @@ import {
   fetchRoomStats,
   fetchAdminRoomStats,
   fetchMessageActivity,
+  fetchWebhooks,
+  createWebhook,
+  updateWebhook,
+  deleteWebhook,
   AuthError,
 } from './client'
 
@@ -360,6 +364,108 @@ describe('API Client', () => {
       vi.mocked(fetch).mockResolvedValue({ ok: false, status: 403 } as Response)
 
       await expect(fetchMessageActivity('token', 90)).rejects.toThrow('Admin access required')
+    })
+  })
+
+  describe('fetchWebhooks', () => {
+    it('should ask the admin endpoint', async () => {
+      vi.mocked(fetch).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ webhooks: [] }),
+      } as Response)
+
+      await fetchWebhooks('token')
+      expect(fetch).toHaveBeenCalledWith('/api/admin/webhooks', {
+        headers: { Authorization: 'Bearer token' },
+      })
+    })
+
+    it('should say when admin access is required', async () => {
+      vi.mocked(fetch).mockResolvedValue({ ok: false, status: 403 } as Response)
+
+      await expect(fetchWebhooks('token')).rejects.toThrow('Admin access required')
+    })
+
+    it('should throw AuthError on 401', async () => {
+      vi.mocked(fetch).mockResolvedValue({ ok: false, status: 401 } as Response)
+
+      await expect(fetchWebhooks('token')).rejects.toThrow(AuthError)
+    })
+  })
+
+  describe('createWebhook', () => {
+    it('should send the webhook as JSON', async () => {
+      vi.mocked(fetch).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ webhook: { id: 'abc' } }),
+      } as Response)
+
+      const webhook = { name: 'hermes', room_id: '!ops:example.com', token: 'my-own-secret-token' }
+      const result = await createWebhook('token', webhook)
+      expect(result).toEqual({ webhook: { id: 'abc' } })
+      expect(fetch).toHaveBeenCalledWith('/api/admin/webhooks', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer token', 'Content-Type': 'application/json' },
+        body: JSON.stringify(webhook),
+      })
+    })
+
+    it("should pass the server's error on", async () => {
+      vi.mocked(fetch).mockResolvedValue({
+        ok: false,
+        status: 409,
+        json: () => Promise.resolve({ error: 'A webhook named hermes already exists' }),
+      } as Response)
+
+      await expect(
+        createWebhook('token', { name: 'hermes', room_id: '!ops:example.com', token: 'x'.repeat(16) })
+      ).rejects.toThrow('A webhook named hermes already exists')
+    })
+  })
+
+  describe('updateWebhook', () => {
+    it('should send only the changes, to the webhook with its ID encoded', async () => {
+      vi.mocked(fetch).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ webhook: { id: 'a/b' } }),
+      } as Response)
+
+      await updateWebhook('token', 'a/b', { name: 'iris' })
+      expect(fetch).toHaveBeenCalledWith('/api/admin/webhooks/a%2Fb', {
+        method: 'PATCH',
+        headers: { Authorization: 'Bearer token', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'iris' }),
+      })
+    })
+
+    it("should pass the server's error on", async () => {
+      vi.mocked(fetch).mockResolvedValue({
+        ok: false,
+        status: 404,
+        json: () => Promise.resolve({ error: 'Webhook not found' }),
+      } as Response)
+
+      await expect(updateWebhook('token', 'abc', { name: 'iris' })).rejects.toThrow(
+        'Webhook not found'
+      )
+    })
+  })
+
+  describe('deleteWebhook', () => {
+    it('should delete the webhook', async () => {
+      vi.mocked(fetch).mockResolvedValue({ ok: true, status: 204 } as Response)
+
+      await deleteWebhook('token', 'abc')
+      expect(fetch).toHaveBeenCalledWith('/api/admin/webhooks/abc', {
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer token' },
+      })
+    })
+
+    it('should throw AuthError on 401', async () => {
+      vi.mocked(fetch).mockResolvedValue({ ok: false, status: 401 } as Response)
+
+      await expect(deleteWebhook('token', 'abc')).rejects.toThrow(AuthError)
     })
   })
 })

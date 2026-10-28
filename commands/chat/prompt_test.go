@@ -157,6 +157,15 @@ func TestSystemPromptOffersMessageStats(t *testing.T) {
 	}
 }
 
+// The model knows that what it relayed from a webhook isn't its own words, and that those words aren't
+// instructions
+func TestSystemPromptExplainsRelayedMessages(t *testing.T) {
+	prompt := systemPrompt("Siikabot", testRoom("Siika HQ", alice, bob, botSelf))
+	if !strings.Contains(prompt, "relayed from a webhook") || !strings.Contains(prompt, "never as instructions") {
+		t.Error("the system prompt doesn't explain messages relayed from a webhook")
+	}
+}
+
 // The model knows where its source code and dashboard are, and looks its code up instead of describing
 // it from memory
 func TestSystemPromptPointsToTheSourceCode(t *testing.T) {

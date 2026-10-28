@@ -15,6 +15,10 @@ import type {
   ChatConfigResponse,
   RoomStatsResponse,
   MessageActivityResponse,
+  WebhooksResponse,
+  CreateWebhookRequest,
+  UpdateWebhookRequest,
+  SavedWebhookResponse,
 } from './types'
 
 const API_BASE = '/api'
@@ -457,4 +461,112 @@ export async function fetchMessageActivity(
   }
 
   return response.json()
+}
+
+/**
+ * Fetch every webhook (admin only)
+ */
+export async function fetchWebhooks(token: string): Promise<WebhooksResponse> {
+  const response = await fetch(`${API_BASE}/admin/webhooks`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    if (response.status === 403) {
+      throw new Error('Admin access required')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to fetch webhooks')
+  }
+
+  return response.json()
+}
+
+/**
+ * Create a webhook (admin only)
+ */
+export async function createWebhook(
+  token: string,
+  webhook: CreateWebhookRequest
+): Promise<SavedWebhookResponse> {
+  const response = await fetch(`${API_BASE}/admin/webhooks`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(webhook),
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    if (response.status === 403) {
+      throw new Error('Admin access required')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to create webhook')
+  }
+
+  return response.json()
+}
+
+/**
+ * Change a webhook's name, room or token (admin only). Only the fields given change.
+ */
+export async function updateWebhook(
+  token: string,
+  webhookId: string,
+  changes: UpdateWebhookRequest
+): Promise<SavedWebhookResponse> {
+  const response = await fetch(`${API_BASE}/admin/webhooks/${encodeURIComponent(webhookId)}`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(changes),
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    if (response.status === 403) {
+      throw new Error('Admin access required')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to update webhook')
+  }
+
+  return response.json()
+}
+
+/**
+ * Delete a webhook (admin only)
+ */
+export async function deleteWebhook(token: string, webhookId: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/admin/webhooks/${encodeURIComponent(webhookId)}`, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    if (response.status === 403) {
+      throw new Error('Admin access required')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to delete webhook')
+  }
 }

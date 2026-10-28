@@ -5,6 +5,7 @@ import (
 
 	"github.com/Scrin/siikabot/api"
 	"github.com/Scrin/siikabot/config"
+	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/metrics"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -66,6 +67,10 @@ func initHTTP() {
 				adminGroup.GET("/chat-usage", api.ChatUsageHandler)
 				adminGroup.GET("/chat-config", api.ChatConfigHandler)
 				adminGroup.GET("/message-activity", api.MessageActivityHandler)
+				adminGroup.GET("/webhooks", api.WebhooksHandler)
+				adminGroup.POST("/webhooks", api.CreateWebhookHandler)
+				adminGroup.PATCH("/webhooks/:id", api.UpdateWebhookHandler)
+				adminGroup.DELETE("/webhooks/:id", api.DeleteWebhookHandler)
 			}
 		}
 	}
@@ -82,6 +87,11 @@ func initHTTP() {
 		alertmanagerGroup := hooksGroup.Group("/alertmanager")
 		alertmanagerGroup.Use(AlertmanagerBasicAuthMiddleware(config.AlertmanagerUser, config.AlertmanagerPassword))
 		alertmanagerGroup.POST("", AlertmanagerWebhookHandler)
+
+		// Webhooks the admin sets up on the web dashboard, each with its own bearer token
+		messageGroup := hooksGroup.Group("/message/:id")
+		messageGroup.Use(MessageHookAuthMiddleware(db.GetWebhook))
+		messageGroup.POST("", MessageHookHandler)
 	}
 
 	// Prometheus metrics endpoint

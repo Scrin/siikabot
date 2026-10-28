@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/Scrin/siikabot/auth"
 	"github.com/Scrin/siikabot/config"
@@ -39,6 +41,13 @@ type Authorizations struct {
 // ErrorResponse is a generic error response
 type ErrorResponse struct {
 	Error string `json:"error"`
+}
+
+// ErrorFrom is an error response that says what went wrong, written as a sentence
+func ErrorFrom(err error) ErrorResponse {
+	text := err.Error()
+	first, size := utf8.DecodeRuneInString(text)
+	return ErrorResponse{Error: string(unicode.ToUpper(first)) + text[size:]}
 }
 
 // ChallengeHandler generates a new authentication challenge
@@ -113,7 +122,7 @@ func PollHandler(c *gin.Context) {
 func MeHandler(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	token := extractBearerToken(c.Request)
+	token := ExtractBearerToken(c.Request)
 	if token == "" {
 		c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "Missing or invalid Authorization header"})
 		return
@@ -141,7 +150,7 @@ func MeHandler(c *gin.Context) {
 func LogoutHandler(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	token := extractBearerToken(c.Request)
+	token := ExtractBearerToken(c.Request)
 	if token == "" {
 		c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "Missing or invalid Authorization header"})
 		return
@@ -166,8 +175,9 @@ func LogoutHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-// extractBearerToken extracts the token from the Authorization header
-func extractBearerToken(r *http.Request) string {
+// ExtractBearerToken extracts the token from the Authorization header, or returns an empty string if
+// there is none
+func ExtractBearerToken(r *http.Request) string {
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
 		return ""
@@ -186,7 +196,7 @@ func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 
-		token := extractBearerToken(c.Request)
+		token := ExtractBearerToken(c.Request)
 		if token == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, ErrorResponse{Error: "Missing or invalid Authorization header"})
 			return

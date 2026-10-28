@@ -7,6 +7,10 @@ import {
   useMetrics,
   useReminders,
   useRooms,
+  useWebhooks,
+  useCreateWebhook,
+  useUpdateWebhook,
+  useDeleteWebhook,
   queryKeys,
 } from './queries'
 import { AuthProvider } from '../context/AuthContext'
@@ -17,6 +21,10 @@ vi.mock('./client', () => ({
   fetchMetrics: vi.fn(),
   fetchReminders: vi.fn(),
   fetchRooms: vi.fn(),
+  fetchWebhooks: vi.fn(),
+  createWebhook: vi.fn(),
+  updateWebhook: vi.fn(),
+  deleteWebhook: vi.fn(),
   fetchCurrentUser: vi.fn(),
   logout: vi.fn(),
   AuthError: class AuthError extends Error {
@@ -59,6 +67,7 @@ describe('React Query Hooks', () => {
       expect(queryKeys.reminders).toEqual(['reminders'])
       expect(queryKeys.rooms).toEqual(['rooms'])
       expect(queryKeys.adminRooms).toEqual(['adminRooms'])
+      expect(queryKeys.webhooks).toEqual(['webhooks'])
 
       // Test function-based keys
       expect(queryKeys.roomMembers('room1')).toEqual(['roomMembers', 'room1'])
@@ -188,4 +197,104 @@ describe('React Query Hooks', () => {
     })
   })
 
+  describe('useWebhooks', () => {
+    it('should not fetch for someone who is not the admin', async () => {
+      localStorage.setItem('siikabot_auth_token', 'valid-token')
+      vi.mocked(client.fetchCurrentUser).mockResolvedValue({
+        user_id: '@user:example.com',
+        authorizations: { admin: false },
+      })
+
+      const { result } = renderHook(() => useWebhooks(), { wrapper: createWrapper() })
+
+      await waitFor(() => {
+        expect(client.fetchCurrentUser).toHaveBeenCalled()
+      })
+      expect(result.current.fetchStatus).toBe('idle')
+      expect(client.fetchWebhooks).not.toHaveBeenCalled()
+    })
+
+    it('should fetch for the admin', async () => {
+      localStorage.setItem('siikabot_auth_token', 'valid-token')
+      vi.mocked(client.fetchCurrentUser).mockResolvedValue({
+        user_id: '@admin:example.com',
+        authorizations: { admin: true },
+      })
+      vi.mocked(client.fetchWebhooks).mockResolvedValue({ webhooks: [] })
+
+      const { result } = renderHook(() => useWebhooks(), { wrapper: createWrapper() })
+
+      await waitFor(() => {
+        expect(result.current.isSuccess).toBe(true)
+      })
+
+      expect(client.fetchWebhooks).toHaveBeenCalledWith('valid-token')
+    })
+  })
+
+  describe('webhook mutations', () => {
+    const webhook = {
+      id: 'abc',
+      name: 'hermes',
+      room_id: '!ops:example.com',
+      bot_in_room: true,
+      url: 'https://bot.example.com/hooks/message/abc',
+      created_at: '2026-10-20T08:00:00Z',
+      last_used_at: null,
+    }
+
+    function signInAsAdmin() {
+      localStorage.setItem('siikabot_auth_token', 'valid-token')
+      vi.mocked(client.fetchCurrentUser).mockResolvedValue({
+        user_id: '@admin:example.com',
+        authorizations: { admin: true },
+      })
+    }
+
+    // The hooks are rendered together with useWebhooks, so a mutation that refreshes the list
+    // shows up as a second fetch
+    function renderWithList<T>(useMutationHook: () => T) {
+      vi.mocked(client.fetchWebhooks).mockResolvedValue({ webhooks: [webhook] })
+      return renderHook(() => ({ list: useWebhooks(), mutation: useMutationHook() }), {
+        wrapper: createWrapper(),
+      })
+    }
+
+    it('should create a webhook and refresh the list', async () => {
+      signInAsAdmin()
+      vi.mocked(client.createWebhook).mockResolvedValue({ webhook })
+      const { result } = renderWithList(useCreateWebhook)
+      await waitFor(() => expect(result.current.list.isSuccess).toBe(true))
+
+      const request = { name: 'hermes', room_id: '!ops:example.com', token: 'my-own-secret-token' }
+      await result.current.mutation.mutateAsync(request)
+
+      expect(client.createWebhook).toHaveBeenCalledWith('valid-token', request)
+      await waitFor(() => expect(client.fetchWebhooks).toHaveBeenCalledTimes(2))
+    })
+
+    it('should update a webhook and refresh the list', async () => {
+      signInAsAdmin()
+      vi.mocked(client.updateWebhook).mockResolvedValue({ webhook })
+      const { result } = renderWithList(useUpdateWebhook)
+      await waitFor(() => expect(result.current.list.isSuccess).toBe(true))
+
+      await result.current.mutation.mutateAsync({ id: 'abc', changes: { name: 'iris' } })
+
+      expect(client.updateWebhook).toHaveBeenCalledWith('valid-token', 'abc', { name: 'iris' })
+      await waitFor(() => expect(client.fetchWebhooks).toHaveBeenCalledTimes(2))
+    })
+
+    it('should delete a webhook and refresh the list', async () => {
+      signInAsAdmin()
+      vi.mocked(client.deleteWebhook).mockResolvedValue(undefined)
+      const { result } = renderWithList(useDeleteWebhook)
+      await waitFor(() => expect(result.current.list.isSuccess).toBe(true))
+
+      await result.current.mutation.mutateAsync('abc')
+
+      expect(client.deleteWebhook).toHaveBeenCalledWith('valid-token', 'abc')
+      await waitFor(() => expect(client.fetchWebhooks).toHaveBeenCalledTimes(2))
+    })
+  })
 })

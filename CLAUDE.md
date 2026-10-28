@@ -11,6 +11,7 @@ This document provides context for working with SiikaBot using Claude Code CLI.
 - **Network Utilities** - Ping and traceroute commands
 - **Reminders** - Time-based reminder system with natural language parsing
 - **Alerting** - Alertmanager webhook relayed into Matrix rooms
+- **Message Webhooks** - Webhooks the admin sets up on the web dashboard, which post the Markdown message a request brings into a room, under the webhook's name
 - **Federation Info** - Matrix server federation details
 - **Web Dashboard** - React-based system health monitoring UI
 
@@ -52,7 +53,7 @@ In general, each command or webhook is considered a **self-contained feature** a
 
 **Non-negotiable.** The chat model may only see room content that was addressed to the bot, plus the messages that such a message explicitly refers to: the one it replies to, and up to three it links to.
 
-- A message is addressed to the bot if it mentions the bot, opens with its name, replies to one of its messages, or is the first message of a thread on one of its messages. An image's caption counts like a text message. An edit counts only when it newly mentions the bot.
+- A message is addressed to the bot if it mentions the bot, opens with its name, replies to one of its messages, or is the first message of a thread on one of its messages. Messages the bot relayed from a webhook count as its messages here. An image's caption counts like a text message. An edit counts only when it newly mentions the bot.
 - The replied-to message is a real `m.in_reply_to`, or the thread root for the first message of a thread. A thread fallback never counts, and any nested reply fallback is stripped.
 - A linked message is a `matrix.to` link or `matrix:` URI to an event in the same room. Links inside a referenced message are not followed.
 - A referenced message is used only if the person referring to it could see it themselves. In a room that shows its history only from when people joined or were invited, anything older than their membership is left out (`matrix.VisibleTo`).
@@ -106,6 +107,11 @@ The referenced events are resolved once, in `bot/reply.go`, and handed to the ch
 
 - **`./sourcecode/`** - The bot's own source code, for the `get_own_source_code` LLM tool (`llmtools/source_code.go`): downloads the default branch of the repository in `SIIKABOT_SOURCE_URL` from GitHub as one archive, keeps it in memory for 15 minutes, and searches and reads its files
   - Only a repository on GitHub can be read. Elsewhere the chat still links to the repository, but the tool tells the model it can't look anything up there
+
+- **`./webhooks/`** - The rules for the webhooks the admin sets up on the web dashboard: what their names and tokens may be, how a token is checked, and how the message a request brings is read
+  - The endpoint, `POST /hooks/message/:id` with the webhook's bearer token, is `bot/hook_message.go`, and managing webhooks is `api/webhooks.go`
+  - A token is stored only as its hash, so it can be replaced but never shown again
+  - A relayed message carries its webhook in its content (`matrix/webhook.go`), and the chat tells the model that a quoted one is in the webhook's words, not the bot's
 
 - **`./api/`** - HTTP API endpoints
   - `healthcheck.go` - `/api/healthcheck` endpoint
@@ -430,6 +436,7 @@ What the dashboard shows, and where the data comes from:
 | `RoomStats` (in `RoomsCard`, `AdminRoomsCard`) | `api/message_stats.go` | `message_stats` and `room_daily_stats`, written for every text message from anyone but the bot, edits aside (`bot/bot.go`), and read by the `get_message_stats` tool too. Only someone who has joined a room sees its stats, like its members |
 | `MessageActivityCard` | `api/message_stats.go` | `room_daily_stats` across every room, and the chat turns in `chat_usage` |
 | `ChatUsageCard` | `api/chat_usage.go` | `chat_usage`, written at the end of every chat turn (`commands/chat/turn_stats.go`) |
+| `WebhooksCard` | `api/webhooks.go` | `webhooks`, written only by the admin on the dashboard, and read by the message hook (`bot/hook_message.go`), which also sets `last_used_at`. Admin only. A token is stored only as its hash and is never shown again |
 | `ChatConfigCard` | `api/chat_config.go` | `chat_config`, written by `!chat set` and `!chat config revert` (`commands/chat/chat.go`), and read through the settings declared in `commands/chat/settings.go`. Read-only: the settings change only in a room |
 | `SystemStatusCard` | `api/healthcheck.go`, `api/metrics.go` | Process and connection pool stats |
 
@@ -512,4 +519,4 @@ Each column of `chat_config` is a setting, declared in `commands/chat/settings.g
 
 Migrations in `db/migrations/` run automatically on startup, in filename order. Name new migrations with the next four-digit number, two underscores and a kebab-case description, like `0018__remove-grafana.sql`.
 
-A change to what `chat_history` stores empties the table, along with `chat_references`, whose rows belong to its rows, and `chat_context_anchors`, whose anchors point into it, instead of adding code that handles rows in the old format. The chat context is short-lived anyway, so every room simply starts over once. New columns can then be `NOT NULL`, or covered by CHECK constraints, so the code can rely on every row being complete. Data people save on purpose, like memories, is never dropped this way: give existing rows an explicit value in the migration instead.
+When a change to what `chat_history` stores would leave existing rows that the code can't use as they are, empty the table instead of adding code that handles rows in the old format, along with `chat_references`, whose rows belong to its rows, and `chat_context_anchors`, whose anchors point into it. The chat context is short-lived anyway, so every room simply starts over once, and new columns can then be `NOT NULL`, or covered by CHECK constraints, so the code can rely on every row being complete. When the existing rows are already right under the new schema, such as a new nullable column whose NULL is what every existing row means, keep them. Data people save on purpose, like memories, is never dropped this way: give existing rows an explicit value in the migration instead.

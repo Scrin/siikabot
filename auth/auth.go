@@ -100,14 +100,14 @@ func GenerateChallenge(ctx context.Context) (string, string, time.Time, error) {
 	}
 
 	// Generate random challenge (public - shown to user, sent on Matrix)
-	challenge, err := generateRandomString(TokenBytes)
+	challenge, err := RandomString(TokenBytes)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Msg("Failed to generate auth challenge")
 		return "", "", time.Time{}, err
 	}
 
 	// Generate poll secret (private - only the originating browser knows this)
-	pollSecret, err := generateRandomString(TokenBytes)
+	pollSecret, err := RandomString(TokenBytes)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Msg("Failed to generate poll secret")
 		return "", "", time.Time{}, err
@@ -201,11 +201,12 @@ func ConsumeChallengeResult(ctx context.Context, challenge, pollSecret string) (
 
 // GenerateSessionToken creates a new random session token
 func GenerateSessionToken() (string, error) {
-	return generateRandomString(TokenBytes)
+	return RandomString(TokenBytes)
 }
 
-// generateRandomString generates a cryptographically random base64url-encoded string
-func generateRandomString(bytes int) (string, error) {
+// RandomString generates a cryptographically random base64url-encoded string from the given number
+// of random bytes
+func RandomString(bytes int) (string, error) {
 	b := make([]byte, bytes)
 	if _, err := rand.Read(b); err != nil {
 		return "", err

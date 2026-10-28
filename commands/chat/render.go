@@ -167,6 +167,9 @@ func renderQuote(quote db.QuotedMessage, relation string, imageAttached bool) st
 	}
 
 	switch {
+	case quote.RelayedBy != "":
+		// Sent by the bot, but in an outside service's words
+		from = `a message you relayed from the "` + cleanName(quote.RelayedBy) + `" webhook`
 	case quote.Sender == config.UserID:
 		from = "your message"
 	case relation == db.RelationLink:

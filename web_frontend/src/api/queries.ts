@@ -17,7 +17,12 @@ import {
   fetchRoomStats,
   fetchAdminRoomStats,
   fetchMessageActivity,
+  fetchWebhooks,
+  createWebhook,
+  updateWebhook,
+  deleteWebhook,
 } from './client'
+import type { CreateWebhookRequest, UpdateWebhookRequest } from './types'
 import { useAuth } from '../context/AuthContext'
 
 /**
@@ -37,6 +42,7 @@ export const queryKeys = {
   roomStats: (roomId: string, days: number) => ['roomStats', roomId, days] as const,
   adminRoomStats: (roomId: string, days: number) => ['adminRoomStats', roomId, days] as const,
   messageActivity: (days: number) => ['messageActivity', days] as const,
+  webhooks: ['webhooks'] as const,
 }
 
 /**
@@ -254,5 +260,65 @@ export function useMessageActivity(days: number) {
     enabled: isAuthenticated && !!token && authorizations?.admin === true,
     refetchInterval: 60000,
     placeholderData: keepPreviousData,
+  })
+}
+
+/**
+ * Every webhook (admin only)
+ */
+export function useWebhooks() {
+  const { token, isAuthenticated, authorizations } = useAuth()
+
+  return useQuery({
+    queryKey: queryKeys.webhooks,
+    queryFn: () => fetchWebhooks(token!),
+    enabled: isAuthenticated && !!token && authorizations?.admin === true,
+    refetchInterval: 30000,
+  })
+}
+
+/**
+ * Hook to create a webhook (admin only)
+ */
+export function useCreateWebhook() {
+  const { token } = useAuth()
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (webhook: CreateWebhookRequest) => createWebhook(token!, webhook),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.webhooks })
+    },
+  })
+}
+
+/**
+ * Hook to change a webhook's name, room or token (admin only)
+ */
+export function useUpdateWebhook() {
+  const { token } = useAuth()
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ id, changes }: { id: string; changes: UpdateWebhookRequest }) =>
+      updateWebhook(token!, id, changes),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.webhooks })
+    },
+  })
+}
+
+/**
+ * Hook to delete a webhook (admin only)
+ */
+export function useDeleteWebhook() {
+  const { token } = useAuth()
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (webhookId: string) => deleteWebhook(token!, webhookId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.webhooks })
+    },
   })
 }

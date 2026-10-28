@@ -21,6 +21,7 @@ import { AdminRoomsCard } from './components/AdminRoomsCard'
 import { ChatUsageCard } from './components/ChatUsageCard'
 import { ChatConfigCard } from './components/ChatConfigCard'
 import { MessageActivityCard } from './components/MessageActivityCard'
+import { WebhooksCard } from './components/WebhooksCard'
 import { ScanlineOverlay } from './components/ui/ScanlineOverlay'
 import { TiltCard } from './components/ui/TiltCard'
 import { FadeInSection } from './components/ui/FadeInSection'
@@ -320,7 +321,7 @@ function AppContent() {
                         </div>
                       </FadeInSection>
 
-                      {/* AI Chat Usage Section */}
+                      {/* Webhooks Section */}
                       <FadeInSection delay={0.5}>
                         <div className="mt-6 border-t border-slate-700/50 pt-6">
                           <motion.h3
@@ -331,13 +332,13 @@ function AppContent() {
                             animate={{ opacity: 1, x: 0 }}
                             transition={{ delay: 0.6 }}
                           >
-                            AI Chat Usage (Admin)
+                            Webhooks (Admin)
                           </motion.h3>
-                          <ChatUsageCard />
+                          <WebhooksCard />
                         </div>
                       </FadeInSection>
 
-                      {/* AI Chat Configuration Section */}
+                      {/* AI Chat Usage Section */}
                       <FadeInSection delay={0.6}>
                         <div className="mt-6 border-t border-slate-700/50 pt-6">
                           <motion.h3
@@ -348,13 +349,13 @@ function AppContent() {
                             animate={{ opacity: 1, x: 0 }}
                             transition={{ delay: 0.7 }}
                           >
-                            AI Chat Configuration (Admin)
+                            AI Chat Usage (Admin)
                           </motion.h3>
-                          <ChatConfigCard />
+                          <ChatUsageCard />
                         </div>
                       </FadeInSection>
 
-                      {/* Message Activity Section */}
+                      {/* AI Chat Configuration Section */}
                       <FadeInSection delay={0.7}>
                         <div className="mt-6 border-t border-slate-700/50 pt-6">
                           <motion.h3
@@ -364,6 +365,23 @@ function AppContent() {
                             }
                             animate={{ opacity: 1, x: 0 }}
                             transition={{ delay: 0.8 }}
+                          >
+                            AI Chat Configuration (Admin)
+                          </motion.h3>
+                          <ChatConfigCard />
+                        </div>
+                      </FadeInSection>
+
+                      {/* Message Activity Section */}
+                      <FadeInSection delay={0.8}>
+                        <div className="mt-6 border-t border-slate-700/50 pt-6">
+                          <motion.h3
+                            className="mb-4 font-mono text-sm tracking-wider text-purple-400 uppercase"
+                            initial={
+                              prefersReducedMotion ? {} : { opacity: 0, x: -10 }
+                            }
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: 0.9 }}
                           >
                             Message Activity (Admin)
                           </motion.h3>

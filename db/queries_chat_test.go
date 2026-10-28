@@ -40,7 +40,7 @@ func TestUserTurnReadsBackAUserRow(t *testing.T) {
 	sentAt := time.Date(2026, 9, 25, 14, 2, 0, 0, time.UTC)
 	name, unseen, hasImage := "Bob", 3, true
 	carol := QuotedMessage{EventID: "$carol", Sender: "@carol:x", SenderName: "Carol", SentAt: sentAt, Kind: QuoteImage}
-	dave := QuotedMessage{EventID: "$dave", Sender: "@dave:x", SenderName: "Dave", SentAt: sentAt, Kind: QuoteText, Body: "see this"}
+	dave := QuotedMessage{EventID: "$dave", Sender: "@bot:x", SenderName: "Bot", SentAt: sentAt, Kind: QuoteText, Body: "[ci]: see this", RelayedBy: "ci"}
 	erin := QuotedMessage{EventID: "$erin", Sender: "@erin:x", SenderName: "Erin", SentAt: sentAt, Kind: QuoteDeleted}
 	images := []ChatImage{
 		{EventID: "$carol", MIMEType: "image/jpeg", Width: 800, Height: 600},
@@ -67,7 +67,7 @@ func TestUserTurnReadsBackAUserRow(t *testing.T) {
 		t.Errorf("UserTurn().ReplyTo = %#v, want Carol's image", turn.ReplyTo)
 	}
 	if len(turn.Links) != 2 || turn.Links[0] != dave || turn.Links[1] != erin {
-		t.Errorf("UserTurn().Links = %#v, want Dave's and Erin's messages, in order", turn.Links)
+		t.Errorf("UserTurn().Links = %#v, want the relayed message and Erin's, in order", turn.Links)
 	}
 	if len(turn.Images) != 2 {
 		t.Errorf("UserTurn().Images = %#v, want Carol's image and Bob's own", turn.Images)
