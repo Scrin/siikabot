@@ -2,9 +2,7 @@ package matrix
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +10,7 @@ import (
 
 	"github.com/Scrin/siikabot/config"
 	"github.com/rs/zerolog/log"
+	"maunium.net/go/mautrix/crypto/attachment"
 )
 
 // MessageImageURL returns the URL of the image a message carries, or an error if it carries none.
@@ -346,227 +345,56 @@ func downloadAndDecryptMediaWithURL(ctx context.Context, url string, encryptionI
 	return decryptMedia(ctx, resp, encryptionInfo)
 }
 
-// decryptMedia decrypts media data from an HTTP response
+// maxEncryptedMediaSize is the largest encrypted file that is downloaded
+const maxEncryptedMediaSize = 5 * 1024 * 1024 // 5MB
+
+// decryptMedia reads an encrypted file from an HTTP response and decrypts it (see decryptAttachment)
 func decryptMedia(ctx context.Context, resp *http.Response, encryptionInfo map[string]any) ([]byte, error) {
-	// Read the encrypted data with a size limit
-	const maxSize = 5 * 1024 * 1024 // 5MB
-	limitedReader := io.LimitReader(resp.Body, maxSize+1)
-	encryptedData, err := io.ReadAll(limitedReader)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxEncryptedMediaSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read encrypted data: %w", err)
 	}
-
-	// Double-check the size after reading
-	if len(encryptedData) > maxSize {
-		return nil, fmt.Errorf("encrypted media is too large: %d bytes (max: 5MB)", len(encryptedData))
+	if len(data) > maxEncryptedMediaSize {
+		return nil, fmt.Errorf("encrypted media is too large: %d bytes (max: 5MB)", len(data))
 	}
 
-	// Extract the encryption parameters from the encryption info
-	if encryptionInfo == nil {
-		return nil, fmt.Errorf("encryption info is nil")
-	}
-
-	// Declare decryptedData variable
-	var decryptedData []byte
-
-	// Extract the key object
-	keyObj, ok := encryptionInfo["key"].(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("missing key in encryption info")
-	}
-
-	// Extract the IV (initialization vector)
-	ivStr, ok := encryptionInfo["iv"].(string)
-	if !ok {
-		return nil, fmt.Errorf("missing iv in encryption info")
-	}
-
-	// Extract the key algorithm
-	keyAlgorithm, ok := keyObj["alg"].(string)
-	if !ok || keyAlgorithm != "A256CTR" {
-		return nil, fmt.Errorf("unsupported key algorithm: %s", keyAlgorithm)
-	}
-
-	// Extract the key data
-	keyData, ok := keyObj["k"].(string)
-	if !ok {
-		return nil, fmt.Errorf("missing key data in encryption info")
-	}
-
-	// Log the key data for debugging
-	log.Debug().Ctx(ctx).
-		Str("key_data", keyData).
-		Msg("Extracted key data from encryption info")
-
-	// Decode the base64 key
-	key, err := tryBase64Decode(ctx, keyData, "key_data")
-	if err != nil {
+	if err := decryptAttachment(data, encryptionInfo); err != nil {
+		log.Error().Ctx(ctx).Err(err).Int("size_bytes", len(data)).Msg("Failed to decrypt an encrypted file")
 		return nil, err
 	}
-
-	// Log the decoded key for debugging
-	log.Debug().Ctx(ctx).
-		Str("key_data", keyData).
-		Int("key_length", len(key)).
-		Msg("Successfully decoded key")
-
-	// Decode the base64 IV
-	iv, err := tryBase64Decode(ctx, ivStr, "iv_str")
-	if err != nil {
-		// Special handling for IV: try to decode it as a raw binary string
-		// Some Matrix clients might encode the IV in a non-standard way
-		log.Warn().Ctx(ctx).
-			Str("iv_str", ivStr).
-			Msg("Failed to decode IV with standard base64 encodings, trying as raw binary")
-
-		// Try to use the raw bytes of the IV string
-		iv = []byte(ivStr)
-
-		// Log the raw IV for debugging
-		log.Debug().Ctx(ctx).
-			Str("iv_str", ivStr).
-			Int("iv_length", len(iv)).
-			Msg("Using raw bytes of IV string")
-	}
-
-	// Ensure IV is 16 bytes (AES block size)
-	if len(iv) < 16 {
-		paddedIV := make([]byte, 16)
-		copy(paddedIV, iv)
-		iv = paddedIV
-
-		log.Debug().Ctx(ctx).
-			Int("original_length", len(iv)).
-			Msg("Padded IV to 16 bytes")
-	} else if len(iv) > 16 {
-		// Truncate to 16 bytes if longer
-		iv = iv[:16]
-
-		log.Debug().Ctx(ctx).
-			Int("original_length", len(iv)).
-			Msg("Truncated IV to 16 bytes")
-	}
-
-	// Create a new AES cipher
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
-	}
-
-	// Create a CTR stream
-	stream := cipher.NewCTR(block, iv)
-
-	// Decrypt the data
-	decryptedData = make([]byte, len(encryptedData))
-	stream.XORKeyStream(decryptedData, encryptedData)
-
-	return decryptedData, nil
+	return data, nil
 }
 
-// tryBase64Decode tries to decode a base64 string using different encodings
-func tryBase64Decode(ctx context.Context, data string, name string) ([]byte, error) {
-	// Special case for Matrix IV format (e.g., "7xsJDaEec+UAAAAAAAAAAA")
-	if name == "iv_str" && strings.Contains(data, "+") {
-		// Matrix sometimes uses a special format for IVs
-		// Try to decode the part before the + as a base64 string
-		parts := strings.Split(data, "+")
-		if len(parts) == 2 {
-			// Try to decode the first part
-			firstPart, err := base64.RawURLEncoding.DecodeString(parts[0])
-			if err == nil {
-				// If successful, create a 16-byte IV
-				iv := make([]byte, 16)
-				copy(iv, firstPart)
-
-				log.Debug().Ctx(ctx).
-					Str(name, data).
-					Int("length", len(iv)).
-					Str("encoding", "Matrix special format").
-					Msg("Successfully decoded with Matrix special format")
-
-				return iv, nil
-			}
-		}
+// decryptAttachment decrypts an encrypted file in place, given the file object of the event that
+// carries it. The Matrix spec fixes how the object is encoded: the AES-CTR key is a JSON Web Key in
+// unpadded base64url, and the IV and the SHA-256 hash of the encrypted file are unpadded standard
+// base64. The hash is checked before anything is decrypted, so a damaged download, or a file other
+// than the one the event names, is an error rather than bytes that look like an unreadable image.
+//
+// Padding is the only leeway given. Any other way of reading the values gives a different key or IV,
+// and decrypting with those turns the whole file into noise.
+func decryptAttachment(data []byte, fileInfo map[string]any) error {
+	if fileInfo == nil {
+		return fmt.Errorf("encryption info is nil")
+	}
+	raw, err := json.Marshal(fileInfo)
+	if err != nil {
+		return fmt.Errorf("failed to read the encryption info: %w", err)
+	}
+	var file attachment.EncryptedFile
+	if err := json.Unmarshal(raw, &file); err != nil {
+		return fmt.Errorf("failed to read the encryption info: %w", err)
 	}
 
-	// Special case for Matrix IV format with padding characters
-	if name == "iv_str" {
-		// Try to clean up the IV string by removing padding characters
-		cleanData := strings.ReplaceAll(data, "=", "")
-		cleanData = strings.ReplaceAll(cleanData, "-", "+")
-		cleanData = strings.ReplaceAll(cleanData, "_", "/")
+	// A client that pads the values still means the same bytes
+	file.Key.Key = strings.TrimRight(file.Key.Key, "=")
+	file.InitVector = strings.TrimRight(file.InitVector, "=")
+	file.Hashes.SHA256 = strings.TrimRight(file.Hashes.SHA256, "=")
 
-		// Add padding if needed
-		switch len(cleanData) % 4 {
-		case 2:
-			cleanData += "=="
-		case 3:
-			cleanData += "="
-		}
-
-		// Try to decode the cleaned data
-		decoded, err := base64.StdEncoding.DecodeString(cleanData)
-		if err == nil {
-			log.Debug().Ctx(ctx).
-				Str(name, data).
-				Str("cleaned", cleanData).
-				Int("length", len(decoded)).
-				Str("encoding", "Cleaned StdEncoding").
-				Msg("Successfully decoded with cleaned StdEncoding")
-			return decoded, nil
-		}
+	if err := file.DecryptInPlace(data); err != nil {
+		return fmt.Errorf("failed to decrypt the file: %w", err)
 	}
-
-	// Try with RawURLEncoding first (most common for Matrix)
-	decoded, err := base64.RawURLEncoding.DecodeString(data)
-	if err == nil {
-		log.Debug().Ctx(ctx).
-			Str(name, data).
-			Int("length", len(decoded)).
-			Str("encoding", "RawURLEncoding").
-			Msg("Successfully decoded with RawURLEncoding")
-		return decoded, nil
-	}
-
-	// Try with standard base64 encoding if RawURLEncoding fails
-	decoded, err = base64.StdEncoding.DecodeString(data)
-	if err == nil {
-		log.Debug().Ctx(ctx).
-			Str(name, data).
-			Int("length", len(decoded)).
-			Str("encoding", "StdEncoding").
-			Msg("Successfully decoded with StdEncoding")
-		return decoded, nil
-	}
-
-	// Try with RawStdEncoding if StdEncoding fails
-	decoded, err = base64.RawStdEncoding.DecodeString(data)
-	if err == nil {
-		log.Debug().Ctx(ctx).
-			Str(name, data).
-			Int("length", len(decoded)).
-			Str("encoding", "RawStdEncoding").
-			Msg("Successfully decoded with RawStdEncoding")
-		return decoded, nil
-	}
-
-	// Try with URLEncoding if RawStdEncoding fails
-	decoded, err = base64.URLEncoding.DecodeString(data)
-	if err == nil {
-		log.Debug().Ctx(ctx).
-			Str(name, data).
-			Int("length", len(decoded)).
-			Str("encoding", "URLEncoding").
-			Msg("Successfully decoded with URLEncoding")
-		return decoded, nil
-	}
-
-	// Log the failure
-	log.Error().Ctx(ctx).
-		Str(name, data).
-		Msg("Failed to decode with any base64 encoding")
-
-	return nil, fmt.Errorf("failed to decode %s with any base64 encoding", name)
+	return nil
 }
 
 // downloadImage downloads an image from a URL
