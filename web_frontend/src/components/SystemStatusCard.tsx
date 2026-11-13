@@ -51,13 +51,13 @@ export function SystemStatusCard({ status, uptime, metrics }: SystemStatusCardPr
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4 }}
       >
-        <h2 className="text-xl font-semibold tracking-wide text-purple-300">System Status</h2>
+        <h3 className="text-xl font-semibold tracking-wide text-purple-300">System Status</h3>
         <StatusBadge status={status} />
       </motion.div>
 
       {/* Stats Grid */}
       <motion.div
-        className="grid grid-cols-2 gap-4 lg:grid-cols-3"
+        className="grid grid-cols-2 gap-4 @lg:grid-cols-3"
         variants={prefersReducedMotion ? {} : staggerContainer}
         initial="hidden"
         animate="visible"

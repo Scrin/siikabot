@@ -17,14 +17,14 @@ import { UserInfo } from './components/UserInfo'
 import { RemindersCard } from './components/RemindersCard'
 import { MemoriesCard } from './components/MemoriesCard'
 import { RoomsCard } from './components/RoomsCard'
-import { AdminRoomsCard } from './components/AdminRoomsCard'
 import { ChatUsageCard } from './components/ChatUsageCard'
 import { ChatConfigCard } from './components/ChatConfigCard'
 import { MessageActivityCard } from './components/MessageActivityCard'
 import { WebhooksCard } from './components/WebhooksCard'
+import { DashboardSection } from './components/DashboardSection'
+import { DashboardCard } from './components/DashboardCard'
 import { ScanlineOverlay } from './components/ui/ScanlineOverlay'
 import { TiltCard } from './components/ui/TiltCard'
-import { FadeInSection } from './components/ui/FadeInSection'
 import { CursorTrail } from './components/ui/CursorTrail'
 import { CornerBrackets } from './components/ui/CornerBrackets'
 import { Waveform } from './components/ui/Waveform'
@@ -35,7 +35,7 @@ function AppContent() {
   const { data: metrics, isLoading: metricsLoading } = useMetrics()
   const isLoading = healthLoading || metricsLoading
   const interpolatedUptime = useInterpolatedUptime(health?.uptime)
-  const { isAuthenticated, isLoading: authLoading, adminMode, isAdmin } = useAuth()
+  const { isAuthenticated, isLoading: authLoading } = useAuth()
   const prefersReducedMotion = useReducedMotion()
   const { isReduced, isMinimal } = useReducedEffects()
 
@@ -65,22 +65,9 @@ function AppContent() {
         style={{ zIndex: 10 }}
       >
         <div
-          className={`w-full max-w-4xl ${prefersReducedMotion || isReduced ? '' : 'float-subtle'}`}
+          className={`w-full max-w-[1800px] ${prefersReducedMotion || isReduced ? '' : 'float-subtle'}`}
         >
           <PageHeader />
-
-          {/* Admin mode indicator banner */}
-          {isAdmin && adminMode && (
-            <motion.div
-              className="mb-4 border border-purple-500/50 bg-purple-900/20 px-4 py-2 text-center"
-              initial={prefersReducedMotion ? {} : { opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-            >
-              <span className="font-mono text-sm text-purple-300 uppercase tracking-wider">
-                Admin Mode Active
-              </span>
-            </motion.div>
-          )}
 
           {/* Main Content Card with TiltCard effect and holographic overlay */}
           <TiltCard glowColor="rgba(168, 85, 247, 0.2)" holographic>
@@ -112,73 +99,54 @@ function AppContent() {
               />
 
               <div className="p-8 md:p-12">
-                <AnimatePresence mode="wait">
-                  {isLoading && (
-                    <motion.div
-                      key="loading"
-                      initial={prefersReducedMotion ? {} : { opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={prefersReducedMotion ? {} : { opacity: 0 }}
-                    >
-                      <LoadingSpinner />
-                    </motion.div>
-                  )}
+                {/* Admin-only cards sit with the rest of their topic, and DashboardCard leaves them
+                    out for anyone but an admin */}
+                <DashboardSection
+                  title="Overview"
+                  gridClassName="grid-cols-1 xl:grid-cols-3"
+                >
+                  <DashboardCard className="xl:col-span-2">
+                    <AnimatePresence mode="wait">
+                      {isLoading && (
+                        <motion.div
+                          key="loading"
+                          initial={prefersReducedMotion ? {} : { opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          exit={prefersReducedMotion ? {} : { opacity: 0 }}
+                        >
+                          <LoadingSpinner />
+                        </motion.div>
+                      )}
 
-                  {error && (
-                    <motion.div
-                      key="error"
-                      initial={prefersReducedMotion ? {} : { opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={prefersReducedMotion ? {} : { opacity: 0 }}
-                    >
-                      <ErrorMessage message={error.message} />
-                    </motion.div>
-                  )}
+                      {error && (
+                        <motion.div
+                          key="error"
+                          initial={prefersReducedMotion ? {} : { opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          exit={prefersReducedMotion ? {} : { opacity: 0 }}
+                        >
+                          <ErrorMessage message={error.message} />
+                        </motion.div>
+                      )}
 
-                  {health && !error && (
-                    <motion.div
-                      key="content"
-                      initial={prefersReducedMotion ? {} : { opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={prefersReducedMotion ? {} : { opacity: 0 }}
-                    >
-                      <SystemStatusCard
-                        status={health.status}
-                        uptime={interpolatedUptime}
-                        metrics={metrics}
-                      />
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+                      {health && !error && (
+                        <motion.div
+                          key="content"
+                          initial={prefersReducedMotion ? {} : { opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          exit={prefersReducedMotion ? {} : { opacity: 0 }}
+                        >
+                          <SystemStatusCard
+                            status={health.status}
+                            uptime={interpolatedUptime}
+                            metrics={metrics}
+                          />
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </DashboardCard>
 
-                {/* Waveform divider */}
-                <div className="my-6 opacity-40">
-                  <Waveform
-                    height={30}
-                    color="#a855f7"
-                    status={
-                      health?.status === 'ok'
-                        ? 'ok'
-                        : health?.status === 'degraded'
-                          ? 'degraded'
-                          : 'error'
-                    }
-                  />
-                </div>
-
-                {/* Auth Section */}
-                <FadeInSection delay={0.3}>
-                  <div className="border-t border-slate-700/50 pt-6">
-                    <motion.h3
-                      className="mb-4 font-mono text-sm tracking-wider text-slate-500 uppercase"
-                      initial={
-                        prefersReducedMotion ? {} : { opacity: 0, x: -10 }
-                      }
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: 0.4 }}
-                    >
-                      Authentication
-                    </motion.h3>
+                  <DashboardCard title="Account">
                     <AnimatePresence mode="wait">
                       {authLoading ? (
                         <motion.div
@@ -229,167 +197,64 @@ function AppContent() {
                         </motion.div>
                       )}
                     </AnimatePresence>
-                  </div>
-                </FadeInSection>
+                  </DashboardCard>
+                </DashboardSection>
 
-                {/* NORMAL MODE SECTIONS - Only show when NOT in admin mode */}
+                {/* Waveform divider */}
+                <div className="my-8 opacity-40">
+                  <Waveform
+                    height={30}
+                    color="#a855f7"
+                    status={
+                      health?.status === 'ok'
+                        ? 'ok'
+                        : health?.status === 'degraded'
+                          ? 'degraded'
+                          : 'error'
+                    }
+                  />
+                </div>
+
                 <AnimatePresence>
-                  {isAuthenticated && !adminMode && (
+                  {isAuthenticated && (
                     <motion.div
+                      key="sections"
+                      className="space-y-10"
                       initial={prefersReducedMotion ? {} : { opacity: 0 }}
                       animate={{ opacity: 1 }}
                       exit={prefersReducedMotion ? {} : { opacity: 0 }}
                       transition={{ duration: 0.3 }}
                     >
-                      {/* Reminders Section */}
-                      <FadeInSection delay={0.4}>
-                        <div className="mt-6 border-t border-slate-700/50 pt-6">
-                          <motion.h3
-                            className="mb-4 font-mono text-sm tracking-wider text-slate-500 uppercase"
-                            initial={
-                              prefersReducedMotion ? {} : { opacity: 0, x: -10 }
-                            }
-                            animate={{ opacity: 1, x: 0 }}
-                            transition={{ delay: 0.5 }}
-                          >
-                            Active Reminders
-                          </motion.h3>
+                      <DashboardSection title="Reminders & webhooks">
+                        <DashboardCard title="Reminders">
                           <RemindersCard />
-                        </div>
-                      </FadeInSection>
-
-                      {/* Memories Section */}
-                      <FadeInSection delay={0.45}>
-                        <div className="mt-6 border-t border-slate-700/50 pt-6">
-                          <motion.h3
-                            className="mb-4 font-mono text-sm tracking-wider text-slate-500 uppercase"
-                            initial={
-                              prefersReducedMotion ? {} : { opacity: 0, x: -10 }
-                            }
-                            animate={{ opacity: 1, x: 0 }}
-                            transition={{ delay: 0.55 }}
-                          >
-                            Chat Memories
-                          </motion.h3>
-                          <MemoriesCard />
-                        </div>
-                      </FadeInSection>
-
-                      {/* Known Rooms Section */}
-                      <FadeInSection delay={0.65}>
-                        <div className="mt-6 border-t border-slate-700/50 pt-6">
-                          <motion.h3
-                            className="mb-4 font-mono text-sm tracking-wider text-slate-500 uppercase"
-                            initial={
-                              prefersReducedMotion ? {} : { opacity: 0, x: -10 }
-                            }
-                            animate={{ opacity: 1, x: 0 }}
-                            transition={{ delay: 0.75 }}
-                          >
-                            Known rooms
-                          </motion.h3>
-                          <RoomsCard />
-                        </div>
-                      </FadeInSection>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-
-                {/* ADMIN MODE SECTIONS - Only show when in admin mode */}
-                <AnimatePresence>
-                  {isAuthenticated && adminMode && (
-                    <motion.div
-                      initial={prefersReducedMotion ? {} : { opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={prefersReducedMotion ? {} : { opacity: 0 }}
-                      transition={{ duration: 0.3 }}
-                    >
-                      {/* All Known Rooms Section */}
-                      <FadeInSection delay={0.4}>
-                        <div className="mt-6 border-t border-slate-700/50 pt-6">
-                          <motion.h3
-                            className="mb-4 font-mono text-sm tracking-wider text-purple-400 uppercase"
-                            initial={
-                              prefersReducedMotion ? {} : { opacity: 0, x: -10 }
-                            }
-                            animate={{ opacity: 1, x: 0 }}
-                            transition={{ delay: 0.5 }}
-                          >
-                            All Known Rooms (Admin)
-                          </motion.h3>
-                          <AdminRoomsCard />
-                        </div>
-                      </FadeInSection>
-
-                      {/* Webhooks Section */}
-                      <FadeInSection delay={0.5}>
-                        <div className="mt-6 border-t border-slate-700/50 pt-6">
-                          <motion.h3
-                            className="mb-4 font-mono text-sm tracking-wider text-purple-400 uppercase"
-                            initial={
-                              prefersReducedMotion ? {} : { opacity: 0, x: -10 }
-                            }
-                            animate={{ opacity: 1, x: 0 }}
-                            transition={{ delay: 0.6 }}
-                          >
-                            Webhooks (Admin)
-                          </motion.h3>
+                        </DashboardCard>
+                        <DashboardCard title="Webhooks" adminOnly>
                           <WebhooksCard />
-                        </div>
-                      </FadeInSection>
+                        </DashboardCard>
+                      </DashboardSection>
 
-                      {/* AI Chat Usage Section */}
-                      <FadeInSection delay={0.6}>
-                        <div className="mt-6 border-t border-slate-700/50 pt-6">
-                          <motion.h3
-                            className="mb-4 font-mono text-sm tracking-wider text-purple-400 uppercase"
-                            initial={
-                              prefersReducedMotion ? {} : { opacity: 0, x: -10 }
-                            }
-                            animate={{ opacity: 1, x: 0 }}
-                            transition={{ delay: 0.7 }}
-                          >
-                            AI Chat Usage (Admin)
-                          </motion.h3>
+                      <DashboardSection title="Chat">
+                        <DashboardCard title="Memories">
+                          <MemoriesCard />
+                        </DashboardCard>
+                        <DashboardCard title="Usage" adminOnly>
                           <ChatUsageCard />
-                        </div>
-                      </FadeInSection>
-
-                      {/* AI Chat Configuration Section */}
-                      <FadeInSection delay={0.7}>
-                        <div className="mt-6 border-t border-slate-700/50 pt-6">
-                          <motion.h3
-                            className="mb-4 font-mono text-sm tracking-wider text-purple-400 uppercase"
-                            initial={
-                              prefersReducedMotion ? {} : { opacity: 0, x: -10 }
-                            }
-                            animate={{ opacity: 1, x: 0 }}
-                            transition={{ delay: 0.8 }}
-                          >
-                            AI Chat Configuration (Admin)
-                          </motion.h3>
+                        </DashboardCard>
+                        <DashboardCard title="Configuration" adminOnly>
                           <ChatConfigCard />
-                        </div>
-                      </FadeInSection>
+                        </DashboardCard>
+                      </DashboardSection>
 
-                      {/* Message Activity Section */}
-                      <FadeInSection delay={0.8}>
-                        <div className="mt-6 border-t border-slate-700/50 pt-6">
-                          <motion.h3
-                            className="mb-4 font-mono text-sm tracking-wider text-purple-400 uppercase"
-                            initial={
-                              prefersReducedMotion ? {} : { opacity: 0, x: -10 }
-                            }
-                            animate={{ opacity: 1, x: 0 }}
-                            transition={{ delay: 0.9 }}
-                          >
-                            Message Activity (Admin)
-                          </motion.h3>
+                      {/* Aligned to the top, since expanding a room makes its card much taller */}
+                      <DashboardSection title="Rooms" alignTop>
+                        <DashboardCard title="Rooms">
+                          <RoomsCard />
+                        </DashboardCard>
+                        <DashboardCard title="Message activity" adminOnly>
                           <MessageActivityCard />
-                        </div>
-                      </FadeInSection>
-
-                      {/* Future admin sections can be added here */}
+                        </DashboardCard>
+                      </DashboardSection>
                     </motion.div>
                   )}
                 </AnimatePresence>

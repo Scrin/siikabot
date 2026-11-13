@@ -74,7 +74,7 @@ export function MessageActivityCard() {
         className={`space-y-4 transition-opacity duration-200 ${isPlaceholderData ? 'opacity-50' : ''}`}
       >
         <div className="border border-purple-500/30 bg-purple-950/20 p-4">
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 @md:grid-cols-4">
             <Stat label="Messages" value={formatCount(activity.messages)} />
             <Stat label="A day" value={perDay.toFixed(1)} />
             <Stat label="Active rooms" value={formatCount(data.rooms.length)} />

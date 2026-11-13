@@ -88,7 +88,7 @@ interface UsageTotalsProps {
 function UsageTotals({ totals }: UsageTotalsProps) {
   return (
     <div className="border border-purple-500/30 bg-purple-950/20 p-4">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 @2xl:grid-cols-4">
         <Stat label="Turns" value={formatCount(totals.turns)} />
         <Stat label="Prompt tokens" value={formatCount(totals.prompt_tokens)} />
         <Stat label="Completion tokens" value={formatCount(totals.completion_tokens)} />

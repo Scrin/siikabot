@@ -432,8 +432,8 @@ What the dashboard shows, and where the data comes from:
 |-----------|-------------|--------------------------|
 | `MemoriesCard` | `api/memories.go` | `user_memory`, written by the memory tool (`llmtools/memory.go`) |
 | `RemindersCard` | `api/reminders.go` | `reminders`, written by `!remind` and the reminder tool (`llmtools/reminder.go`) |
-| `RoomsCard`, `AdminRoomsCard` | `api/rooms.go`, `api/admin.go` | `room_members`, kept by the Matrix state store (`matrix/state_store.go`) from sync, and rebuilt from the homeserver at startup |
-| `RoomStats` (in `RoomsCard`, `AdminRoomsCard`) | `api/message_stats.go` | `message_stats` and `room_daily_stats`, written for every text message from anyone but the bot, edits aside (`bot/bot.go`), and read by the `get_message_stats` tool too. Only someone who has joined a room sees its stats, like its members |
+| `RoomsCard` | `api/rooms.go`, `api/admin.go` | `room_members`, kept by the Matrix state store (`matrix/state_store.go`) from sync, and rebuilt from the homeserver at startup. The card lists the rooms someone shares with the bot, and every room for an admin |
+| `RoomStats` (in `RoomsCard`) | `api/message_stats.go` | `message_stats` and `room_daily_stats`, written for every text message from anyone but the bot, edits aside (`bot/bot.go`), and read by the `get_message_stats` tool too. Only someone who has joined a room sees its stats, like its members |
 | `MessageActivityCard` | `api/message_stats.go` | `room_daily_stats` across every room, and the chat turns in `chat_usage` |
 | `ChatUsageCard` | `api/chat_usage.go` | `chat_usage`, written at the end of every chat turn (`commands/chat/turn_stats.go`) |
 | `WebhooksCard` | `api/webhooks.go` | `webhooks`, written only by the admin on the dashboard, and read by the message hook (`bot/hook_message.go`), which also sets `last_used_at`. Admin only. A token is stored only as its hash and is never shown again |
@@ -441,6 +441,8 @@ What the dashboard shows, and where the data comes from:
 | `SystemStatusCard` | `api/healthcheck.go`, `api/metrics.go` | Process and connection pool stats |
 
 When a dashboard component or API endpoint is added, add it to this table.
+
+The cards are laid out by topic in `web_frontend/src/App.tsx`. A new card goes in its topic's `DashboardSection`, wrapped in `DashboardCard`, and takes `adminOnly` if its endpoint is under `/api/admin`: the card is then left out for everyone but an admin.
 
 The chat's system prompt also tells the model what people see on the dashboard (`sourceSection` in `commands/chat/prompt.go`), so a change to that updates the prompt too.
 

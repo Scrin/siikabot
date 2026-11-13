@@ -73,7 +73,7 @@ export function RoomStats({
         <div
           className={`space-y-3 transition-opacity duration-200 ${isRefreshing ? 'opacity-50' : ''}`}
         >
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 @md:grid-cols-4">
             <Stat label="Messages" value={formatCount(activity.messages)} />
             <Stat label="A day" value={perDay.toFixed(1)} />
             <Stat
