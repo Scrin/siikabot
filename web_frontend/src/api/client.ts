@@ -11,6 +11,8 @@ import type {
   RoomMembersResponse,
   MemoriesResponse,
   DeleteAllMemoriesResponse,
+  RoomMemoriesResponse,
+  DeleteRoomMemoriesResponse,
   ChatUsageResponse,
   ChatConfigResponse,
   RoomStatsResponse,
@@ -335,6 +337,81 @@ export async function deleteAllMemories(token: string): Promise<DeleteAllMemorie
     }
     const error = await response.json().catch(() => ({ error: response.statusText }))
     throw new Error(error.error || 'Failed to delete memories')
+  }
+
+  return response.json()
+}
+
+/**
+ * Fetch the bot's memories of every room (admin only)
+ */
+export async function fetchRoomMemories(token: string): Promise<RoomMemoriesResponse> {
+  const response = await fetch(`${API_BASE}/admin/room-memories`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    if (response.status === 403) {
+      throw new Error('Admin access required')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to fetch room memories')
+  }
+
+  return response.json()
+}
+
+/**
+ * Delete one of the bot's memories of a room (admin only)
+ */
+export async function deleteRoomMemory(token: string, memoryId: number): Promise<void> {
+  const response = await fetch(`${API_BASE}/admin/room-memories/${memoryId}`, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    if (response.status === 403) {
+      throw new Error('Admin access required')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to delete the memory')
+  }
+}
+
+/**
+ * Delete all of the bot's memories of a room (admin only)
+ */
+export async function deleteRoomMemories(
+  token: string,
+  roomId: string
+): Promise<DeleteRoomMemoriesResponse> {
+  const response = await fetch(`${API_BASE}/admin/rooms/${encodeURIComponent(roomId)}/memories`, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    if (response.status === 403) {
+      throw new Error('Admin access required')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to delete the memories')
   }
 
   return response.json()

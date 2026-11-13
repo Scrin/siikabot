@@ -101,6 +101,7 @@ func (s *turnStats) finish(ctx context.Context, roomID, sender, model string, to
 	defer cancel()
 
 	if err := db.SaveChatUsage(persistCtx, db.ChatUsage{
+		Kind:               db.UsageTurn,
 		RoomID:             roomID,
 		UserID:             sender,
 		Model:              model,

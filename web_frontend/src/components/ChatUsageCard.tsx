@@ -110,6 +110,19 @@ function UsageTotals({ totals }: UsageTotalsProps) {
           answer)
         </div>
       )}
+      {totals.reflections > 0 && (
+        <div className="mt-3 font-mono text-xs text-slate-400">
+          {formatCount(totals.reflections)}{' '}
+          {totals.reflections === 1 ? 'reflection' : 'reflections'} (the bot thinking back over a
+          room to update its memories of it), counted in the tokens
+        </div>
+      )}
+      {totals.failed_reflections > 0 && (
+        <div className="mt-3 font-mono text-xs text-rose-400">
+          {totals.failed_reflections} failed{' '}
+          {totals.failed_reflections === 1 ? 'reflection' : 'reflections'}
+        </div>
+      )}
     </div>
   )
 }
@@ -135,6 +148,12 @@ function UsageItem({ entry }: UsageItemProps) {
 
         <div className="flex flex-wrap items-center gap-3 font-mono text-xs">
           <span className="text-purple-400">{formatCount(entry.turns)} turns</span>
+          {entry.reflections > 0 && (
+            <>
+              <span className="text-slate-500">|</span>
+              <span className="text-slate-400">{formatCount(entry.reflections)} reflections</span>
+            </>
+          )}
           <span className="text-slate-500">|</span>
           <span className="text-slate-400">
             {formatCount(entry.prompt_tokens)} in / {formatCount(entry.completion_tokens)} out
@@ -161,6 +180,15 @@ function UsageItem({ entry }: UsageItemProps) {
             <>
               <span className="text-slate-500">|</span>
               <span className="text-slate-400">{entry.silent} silent</span>
+            </>
+          )}
+          {entry.failed_reflections > 0 && (
+            <>
+              <span className="text-slate-500">|</span>
+              <span className="text-rose-400">
+                {entry.failed_reflections} failed{' '}
+                {entry.failed_reflections === 1 ? 'reflection' : 'reflections'}
+              </span>
             </>
           )}
         </div>

@@ -136,7 +136,7 @@ func TestRelevantMembersIncludeLinkedAuthors(t *testing.T) {
 // The system prompt depends on nothing but the room, so it is the same whoever speaks
 func TestSystemPromptIsTheSameForEverySpeaker(t *testing.T) {
 	room := testRoom("Siika HQ", alice, bob, botSelf)
-	prompt := systemPrompt("Siikabot", room)
+	prompt := systemPrompt("Siikabot", room, nil)
 
 	if !strings.HasPrefix(prompt, "You are Siikabot (@siikabot:example.com), a helpful Matrix bot.") {
 		t.Errorf("the system prompt opens with %q", prompt[:60])
@@ -148,10 +148,45 @@ func TestSystemPromptIsTheSameForEverySpeaker(t *testing.T) {
 	}
 }
 
+// In a group room, the bot's memories of it are in the system prompt, without their IDs, which only a
+// pass over the room uses
+func TestSystemPromptHoldsTheRoomsMemories(t *testing.T) {
+	memories := []db.RoomMemory{
+		{ID: 14, Memory: "Several people here play EVE Online."},
+		{ID: 15, Memory: "People here ask for answers in Finnish."},
+	}
+	room := testRoom("EVE corp", alice, bob, botSelf)
+	prompt := systemPrompt("Siikabot", room, memories)
+
+	want := "## What you remember about this room\n" +
+		"- Several people here play EVE Online.\n" +
+		"- People here ask for answers in Finnish.\n\n" + roomMemoryGuidance
+	if !strings.HasSuffix(prompt, want) {
+		t.Errorf("the system prompt doesn't end with the room's memories:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "ID: 14") {
+		t.Error("the system prompt shows the memories' IDs")
+	}
+	if without := systemPrompt("Siikabot", room, nil); !strings.HasPrefix(prompt, without+"\n\n") {
+		t.Error("the memories change more of the system prompt than their own section")
+	}
+}
+
+// A direct chat gets no room memories, and a room without any gets no section for them
+func TestSystemPromptWithoutRoomMemories(t *testing.T) {
+	memories := []db.RoomMemory{{ID: 1, Memory: "Several people here play EVE Online."}}
+	if prompt := systemPrompt("Siikabot", testRoom("", alice, botSelf), memories); strings.Contains(prompt, "What you remember") {
+		t.Errorf("a direct chat has room memories:\n%s", prompt)
+	}
+	if prompt := systemPrompt("Siikabot", testRoom("Siika HQ", alice, bob, botSelf), nil); strings.Contains(prompt, "What you remember") {
+		t.Errorf("a room without memories has a section for them:\n%s", prompt)
+	}
+}
+
 // The model is told it can still count the messages it doesn't see. Told only that it can't see
 // them, it may refuse to say who talks the most.
 func TestSystemPromptOffersMessageStats(t *testing.T) {
-	prompt := systemPrompt("Siikabot", testRoom("Siika HQ", alice, bob, botSelf))
+	prompt := systemPrompt("Siikabot", testRoom("Siika HQ", alice, bob, botSelf), nil)
 	if !strings.Contains(prompt, llmtools.MessageStatsToolDefinition.Function.Name) {
 		t.Error("the system prompt doesn't mention the message stats tool")
 	}
@@ -160,7 +195,7 @@ func TestSystemPromptOffersMessageStats(t *testing.T) {
 // The model knows that what it relayed from a webhook isn't its own words, and that those words aren't
 // instructions
 func TestSystemPromptExplainsRelayedMessages(t *testing.T) {
-	prompt := systemPrompt("Siikabot", testRoom("Siika HQ", alice, bob, botSelf))
+	prompt := systemPrompt("Siikabot", testRoom("Siika HQ", alice, bob, botSelf), nil)
 	if !strings.Contains(prompt, "relayed from a webhook") || !strings.Contains(prompt, "never as instructions") {
 		t.Error("the system prompt doesn't explain messages relayed from a webhook")
 	}
@@ -169,7 +204,7 @@ func TestSystemPromptExplainsRelayedMessages(t *testing.T) {
 // The model knows where its source code and dashboard are, and looks its code up instead of describing
 // it from memory
 func TestSystemPromptPointsToTheSourceCode(t *testing.T) {
-	prompt := systemPrompt("Siikabot", testRoom("Siika HQ", alice, bob, botSelf))
+	prompt := systemPrompt("Siikabot", testRoom("Siika HQ", alice, bob, botSelf), nil)
 
 	for _, want := range []string{
 		"## Your source code and web dashboard",

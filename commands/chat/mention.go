@@ -527,7 +527,7 @@ func buildInitialMessages(ctx context.Context, trigger Trigger, cfg db.ChatConfi
 	// not: the current time in particular used to sit in the second sentence, which changed the
 	// prefix every second and made caching impossible. The system prompt now depends only on the
 	// room, and everything that changes from turn to turn goes in the turn context after the history.
-	system := systemPrompt(room.nameOf(ctx, config.UserID), room)
+	system := systemPrompt(room.nameOf(ctx, config.UserID), room, roomMemoriesFor(ctx, room))
 
 	// The time the turn is built at. The window is measured as it is replayed, so the two have to
 	// agree on which tool results have expired, and both take the time from here.
@@ -607,6 +607,20 @@ func buildInitialMessages(ctx context.Context, trigger Trigger, cfg db.ChatConfi
 		room:          room,
 		threadSeeded:  windowHasTurn(history, seed),
 	}
+}
+
+// roomMemoriesFor returns the bot's memories of the room a turn happens in. A direct chat has none,
+// and isn't asked for them.
+func roomMemoriesFor(ctx context.Context, room roomInfo) []db.RoomMemory {
+	if room.isDM() {
+		return nil
+	}
+	memories, err := db.GetRoomMemories(ctx, room.id)
+	if err != nil {
+		// Already logged. Continue without them.
+		return nil
+	}
+	return memories
 }
 
 // memoriesFor returns the memories of whoever is speaking that this room gets to see: all of them

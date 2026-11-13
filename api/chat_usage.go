@@ -34,6 +34,11 @@ type ChatUsageEntry struct {
 	// FailuresByOutcome breaks the failures down by how the turns failed, such as turn_timeout or
 	// tool_limit, which says which of the chat settings a turn ran into
 	FailuresByOutcome map[string]int `json:"failures_by_outcome"`
+	// Reflections are the times the bot thought back over the room's conversations, to update its
+	// memories of it, and FailedReflections the ones that failed. Their tokens are in the token counts
+	// above, while the failures and silent turns are turns only.
+	Reflections       int `json:"reflections"`
+	FailedReflections int `json:"failed_reflections"`
 }
 
 // ChatUsageResponse is the chat usage report
@@ -118,6 +123,8 @@ func usageEntries(summaries []db.ChatUsageSummary, failures []db.ChatUsageFailur
 			RoomName:           roomName(summary.RoomID),
 			Model:              summary.Model,
 			Turns:              summary.Turns,
+			Reflections:        summary.Reflections,
+			FailedReflections:  summary.FailedReflections,
 			PromptTokens:       summary.PromptTokens,
 			CompletionTokens:   summary.CompletionTokens,
 			CachedPromptTokens: summary.CachedPromptTokens,
@@ -129,6 +136,8 @@ func usageEntries(summaries []db.ChatUsageSummary, failures []db.ChatUsageFailur
 		})
 
 		totals.Turns += summary.Turns
+		totals.Reflections += summary.Reflections
+		totals.FailedReflections += summary.FailedReflections
 		totals.PromptTokens += summary.PromptTokens
 		totals.CompletionTokens += summary.CompletionTokens
 		totals.CachedPromptTokens += summary.CachedPromptTokens

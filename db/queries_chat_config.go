@@ -28,12 +28,15 @@ type ChatConfig struct {
 	TurnTimeout       time.Duration `db:"turn_timeout"`
 	ModelTimeout      time.Duration `db:"model_timeout"`
 	ModelAttempts     int           `db:"model_attempts"`
+	// RoomMemoryDelay is how long a room has to be quiet before the bot thinks back over it, nil when
+	// it doesn't
+	RoomMemoryDelay *time.Duration `db:"room_memory_delay"`
 }
 
 // chatConfigColumns are the columns of a ChatConfig, as every query of the table reads them
 const chatConfigColumns = `id, created_at, model, context_high_tokens, context_low_tokens,
 	max_tool_iterations, max_response_tokens, image_detail, web_part_bytes,
-	turn_timeout, model_timeout, model_attempts`
+	turn_timeout, model_timeout, model_attempts, room_memory_delay`
 
 // GetChatConfig returns the chat configuration currently in effect
 func GetChatConfig(ctx context.Context) (ChatConfig, error) {
@@ -123,12 +126,12 @@ func UpdateChatConfig(ctx context.Context, change func(*ChatConfig) error) (Chat
 		`INSERT INTO chat_config
 			(model, context_high_tokens, context_low_tokens,
 			 max_tool_iterations, max_response_tokens, image_detail, web_part_bytes,
-			 turn_timeout, model_timeout, model_attempts)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			 turn_timeout, model_timeout, model_attempts, room_memory_delay)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id, created_at`,
 		cfg.Model, cfg.ContextHighTokens, cfg.ContextLowTokens,
 		cfg.MaxToolIterations, cfg.MaxResponseTokens, cfg.ImageDetail, cfg.WebPartBytes,
-		cfg.TurnTimeout, cfg.ModelTimeout, cfg.ModelAttempts,
+		cfg.TurnTimeout, cfg.ModelTimeout, cfg.ModelAttempts, cfg.RoomMemoryDelay,
 	).Scan(&cfg.ID, &cfg.CreatedAt)
 	if err != nil {
 		// Includes a change the table's checks reject, which leaves the configuration as it was. The

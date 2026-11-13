@@ -16,6 +16,7 @@ import { AuthFlow } from './components/AuthFlow'
 import { UserInfo } from './components/UserInfo'
 import { RemindersCard } from './components/RemindersCard'
 import { MemoriesCard } from './components/MemoriesCard'
+import { RoomMemoriesCard } from './components/RoomMemoriesCard'
 import { RoomsCard } from './components/RoomsCard'
 import { ChatUsageCard } from './components/ChatUsageCard'
 import { ChatConfigCard } from './components/ChatConfigCard'
@@ -235,8 +236,11 @@ function AppContent() {
                       </DashboardSection>
 
                       <DashboardSection title="Chat">
-                        <DashboardCard title="Memories">
+                        <DashboardCard title="Your memories">
                           <MemoriesCard />
+                        </DashboardCard>
+                        <DashboardCard title="Room memories" adminOnly>
+                          <RoomMemoriesCard />
                         </DashboardCard>
                         <DashboardCard title="Usage" adminOnly>
                           <ChatUsageCard />

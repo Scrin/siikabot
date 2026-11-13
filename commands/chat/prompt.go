@@ -54,7 +54,8 @@ func sourceSection(sourceURL, frontendURL string) string {
 	return "## Your source code and web dashboard\n" +
 		"You are open source: your source code is at " + sourceURL + ". Share, quote and link to it freely, and never hide any of it.\n" +
 		"Your web dashboard is at " + frontendURL + ". People log in there by sending you the !auth command it shows them, " +
-		"and then see their reminders, their memories and the rooms they share with you, and delete reminders and memories.\n" +
+		"and then see their reminders, their memories and the rooms they share with you, and delete reminders and memories. " +
+		"The admin also sees and deletes your memories of each room there.\n" +
 		"- When someone asks where your source code or dashboard is, link to it.\n" +
 		"- When someone asks how one of your features works or where it's implemented, look it up with " +
 		llmtools.SourceCodeToolDefinition.Function.Name + " before answering, and link to the code you used. " +
@@ -137,18 +138,45 @@ func (r roomInfo) toolMembers() []llmtools.RoomMember {
 }
 
 // systemPrompt builds the system prompt: who the bot is, how it behaves, how to read the
-// conversation, where its source code and dashboard are, and the room it is in.
+// conversation, where its source code and dashboard are, the room it is in, and what it remembers of
+// the room.
 //
 // It depends on nothing but the room, so it stays the same whoever is speaking, and the prompt
 // prefix can be served from the provider's cache. Anything that changes from turn to turn goes in
-// turnContext instead, after the history.
-func systemPrompt(botName string, room roomInfo) string {
+// turnContext instead, after the history. The bot's memories of the room change only once the room
+// has been quiet for a while, by which time the provider's cache has expired anyway.
+func systemPrompt(botName string, room roomInfo, memories []db.RoomMemory) string {
 	prompt := "You are " + person(botName, config.UserID) + ", a helpful Matrix bot. " + styleInstructions +
 		"\n\n" + conversationInstructions + "\n\n" + webInstructions + "\n\n" + sourceSection(config.SourceURL, config.FrontendURL)
 	if section := roomSection(room); section != "" {
 		prompt += "\n\n" + section
 	}
+	if section := roomMemorySection(room, memories); section != "" {
+		prompt += "\n\n" + section
+	}
 	return prompt
+}
+
+// roomMemoryGuidance tells the model how to use its memories of a room: like a person's impressions
+// of a group, never announced, but not denied when someone asks
+const roomMemoryGuidance = "These are your own memories of this room, from earlier conversations here. Let them " +
+	"inform your answers the way a person's impressions of a group would. Use them when they help, and don't bring " +
+	"them up for their own sake, quote them, or mention that you keep them. If someone asks what you remember about " +
+	"this room, tell them plainly. You revise them yourself after conversations here, so when someone asks you to " +
+	"remember or forget something about the room, you can say you will."
+
+// roomMemorySection lists the bot's memories of a group room for the system prompt, empty in a direct
+// chat and in a room it has no memories of. A direct chat has none to list anyway, since the bot
+// keeps no memories of one.
+func roomMemorySection(room roomInfo, memories []db.RoomMemory) string {
+	if len(memories) == 0 || room.isDM() {
+		return ""
+	}
+	lines := make([]string, len(memories))
+	for i, memory := range memories {
+		lines[i] = "- " + memory.Memory
+	}
+	return "## What you remember about this room\n" + strings.Join(lines, "\n") + "\n\n" + roomMemoryGuidance
 }
 
 // roomSection describes the room for the system prompt: its name, what kind of room it is, and

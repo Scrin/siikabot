@@ -13,6 +13,9 @@ import {
   fetchMemories,
   deleteMemory,
   deleteAllMemories,
+  fetchRoomMemories,
+  deleteRoomMemory,
+  deleteRoomMemories,
   fetchChatUsage,
   fetchChatConfig,
   fetchRoomStats,
@@ -38,6 +41,7 @@ export const queryKeys = {
   roomMembers: (roomId: string) => ['roomMembers', roomId] as const,
   adminRoomMembers: (roomId: string) => ['adminRoomMembers', roomId] as const,
   memories: ['memories'] as const,
+  roomMemories: ['roomMemories'] as const,
   chatUsage: (days: number) => ['chatUsage', days] as const,
   chatConfig: ['chatConfig'] as const,
   roomStats: (roomId: string, days: number) => ['roomStats', roomId, days] as const,
@@ -170,6 +174,51 @@ export function useDeleteAllMemories() {
     mutationFn: () => deleteAllMemories(token!),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.memories })
+    },
+  })
+}
+
+/**
+ * Hook to fetch the bot's memories of every room (admin only)
+ */
+export function useRoomMemories() {
+  const { token, isAuthenticated, authorizations } = useAuth()
+
+  return useQuery({
+    queryKey: queryKeys.roomMemories,
+    queryFn: () => fetchRoomMemories(token!),
+    enabled: isAuthenticated && !!token && authorizations?.admin === true,
+    refetchInterval: 30000,
+  })
+}
+
+/**
+ * Hook to delete one of the bot's memories of a room (admin only). The list is refreshed however the
+ * request ends, so a memory that is already gone leaves the card.
+ */
+export function useDeleteRoomMemory() {
+  const { token } = useAuth()
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (memoryId: number) => deleteRoomMemory(token!, memoryId),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.roomMemories })
+    },
+  })
+}
+
+/**
+ * Hook to delete all of the bot's memories of a room (admin only)
+ */
+export function useDeleteRoomMemories() {
+  const { token } = useAuth()
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (roomId: string) => deleteRoomMemories(token!, roomId),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.roomMemories })
     },
   })
 }

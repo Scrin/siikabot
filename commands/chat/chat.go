@@ -78,6 +78,9 @@ func Init(ctx context.Context) {
 		log.Warn().Ctx(ctx).Err(err).Str("source_url", config.SourceURL).Msg("The chat can't look up the bot's source code")
 	}
 
+	// Think back over the rooms that have gone quiet, to keep the bot's memories of them
+	startReflecting(ctx)
+
 	// Start a goroutine to periodically clean up old chat history
 	go func() {
 		ticker := time.NewTicker(1 * time.Hour)

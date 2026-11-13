@@ -31,6 +31,9 @@ vi.mock('./components/UserInfo', () => ({ UserInfo: () => <div>user info</div> }
 vi.mock('./components/RemindersCard', () => ({ RemindersCard: () => <div>reminders card</div> }))
 vi.mock('./components/WebhooksCard', () => ({ WebhooksCard: () => <div>webhooks card</div> }))
 vi.mock('./components/MemoriesCard', () => ({ MemoriesCard: () => <div>memories card</div> }))
+vi.mock('./components/RoomMemoriesCard', () => ({
+  RoomMemoriesCard: () => <div>room memories card</div>,
+}))
 vi.mock('./components/ChatUsageCard', () => ({ ChatUsageCard: () => <div>chat usage card</div> }))
 vi.mock('./components/ChatConfigCard', () => ({
   ChatConfigCard: () => <div>chat config card</div>,
@@ -41,8 +44,14 @@ vi.mock('./components/MessageActivityCard', () => ({
 }))
 
 const userCards = ['reminders card', 'memories card', 'rooms card']
-const adminCards = ['webhooks card', 'chat usage card', 'chat config card', 'message activity card']
-const adminCardTitles = ['Webhooks', 'Usage', 'Configuration', 'Message activity']
+const adminCards = [
+  'webhooks card',
+  'room memories card',
+  'chat usage card',
+  'chat config card',
+  'message activity card',
+]
+const adminCardTitles = ['Webhooks', 'Room memories', 'Usage', 'Configuration', 'Message activity']
 
 function mockAuth({ isAuthenticated, isAdmin }: { isAuthenticated: boolean; isAdmin: boolean }) {
   vi.mocked(auth.useAuth).mockReturnValue({
@@ -108,7 +117,7 @@ describe('App', () => {
       const card = screen.getByRole('region', { name: title })
       expect(within(card).getByText('Admin')).toBeInTheDocument()
     }
-    for (const title of ['Reminders', 'Memories']) {
+    for (const title of ['Reminders', 'Your memories']) {
       const card = screen.getByRole('region', { name: title })
       expect(within(card).queryByText('Admin')).not.toBeInTheDocument()
     }

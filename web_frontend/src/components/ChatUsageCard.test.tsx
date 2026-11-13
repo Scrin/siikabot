@@ -27,6 +27,8 @@ function entry(overrides: Partial<ChatUsageEntry> = {}): ChatUsageEntry {
     failures: 0,
     silent: 0,
     failures_by_outcome: {},
+    reflections: 0,
+    failed_reflections: 0,
     ...overrides,
   }
 }
@@ -211,6 +213,57 @@ describe('ChatUsageCard', () => {
 
       render(<ChatUsageCard />)
       expect(screen.getByText('2% cached')).not.toHaveClass('text-emerald-400')
+    })
+  })
+
+  describe('reflections', () => {
+    it("should count a room's reflections next to its turns", () => {
+      mockUsage({
+        isLoading: false,
+        data: response({ entries: [entry({ reflections: 3 })] }),
+        error: null,
+      })
+
+      render(<ChatUsageCard />)
+      expect(screen.getByText('3 reflections')).toBeInTheDocument()
+    })
+
+    it('should keep failed reflections apart from failed turns', () => {
+      mockUsage({
+        isLoading: false,
+        data: response({
+          entries: [entry({ reflections: 2, failed_reflections: 1, failures: 0 })],
+          totals: entry({ model: 'all', reflections: 2, failed_reflections: 1, failures: 0 }),
+        }),
+        error: null,
+      })
+
+      render(<ChatUsageCard />)
+      expect(screen.getAllByText('1 failed reflection')).toHaveLength(2)
+      expect(screen.queryByText(/failed turn/)).not.toBeInTheDocument()
+      expect(screen.queryByText('1 failed')).not.toBeInTheDocument()
+    })
+
+    it('should say what the reflections in the totals are, and that their tokens are counted', () => {
+      mockUsage({
+        isLoading: false,
+        data: response({ totals: entry({ model: 'all', reflections: 1 }) }),
+        error: null,
+      })
+
+      render(<ChatUsageCard />)
+      expect(
+        screen.getByText(
+          '1 reflection (the bot thinking back over a room to update its memories of it), counted in the tokens'
+        )
+      ).toBeInTheDocument()
+    })
+
+    it('should say nothing about reflections when there were none', () => {
+      mockUsage({ isLoading: false, data: response(), error: null })
+
+      render(<ChatUsageCard />)
+      expect(screen.queryByText(/reflection/)).not.toBeInTheDocument()
     })
   })
 

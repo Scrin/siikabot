@@ -57,7 +57,12 @@ var settingGroups = []settingGroup{
 	{name: "Time"},
 	{name: "Tools"},
 	{name: "Images"},
+	{name: roomMemoryGroup, note: "The bot keeps memories of each group room, which it forms by thinking back over its " +
+		"conversations there once the room has gone quiet. The admin sees and deletes them on the dashboard."},
 }
+
+// roomMemoryGroup is the group of the settings of the bot's memories of rooms
+const roomMemoryGroup = "Room memory"
 
 // The upper bounds of the settings that have them. They guard against typos rather than set what the
 // bot can run with, which the table's checks do, so they are generous: each lets through any value
@@ -78,6 +83,16 @@ const (
 	maxTurnTimeout  = 20 * time.Minute
 	minModelTimeout = 10 * time.Second
 )
+
+// The bounds of room_memory_delay. Below the lower one, a pass could start while people are still in
+// the middle of a conversation.
+const (
+	minRoomMemoryDelay = 5 * time.Minute
+	maxRoomMemoryDelay = 24 * time.Hour
+)
+
+// roomMemoryOff is the value of room_memory_delay that stops the passes
+const roomMemoryOff = "off"
 
 // imageDetails are the image details a configuration can have
 var imageDetails = []string{"low", "high", imageDetailAuto}
@@ -256,6 +271,41 @@ var settings = []setting{
 				return settingErrorf("`image_detail` takes low, high or auto, not `%s`", value)
 			}
 			cfg.ImageDetail = detail
+			return nil
+		},
+	},
+	{
+		key:     "room_memory_delay",
+		group:   roomMemoryGroup,
+		summary: "how long a room has to be quiet before the bot thinks back over it",
+		help: "How long a room has to be quiet after a chat turn before the bot thinks back over its new " +
+			"conversations there and updates its memories of the room. A longer delay gathers more conversation " +
+			"into each pass, which costs less. It's also how long a message has to stay up before the bot can " +
+			"remember it: a message deleted sooner never reaches a pass, while one deleted later stays in what " +
+			"the bot remembers. off stops new passes, and the memories the bot already has are still used.",
+		allowed: func(db.ChatConfig) string {
+			return fmt.Sprintf("%s to %s, or off", formatDuration(minRoomMemoryDelay), formatDuration(maxRoomMemoryDelay))
+		},
+		example: "30m",
+		show: func(cfg db.ChatConfig) string {
+			if cfg.RoomMemoryDelay == nil {
+				return roomMemoryOff
+			}
+			return formatDuration(*cfg.RoomMemoryDelay)
+		},
+		set: func(cfg *db.ChatConfig, value string) error {
+			if strings.EqualFold(value, roomMemoryOff) {
+				cfg.RoomMemoryDelay = nil
+				return nil
+			}
+			if _, err := time.ParseDuration(value); err != nil {
+				return settingErrorf("`room_memory_delay` takes a duration, such as 30m or 2h, or off, not `%s`", value)
+			}
+			var delay time.Duration
+			if err := setDuration(&delay, "room_memory_delay", value, minRoomMemoryDelay, maxRoomMemoryDelay); err != nil {
+				return err
+			}
+			cfg.RoomMemoryDelay = &delay
 			return nil
 		},
 	},

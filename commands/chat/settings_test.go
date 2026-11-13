@@ -29,6 +29,7 @@ func seededConfig() db.ChatConfig {
 		TurnTimeout:       3 * time.Minute,
 		ModelTimeout:      45 * time.Second,
 		ModelAttempts:     3,
+		RoomMemoryDelay:   new(30 * time.Minute),
 	}
 }
 
@@ -139,6 +140,16 @@ func TestSettingValues(t *testing.T) {
 		{"model_attempts", "5", "5"},
 		{"model_attempts", "6", ""},
 		{"model_attempts", "0", ""},
+		{"room_memory_delay", "30m", "30m"},
+		{"room_memory_delay", "5m", "5m"},
+		{"room_memory_delay", "24h", "24h"},
+		{"room_memory_delay", "90m", "1h30m"},
+		{"room_memory_delay", "off", "off"},
+		{"room_memory_delay", "OFF", "off"},
+		{"room_memory_delay", "4m", ""},
+		{"room_memory_delay", "25h", ""},
+		{"room_memory_delay", "never", ""},
+		{"room_memory_delay", "0", ""},
 	} {
 		s, ok := settingByKey(tt.key)
 		if !ok {

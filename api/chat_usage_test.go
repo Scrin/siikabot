@@ -74,3 +74,27 @@ func TestUsageEntriesBreakFailuresDown(t *testing.T) {
 		t.Errorf("an entry without failures encodes as %s", encoded)
 	}
 }
+
+// The bot's passes over a room are counted apart from its turns, and their failures apart from the
+// turns' failures, while their tokens are in the same counts, since both are what the room costs
+func TestUsageEntriesCountReflections(t *testing.T) {
+	entries, totals := usageEntries([]db.ChatUsageSummary{
+		{RoomID: "!a:example.com", Model: "text", Turns: 10, Reflections: 3, FailedReflections: 1, Failures: 2, PromptTokens: 1200},
+		{RoomID: "!b:example.com", Model: "text", Turns: 4, Reflections: 1, PromptTokens: 300},
+	}, nil, func(string) string { return "" })
+
+	if entries[0].Reflections != 3 || entries[0].FailedReflections != 1 || entries[0].Failures != 2 || entries[0].Turns != 10 {
+		t.Errorf("entry = %#v", entries[0])
+	}
+	if totals.Turns != 14 || totals.Reflections != 4 || totals.FailedReflections != 1 || totals.Failures != 2 || totals.PromptTokens != 1500 {
+		t.Errorf("totals = %#v, want 14 turns, 4 reflections of which 1 failed, 2 failed turns and 1500 prompt tokens", totals)
+	}
+
+	encoded, err := json.Marshal(totals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"reflections":4,"failed_reflections":1`) {
+		t.Errorf("totals encode as %s", encoded)
+	}
+}

@@ -104,6 +104,35 @@ export interface DeleteAllMemoriesResponse {
   deleted_count: number
 }
 
+// Room memory types
+
+/** Something the bot remembers about a group room, formed by thinking back over its conversations there */
+export interface RoomMemory {
+  id: number
+  memory: string
+  created_at: string
+  /** When a later pass last revised the memory, the same as created_at if none has */
+  updated_at: string
+}
+
+/** A room the bot remembers things about, with what it remembers */
+export interface RoomMemories {
+  room_id: string
+  room_name?: string
+  /** When the bot last thought back over the room's conversations, null if it never has */
+  last_reflected_at: string | null
+  memories: RoomMemory[]
+}
+
+export interface RoomMemoriesResponse {
+  /** The room whose memories changed most recently first */
+  rooms: RoomMemories[]
+}
+
+export interface DeleteRoomMemoriesResponse {
+  deleted_count: number
+}
+
 // Chat usage types
 export interface ChatUsageEntry {
   room_id: string
@@ -120,6 +149,13 @@ export interface ChatUsageEntry {
   silent: number
   /** How the failed turns failed: their count by outcome, such as turn_timeout or tool_limit */
   failures_by_outcome: Record<string, number>
+  /**
+   * The times the bot thought back over the room's conversations, to update its memories of it. Their
+   * tokens are in the token counts, while failures and silent count turns only.
+   */
+  reflections: number
+  /** The reflections that failed */
+  failed_reflections: number
 }
 
 export interface ChatUsageResponse {

@@ -8,10 +8,20 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// ChatUsage is the record of a single chat turn's cost
+// The kinds of model use chat_usage records
+const (
+	// UsageTurn is a chat turn, answering someone
+	UsageTurn = "turn"
+	// UsageReflection is the bot thinking back over a room's conversations, to update its memories of
+	// the room. Its user is the bot.
+	UsageReflection = "reflection"
+)
+
+// ChatUsage is the record of the cost of a single chat turn, or of a reflection
 type ChatUsage struct {
 	ID                 int64     `db:"id"`
 	Timestamp          time.Time `db:"timestamp"`
+	Kind               string    `db:"kind"`
 	RoomID             string    `db:"room_id"`
 	UserID             string    `db:"user_id"`
 	Model              string    `db:"model"`
@@ -23,11 +33,15 @@ type ChatUsage struct {
 	Outcome            string    `db:"outcome"`
 }
 
-// ChatUsageSummary aggregates chat usage over a period, grouped by room and model
+// ChatUsageSummary aggregates chat usage over a period, grouped by room and model. The tokens cover
+// turns and reflections alike, since both are what the room costs, while the counts of failed and
+// silent turns are of turns only.
 type ChatUsageSummary struct {
 	RoomID             string `db:"room_id"`
 	Model              string `db:"model"`
 	Turns              int    `db:"turns"`
+	Reflections        int    `db:"reflections"`
+	FailedReflections  int    `db:"failed_reflections"`
 	PromptTokens       int    `db:"prompt_tokens"`
 	CompletionTokens   int    `db:"completion_tokens"`
 	CachedPromptTokens int    `db:"cached_prompt_tokens"`
@@ -49,13 +63,14 @@ type ChatUsageFailures struct {
 func SaveChatUsage(ctx context.Context, usage ChatUsage) error {
 	_, err := pool.Exec(ctx,
 		`INSERT INTO chat_usage
-			(room_id, user_id, model, prompt_tokens, completion_tokens, cached_prompt_tokens,
+			(kind, room_id, user_id, model, prompt_tokens, completion_tokens, cached_prompt_tokens,
 			 tool_iterations, duration_ms, outcome)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		usage.RoomID, usage.UserID, usage.Model, usage.PromptTokens, usage.CompletionTokens,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		usage.Kind, usage.RoomID, usage.UserID, usage.Model, usage.PromptTokens, usage.CompletionTokens,
 		usage.CachedPromptTokens, usage.ToolIterations, usage.DurationMS, usage.Outcome)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).
+			Str("kind", usage.Kind).
 			Str("room_id", usage.RoomID).
 			Str("model", usage.Model).
 			Msg("Failed to save chat usage")
@@ -69,13 +84,15 @@ func SaveChatUsage(ctx context.Context, usage ChatUsage) error {
 func GetChatUsageSummary(ctx context.Context, since time.Time) ([]ChatUsageSummary, error) {
 	rows, err := pool.Query(ctx,
 		`SELECT room_id, model,
-			COUNT(*)::int AS turns,
+			COUNT(*) FILTER (WHERE kind = 'turn')::int AS turns,
+			COUNT(*) FILTER (WHERE kind = 'reflection')::int AS reflections,
+			COUNT(*) FILTER (WHERE kind = 'reflection' AND outcome <> 'ok')::int AS failed_reflections,
 			COALESCE(SUM(prompt_tokens), 0)::int AS prompt_tokens,
 			COALESCE(SUM(completion_tokens), 0)::int AS completion_tokens,
 			COALESCE(SUM(cached_prompt_tokens), 0)::int AS cached_prompt_tokens,
 			COALESCE(SUM(tool_iterations), 0)::int AS tool_iterations,
-			COUNT(*) FILTER (WHERE outcome NOT IN ('ok', 'silent'))::int AS failures,
-			COUNT(*) FILTER (WHERE outcome = 'silent')::int AS silent
+			COUNT(*) FILTER (WHERE kind = 'turn' AND outcome NOT IN ('ok', 'silent'))::int AS failures,
+			COUNT(*) FILTER (WHERE kind = 'turn' AND outcome = 'silent')::int AS silent
 		FROM chat_usage
 		WHERE timestamp >= $1
 		GROUP BY room_id, model
@@ -98,12 +115,13 @@ func GetChatUsageSummary(ctx context.Context, since time.Time) ([]ChatUsageSumma
 
 // GetChatUsageFailures counts the failed turns since the given time by room, model and outcome, so
 // that a failure count can say how the turns failed. The outcomes that aren't failures, ok and
-// silent, are left out, as GetChatUsageSummary leaves them out of its failures.
+// silent, are left out, as GetChatUsageSummary leaves them out of its failures, and so are
+// reflections, which it counts apart.
 func GetChatUsageFailures(ctx context.Context, since time.Time) ([]ChatUsageFailures, error) {
 	rows, err := pool.Query(ctx,
 		`SELECT room_id, model, outcome, COUNT(*)::int AS turns
 		FROM chat_usage
-		WHERE timestamp >= $1 AND outcome NOT IN ('ok', 'silent')
+		WHERE timestamp >= $1 AND kind = 'turn' AND outcome NOT IN ('ok', 'silent')
 		GROUP BY room_id, model, outcome
 		ORDER BY room_id, model, outcome`,
 		since)

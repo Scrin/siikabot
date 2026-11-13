@@ -105,7 +105,7 @@ func TestPromptPrefixIsStableAcrossTurns(t *testing.T) {
 
 	// Assembled the way buildInitialMessages does it, for a given speaker at a given time
 	buildPrompt := func(now time.Time, author string, memories []db.UserMemory) []string {
-		messages := []aigateway.Message{{Role: "system", Content: systemPrompt("Siikabot", room)}}
+		messages := []aigateway.Message{{Role: "system", Content: systemPrompt("Siikabot", room, nil)}}
 		processHistoryMessages(context.Background(), history, "low", now, &messages)
 		messages = append(messages, aigateway.Message{Role: "system", Content: turnContext(now, author, memories, "", nil)})
 

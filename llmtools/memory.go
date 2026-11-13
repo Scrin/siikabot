@@ -18,7 +18,7 @@ var MemoryToolDefinition = aigateway.ToolDefinition{
 	Type: "function",
 	Function: aigateway.FunctionSchema{
 		Name:        "memory",
-		Description: "Manage memories about the author of the latest message; you can't save or change memories for anyone else. Use this to save things they ask you to remember, delete specific memories, or clear all memories. A memory saved in a group room is used in that room and in direct chats; one saved in a direct chat is used only in direct chats. In a group room, delete and clear_all only affect the memories saved in that room.",
+		Description: "Manage memories about the author of the latest message; you can't save or change memories for anyone else. Use this to save things they ask you to remember, delete specific memories, or clear all memories. A memory saved in a group room is used in that room and in direct chats; one saved in a direct chat is used only in direct chats. In a group room, delete and clear_all only affect the memories saved in that room. Only for facts about the author themselves: don't use it for things about a group room as a whole, which you remember on your own.",
 		Parameters: json.RawMessage(`{
 			"type": "object",
 			"properties": {
