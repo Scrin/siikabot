@@ -7,6 +7,7 @@ import {
   fetchCurrentUser,
   logout,
   fetchReminders,
+  deleteReminder,
   fetchRooms,
   fetchRoomStats,
   fetchAdminRoomStats,
@@ -276,6 +277,38 @@ describe('API Client', () => {
 
       const result = await fetchReminders('token')
       expect(result).toEqual(mockResponse)
+    })
+  })
+
+  describe('deleteReminder', () => {
+    it('should send DELETE for the reminder with the token', async () => {
+      vi.mocked(fetch).mockResolvedValue({ ok: true } as Response)
+
+      await deleteReminder('my-token', 42)
+      expect(fetch).toHaveBeenCalledWith('/api/reminders/42', {
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer my-token' },
+      })
+    })
+
+    it('should throw AuthError on 401', async () => {
+      vi.mocked(fetch).mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ error: 'Unauthorized' }),
+      } as Response)
+
+      await expect(deleteReminder('token', 42)).rejects.toThrow(AuthError)
+    })
+
+    it("should throw the server's reason on other failures", async () => {
+      vi.mocked(fetch).mockResolvedValue({
+        ok: false,
+        status: 409,
+        json: () => Promise.resolve({ error: 'The reminder has already gone off' }),
+      } as Response)
+
+      await expect(deleteReminder('token', 42)).rejects.toThrow('The reminder has already gone off')
     })
   })
 

@@ -6,6 +6,7 @@ import {
   useHealthCheck,
   useMetrics,
   useReminders,
+  useDeleteReminder,
   useRooms,
   useWebhooks,
   useCreateWebhook,
@@ -20,6 +21,7 @@ vi.mock('./client', () => ({
   fetchHealthCheck: vi.fn(),
   fetchMetrics: vi.fn(),
   fetchReminders: vi.fn(),
+  deleteReminder: vi.fn(),
   fetchRooms: vi.fn(),
   fetchWebhooks: vi.fn(),
   createWebhook: vi.fn(),
@@ -163,6 +165,39 @@ describe('React Query Hooks', () => {
       })
 
       expect(client.fetchReminders).toHaveBeenCalledWith('valid-token')
+    })
+  })
+
+  describe('useDeleteReminder', () => {
+    function renderWithList() {
+      localStorage.setItem('siikabot_auth_token', 'valid-token')
+      vi.mocked(client.fetchCurrentUser).mockResolvedValue({ user_id: '@alice:example.com', authorizations: { admin: false } })
+      vi.mocked(client.fetchReminders).mockResolvedValue({ reminders: [] })
+      return renderHook(() => ({ list: useReminders(), mutation: useDeleteReminder() }), {
+        wrapper: createWrapper(),
+      })
+    }
+
+    it('should delete a reminder and refresh the list', async () => {
+      vi.mocked(client.deleteReminder).mockResolvedValue(undefined)
+      const { result } = renderWithList()
+      await waitFor(() => expect(result.current.list.isSuccess).toBe(true))
+
+      await result.current.mutation.mutateAsync(42)
+
+      expect(client.deleteReminder).toHaveBeenCalledWith('valid-token', 42)
+      await waitFor(() => expect(client.fetchReminders).toHaveBeenCalledTimes(2))
+    })
+
+    // A reminder that couldn't be deleted has usually gone off already, so it goes from the list
+    it('should refresh the list when deleting fails', async () => {
+      vi.mocked(client.deleteReminder).mockRejectedValue(new Error('The reminder has already gone off'))
+      const { result } = renderWithList()
+      await waitFor(() => expect(result.current.list.isSuccess).toBe(true))
+
+      await expect(result.current.mutation.mutateAsync(42)).rejects.toThrow()
+
+      await waitFor(() => expect(client.fetchReminders).toHaveBeenCalledTimes(2))
     })
   })
 

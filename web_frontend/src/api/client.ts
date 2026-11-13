@@ -156,6 +156,26 @@ export async function fetchReminders(token: string): Promise<RemindersResponse> 
 }
 
 /**
+ * Delete one of the current user's reminders, so that it never goes off
+ */
+export async function deleteReminder(token: string, reminderId: number): Promise<void> {
+  const response = await fetch(`${API_BASE}/reminders/${reminderId}`, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to delete reminder')
+  }
+}
+
+/**
  * Fetch the rooms shared between the bot and the current user
  */
 export async function fetchRooms(token: string): Promise<RoomsResponse> {

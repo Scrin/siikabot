@@ -14,6 +14,11 @@ var remindersTriggered = makeCollector(prometheus.NewCounter(prometheus.CounterO
 	Help: "Total number of reminders triggered and delivered",
 }))
 
+var remindersDeleted = makeCollector(prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: metricPrefix + "reminders_deleted_count",
+	Help: "Total number of reminders deleted before they went off, by where they were deleted",
+}, []string{"via"}))
+
 var remindersActive = makeCollector(prometheus.NewGauge(prometheus.GaugeOpts{
 	Name: metricPrefix + "reminders_active",
 	Help: "Current number of active (pending) reminders",
@@ -28,6 +33,12 @@ func RecordReminderCreated() {
 // RecordReminderTriggered records a reminder being triggered and delivered
 func RecordReminderTriggered() {
 	remindersTriggered.Inc()
+	remindersActive.Dec()
+}
+
+// RecordReminderDeleted records a reminder being deleted before it went off, via "dashboard" or "chat"
+func RecordReminderDeleted(via string) {
+	remindersDeleted.WithLabelValues(via).Inc()
 	remindersActive.Dec()
 }
 

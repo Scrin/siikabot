@@ -9,7 +9,7 @@ This document provides context for working with SiikaBot using Claude Code CLI.
 ### Key Features
 - **AI Chat** - LLM-powered conversations with tool calling (FMI weather and environment data, web search, GitHub, news, electricity prices, room message statistics, the bot's own source code)
 - **Network Utilities** - Ping and traceroute commands
-- **Reminders** - Time-based reminder system with natural language parsing
+- **Reminders** - Time-based reminders, set with `!remind` or in the chat. The chat also lists and deletes them, and posts the command that sets a deleted reminder again. People can delete theirs on the web dashboard too
 - **Alerting** - Alertmanager webhook relayed into Matrix rooms
 - **Message Webhooks** - Webhooks the admin sets up on the web dashboard, which post the Markdown message a request brings into a room, under the webhook's name
 - **Federation Info** - Matrix server federation details
@@ -57,8 +57,9 @@ In general, each command or webhook is considered a **self-contained feature** a
 - The replied-to message is a real `m.in_reply_to`, or the thread root for the first message of a thread. A thread fallback never counts, and any nested reply fallback is stripped.
 - A linked message is a `matrix.to` link or `matrix:` URI to an event in the same room. Links inside a referenced message are not followed.
 - A referenced message is used only if the person referring to it could see it themselves. In a room that shows its history only from when people joined or were invited, anything older than their membership is left out (`matrix.VisibleTo`).
-- Nothing else from a room may be passed to the model, persisted in `chat_history` or exposed through an LLM tool, and no tool may read room events.
+- Nothing else from a room may be passed to the model, persisted in `chat_history` or exposed through an LLM tool, apart from reminders as described below, and no tool may read room events.
 - Metadata that is not message content (member list, room name, message counts) is allowed, for the room the turn happens in only. A tool that looks such things up takes the room from the chat turn, never from its arguments: `find_room_members` gets the member list from the turn, and `get_message_stats` reads the counts for the turn's room.
+- A reminder's text may reach the model even when it was set with `!remind`, but only in the room it was set in. The chat sees and acts on only the reminders that the author of the latest message set in the room the turn happens in, and `manage_reminders` takes that room and that person from the turn, never from its arguments. A reminder set in one room can never be listed, read or deleted from a conversation in another room, a direct chat included, not even by the person who set it. They manage it there or on the dashboard.
 - Redacted messages must leave the chat history, and a message its sender edits is stored as edited.
 - The image of a message the model may see is stored with the turn that showed it (`chat_images`), and is shown again while that turn is in the context window. It leaves the history with the turn, and at once when its own message is redacted.
 
@@ -431,7 +432,7 @@ What the dashboard shows, and where the data comes from:
 | Component | API handler | Data, and what writes it |
 |-----------|-------------|--------------------------|
 | `MemoriesCard` | `api/memories.go` | `user_memory`, written by the memory tool (`llmtools/memory.go`) |
-| `RemindersCard` | `api/reminders.go` | `reminders`, written by `!remind` and the reminder tool (`llmtools/reminder.go`) |
+| `RemindersCard` | `api/reminders.go` | `reminders`, written by `!remind` and the `manage_reminders` tool (`llmtools/reminder.go`). People delete their reminders on the dashboard, in any room, and through `manage_reminders`, only in the room they set them in, which posts the command that sets the reminder again. Deleting one also stops its timer (`commands/remind/schedule.go`) |
 | `RoomsCard` | `api/rooms.go`, `api/admin.go` | `room_members`, kept by the Matrix state store (`matrix/state_store.go`) from sync, and rebuilt from the homeserver at startup. The card lists the rooms someone shares with the bot, and every room for an admin |
 | `RoomStats` (in `RoomsCard`) | `api/message_stats.go` | `message_stats` and `room_daily_stats`, written for every text message from anyone but the bot, edits aside (`bot/bot.go`), and read by the `get_message_stats` tool too. Only someone who has joined a room sees its stats, like its members |
 | `MessageActivityCard` | `api/message_stats.go` | `room_daily_stats` across every room, and the chat turns in `chat_usage` |
@@ -521,4 +522,15 @@ Each column of `chat_config` is a setting, declared in `commands/chat/settings.g
 
 Migrations in `db/migrations/` run automatically on startup, in filename order. Name new migrations with the next four-digit number, two underscores and a kebab-case description, like `0018__remove-grafana.sql`.
 
-When a change to what `chat_history` stores would leave existing rows that the code can't use as they are, empty the table instead of adding code that handles rows in the old format, along with `chat_references`, whose rows belong to its rows, and `chat_context_anchors`, whose anchors point into it. The chat context is short-lived anyway, so every room simply starts over once, and new columns can then be `NOT NULL`, or covered by CHECK constraints, so the code can rely on every row being complete. When the existing rows are already right under the new schema, such as a new nullable column whose NULL is what every existing row means, keep them. Data people save on purpose, like memories, is never dropped this way: give existing rows an explicit value in the migration instead.
+#### Clearing the chat history
+
+**Clear the chat history rather than work around it.** The chat history is short-lived context, not data anyone keeps. When a change would leave stored rows that the new code can't treat exactly like new ones, the change's migration empties the history. Never add code to handle the old rows: no fallbacks for an old format, no aliases for an old tool name, no special cases, and nothing left inconsistent "for now". This isn't limited to schema changes. It covers, for example:
+- a new column that existing rows can't fill
+- a tool that is renamed, removed or merged into another, or whose arguments or results change, because stored turns hold calls to it and their results
+- a change to what a stored row means, or to how a turn is rebuilt from the history
+
+Empty `chat_history` together with every table that hangs off it, in one statement: `TRUNCATE chat_history, chat_references, chat_images, chat_context_anchors;`. PostgreSQL refuses to truncate a table that other tables reference unless they are truncated with it. Every room then starts over once, as if `!chat reset` had been run everywhere. New columns can be `NOT NULL` or covered by CHECK constraints, so the code can rely on every row being complete.
+
+Keep the rows only when they are already right under the change, such as a new nullable column whose NULL is what every existing row means.
+
+This applies to the chat context only. Data people save on purpose, like memories and reminders, is never dropped this way: give existing rows an explicit value in the migration instead. `chat_usage` is accounting rather than context, and stays too.

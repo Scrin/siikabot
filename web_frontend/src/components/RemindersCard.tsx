@@ -1,5 +1,6 @@
-import { motion } from 'framer-motion'
-import { useReminders } from '../api/queries'
+import { useState } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { useReminders, useDeleteReminder } from '../api/queries'
 import type { ReminderResponse } from '../api/types'
 import { formatDateTime } from '../utils/dateTime'
 import { AnimatedList } from './ui/AnimatedList'
@@ -71,6 +72,16 @@ function ReminderItem({ reminder }: ReminderItemProps) {
   const timeUntil = formatTimeUntil(remindTime)
   const formattedDate = formatDateTime(remindTime)
   const prefersReducedMotion = useReducedMotion()
+  const deleteReminder = useDeleteReminder()
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+
+  const handleDelete = async () => {
+    try {
+      await deleteReminder.mutateAsync(reminder.id)
+    } catch {
+      // Error handled by mutation
+    }
+  }
 
   return (
     <motion.div
@@ -81,26 +92,68 @@ function ReminderItem({ reminder }: ReminderItemProps) {
       <div className="space-y-2">
         <p className="text-sm text-slate-200">{reminder.message}</p>
 
-        <div className="flex flex-wrap items-center gap-3 text-xs">
-          <span className="font-mono text-purple-400">{formattedDate}</span>
-          <span className="text-slate-500">|</span>
-          <motion.span
-            className="font-mono text-blue-400"
-            animate={
-              prefersReducedMotion
-                ? {}
-                : {
-                    textShadow: [
-                      '0 0 0 transparent',
-                      '0 0 8px rgba(59, 130, 246, 0.5)',
-                      '0 0 0 transparent',
-                    ],
-                  }
-            }
-            transition={{ duration: 2, repeat: Infinity }}
-          >
-            {timeUntil}
-          </motion.span>
+        <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="font-mono text-purple-400">{formattedDate}</span>
+            <span className="text-slate-500">|</span>
+            <motion.span
+              className="font-mono text-blue-400"
+              animate={
+                prefersReducedMotion
+                  ? {}
+                  : {
+                      textShadow: [
+                        '0 0 0 transparent',
+                        '0 0 8px rgba(59, 130, 246, 0.5)',
+                        '0 0 0 transparent',
+                      ],
+                    }
+              }
+              transition={{ duration: 2, repeat: Infinity }}
+            >
+              {timeUntil}
+            </motion.span>
+          </div>
+
+          <AnimatePresence mode="wait">
+            {showDeleteConfirm ? (
+              <motion.div
+                key="confirm"
+                className="flex items-center gap-2"
+                initial={prefersReducedMotion ? {} : { opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={prefersReducedMotion ? {} : { opacity: 0, scale: 0.9 }}
+              >
+                <motion.button
+                  className="text-xs text-rose-400 hover:text-rose-300 disabled:opacity-50"
+                  onClick={handleDelete}
+                  disabled={deleteReminder.isPending}
+                  whileHover={prefersReducedMotion ? {} : { scale: 1.1 }}
+                >
+                  {deleteReminder.isPending ? '...' : 'Confirm'}
+                </motion.button>
+                <motion.button
+                  className="text-xs text-slate-400 hover:text-slate-300"
+                  onClick={() => setShowDeleteConfirm(false)}
+                  whileHover={prefersReducedMotion ? {} : { scale: 1.1 }}
+                >
+                  Cancel
+                </motion.button>
+              </motion.div>
+            ) : (
+              <motion.button
+                key="delete-btn"
+                className="text-xs text-rose-400 hover:text-rose-300"
+                onClick={() => setShowDeleteConfirm(true)}
+                initial={prefersReducedMotion ? {} : { opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={prefersReducedMotion ? {} : { opacity: 0 }}
+                whileHover={prefersReducedMotion ? {} : { scale: 1.1 }}
+              >
+                Delete
+              </motion.button>
+            )}
+          </AnimatePresence>
         </div>
 
         <div className="text-xs text-slate-500">
@@ -114,6 +167,12 @@ function ReminderItem({ reminder }: ReminderItemProps) {
             <span className="font-mono text-slate-400">{reminder.room_id}</span>
           )}
         </div>
+
+        {deleteReminder.isError && (
+          <p className="text-xs text-rose-400">
+            {deleteReminder.error?.message || 'Failed to delete reminder'}
+          </p>
+        )}
       </div>
     </motion.div>
   )

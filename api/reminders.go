@@ -1,9 +1,12 @@
 package api
 
 import (
+	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
+	"github.com/Scrin/siikabot/commands/remind"
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/matrix"
 	"github.com/gin-gonic/gin"
@@ -58,4 +61,48 @@ func RemindersHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+// DeleteReminderHandler deletes one of the authenticated user's reminders, in whichever room it
+// was set, and stops it from going off. Nothing is posted in the room.
+// DELETE /api/reminders/:id
+// Requires Authorization: Bearer <token> header (use with AuthMiddleware)
+func DeleteReminderHandler(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	userID, ok := GetUserIDFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "Not authenticated"})
+		return
+	}
+
+	reminderID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "Invalid reminder ID"})
+		return
+	}
+
+	_, err = remind.Delete(ctx, db.ReminderScope{UserID: userID}, reminderID, remind.ViaDashboard)
+	if err != nil {
+		status, message := deleteReminderFailure(err)
+		if status == http.StatusInternalServerError {
+			log.Error().Ctx(ctx).Err(err).Str("user_id", userID).Int64("reminder_id", reminderID).Msg("Failed to delete reminder")
+		}
+		c.JSON(status, ErrorResponse{Error: message})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+// deleteReminderFailure is the status and message for a reminder that couldn't be deleted
+func deleteReminderFailure(err error) (int, string) {
+	switch {
+	case errors.Is(err, remind.ErrNotFound):
+		return http.StatusNotFound, "The reminder no longer exists"
+	case errors.Is(err, remind.ErrAlreadyDelivered):
+		return http.StatusConflict, "The reminder has already gone off"
+	default:
+		return http.StatusInternalServerError, "Failed to delete reminder"
+	}
 }

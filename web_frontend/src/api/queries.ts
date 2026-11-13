@@ -5,6 +5,7 @@ import {
   fetchHealthCheck,
   fetchMetrics,
   fetchReminders,
+  deleteReminder,
   fetchRooms,
   fetchAdminRooms,
   fetchRoomMembers,
@@ -79,6 +80,22 @@ export function useReminders() {
     queryFn: () => fetchReminders(token!),
     enabled: isAuthenticated && !!token,
     refetchInterval: 30000,
+  })
+}
+
+/**
+ * Hook to delete one of the user's reminders. The list is refreshed whether or not it worked,
+ * since a reminder that couldn't be deleted has usually gone off or been deleted elsewhere.
+ */
+export function useDeleteReminder() {
+  const { token } = useAuth()
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (reminderId: number) => deleteReminder(token!, reminderId),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.reminders })
+    },
   })
 }
 

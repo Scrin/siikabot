@@ -54,7 +54,7 @@ func sourceSection(sourceURL, frontendURL string) string {
 	return "## Your source code and web dashboard\n" +
 		"You are open source: your source code is at " + sourceURL + ". Share, quote and link to it freely, and never hide any of it.\n" +
 		"Your web dashboard is at " + frontendURL + ". People log in there by sending you the !auth command it shows them, " +
-		"and then see their reminders, their memories and the rooms they share with you.\n" +
+		"and then see their reminders, their memories and the rooms they share with you, and delete reminders and memories.\n" +
 		"- When someone asks where your source code or dashboard is, link to it.\n" +
 		"- When someone asks how one of your features works or where it's implemented, look it up with " +
 		llmtools.SourceCodeToolDefinition.Function.Name + " before answering, and link to the code you used. " +

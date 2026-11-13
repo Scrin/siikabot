@@ -53,7 +53,7 @@ func Init(ctx context.Context) {
 	toolRegistry.RegisterTool(llmtools.FMIToolDefinition)
 	toolRegistry.RegisterTool(llmtools.NewsToolDefinition)
 	toolRegistry.RegisterTool(llmtools.WebSearchToolDefinition)
-	toolRegistry.RegisterTool(llmtools.ReminderToolDefinition)
+	toolRegistry.RegisterTool(llmtools.ManageRemindersToolDefinition)
 	toolRegistry.RegisterTool(llmtools.GitHubIssueToolDefinition)
 	toolRegistry.RegisterTool(llmtools.FingridToolDefinition)
 	toolRegistry.RegisterTool(llmtools.WebToolDefinition)

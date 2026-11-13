@@ -50,6 +50,7 @@ func initHTTP() {
 		protectedGroup.Use(api.AuthMiddleware())
 		{
 			protectedGroup.GET("/reminders", api.RemindersHandler)
+			protectedGroup.DELETE("/reminders/:id", api.DeleteReminderHandler)
 			protectedGroup.GET("/rooms", api.RoomsHandler)
 			protectedGroup.GET("/rooms/:roomId/members", api.RoomMembersHandler)
 			protectedGroup.GET("/rooms/:roomId/stats", api.RoomStatsHandler)

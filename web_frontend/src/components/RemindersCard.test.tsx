@@ -1,19 +1,51 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import userEvent from '@testing-library/user-event'
 import { render, screen } from '../test/test-utils'
 import { RemindersCard } from './RemindersCard'
 import * as queries from '../api/queries'
 
 vi.mock('../api/queries', () => ({
   useReminders: vi.fn(),
+  useDeleteReminder: vi.fn(),
 }))
 
 vi.mock('../hooks/useReducedMotion', () => ({
   useReducedMotion: () => true, // Disable animations for testing
 }))
 
+function mockDeleteReminder(mutation: Partial<ReturnType<typeof queries.useDeleteReminder>> = {}) {
+  const mutateAsync = vi.fn()
+  vi.mocked(queries.useDeleteReminder).mockReturnValue({
+    mutateAsync,
+    isPending: false,
+    isError: false,
+    error: null,
+    ...mutation,
+  } as unknown as ReturnType<typeof queries.useDeleteReminder>)
+  return mutateAsync
+}
+
+function mockOneReminder() {
+  vi.mocked(queries.useReminders).mockReturnValue({
+    isLoading: false,
+    data: {
+      reminders: [
+        {
+          id: 42,
+          remind_time: new Date(Date.now() + 3600000).toISOString(),
+          room_id: '!room:example.com',
+          message: 'Dentist',
+        },
+      ],
+    },
+    error: null,
+  } as ReturnType<typeof queries.useReminders>)
+}
+
 describe('RemindersCard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockDeleteReminder()
   })
 
   describe('loading state', () => {
@@ -238,6 +270,55 @@ describe('RemindersCard', () => {
 
       render(<RemindersCard />)
       expect(screen.getByText('in 2d 6h')).toBeInTheDocument()
+    })
+  })
+  describe('deleting', () => {
+    it('should ask for confirmation before deleting', async () => {
+      const user = userEvent.setup()
+      const mutateAsync = mockDeleteReminder()
+      mockOneReminder()
+
+      render(<RemindersCard />)
+      await user.click(screen.getByText('Delete'))
+
+      expect(screen.getByText('Confirm')).toBeInTheDocument()
+      expect(screen.getByText('Cancel')).toBeInTheDocument()
+      expect(mutateAsync).not.toHaveBeenCalled()
+    })
+
+    it('should delete the reminder on confirmation', async () => {
+      const user = userEvent.setup()
+      const mutateAsync = mockDeleteReminder()
+      mockOneReminder()
+
+      render(<RemindersCard />)
+      await user.click(screen.getByText('Delete'))
+      await user.click(screen.getByText('Confirm'))
+
+      expect(mutateAsync).toHaveBeenCalledWith(42)
+    })
+
+    it('should go back without deleting on cancel', async () => {
+      const user = userEvent.setup()
+      const mutateAsync = mockDeleteReminder()
+      mockOneReminder()
+
+      render(<RemindersCard />)
+      await user.click(screen.getByText('Delete'))
+      await user.click(screen.getByText('Cancel'))
+
+      expect(screen.getByText('Delete')).toBeInTheDocument()
+      expect(screen.queryByText('Confirm')).not.toBeInTheDocument()
+      expect(mutateAsync).not.toHaveBeenCalled()
+    })
+
+    it('should say why a reminder could not be deleted', () => {
+      mockDeleteReminder({ isError: true, error: new Error('The reminder has already gone off') })
+      mockOneReminder()
+
+      render(<RemindersCard />)
+
+      expect(screen.getByText('The reminder has already gone off')).toBeInTheDocument()
     })
   })
 })
