@@ -184,6 +184,7 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 	prompt := buildInitialMessages(buildCtx, trigger, cfg)
 	messages, composition := prompt.messages, prompt.composition
 	stats.turnImages, stats.historyImages, stats.imageDuration = prompt.turnImages, prompt.historyImages, prompt.imageTime
+	stats.roomMemories = prompt.roomMemories
 	buildSpan.SetAttributes(
 		attribute.Int("siikabot.chat.message_count", len(messages)),
 		attribute.Int("siikabot.chat.history_tokens", composition.history),
@@ -196,6 +197,7 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 		attribute.Bool("siikabot.chat.in_thread", trigger.ThreadRootID != ""),
 		attribute.Bool("siikabot.chat.thread_seeded", prompt.threadSeeded),
 		attribute.Int("siikabot.chat.unseen_before", trigger.UnseenBefore),
+		attribute.Int("siikabot.chat.room_memory_count", prompt.roomMemories),
 	)
 	buildSpan.End()
 
@@ -512,6 +514,8 @@ type turnPrompt struct {
 	// userTurn is the trigger as it is stored, once the turn gets that far
 	userTurn db.UserTurn
 	room     roomInfo
+	// roomMemories is how many of the bot's memories of the room the system prompt holds
+	roomMemories int
 	// threadSeeded says the history begins with the turn the trigger's thread was started from
 	threadSeeded bool
 }
@@ -527,7 +531,8 @@ func buildInitialMessages(ctx context.Context, trigger Trigger, cfg db.ChatConfi
 	// not: the current time in particular used to sit in the second sentence, which changed the
 	// prefix every second and made caching impossible. The system prompt now depends only on the
 	// room, and everything that changes from turn to turn goes in the turn context after the history.
-	system := systemPrompt(room.nameOf(ctx, config.UserID), room, roomMemoriesFor(ctx, room))
+	roomMemories := roomMemoriesFor(ctx, room)
+	system := systemPrompt(room.nameOf(ctx, config.UserID), room, roomMemories)
 
 	// The time the turn is built at. The window is measured as it is replayed, so the two have to
 	// agree on which tool results have expired, and both take the time from here.
@@ -601,6 +606,7 @@ func buildInitialMessages(ctx context.Context, trigger Trigger, cfg db.ChatConfi
 		messages:      messages,
 		composition:   composition,
 		turnImages:    len(turnImages),
+		roomMemories:  len(roomMemories),
 		historyImages: historyImageCount,
 		imageTime:     refs.imageTime,
 		userTurn:      userTurn,

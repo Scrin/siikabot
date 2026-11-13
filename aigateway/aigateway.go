@@ -93,6 +93,22 @@ type Message struct {
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 	Refusal    any        `json:"refusal,omitempty"`
+
+	// Reasoning and ReasoningContent are what a reasoning model wrote before its answer, under the name
+	// its provider uses: OpenRouter's reasoning, or DeepSeek's reasoning_content. They're read from
+	// responses only, for logs and traces. The messages of a request are built anew rather than copied
+	// from a response, so they never send them back.
+	Reasoning        string `json:"reasoning,omitempty"`
+	ReasoningContent string `json:"reasoning_content,omitempty"`
+}
+
+// ReasoningText returns what a reasoning model wrote before its answer, empty if the response has
+// none
+func (m Message) ReasoningText() string {
+	if m.Reasoning != "" {
+		return m.Reasoning
+	}
+	return m.ReasoningContent
 }
 
 // ChatRequest represents a request to the chat API

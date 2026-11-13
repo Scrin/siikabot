@@ -49,8 +49,10 @@ type turnStats struct {
 	imageDuration time.Duration
 	// turnImages are how many images the trigger showed the model, its own and those of the messages
 	// it refers to, and historyImages how many the replayed history showed
-	turnImages       int
-	historyImages    int
+	turnImages    int
+	historyImages int
+	// roomMemories is how many of the bot's memories of the room the system prompt held
+	roomMemories     int
 	promptTokens     int
 	completionTokens int
 	cachedTokens     int
@@ -125,6 +127,7 @@ func (s *turnStats) finish(ctx context.Context, roomID, sender, model string, to
 		Strs("tools_called", s.toolsCalled).
 		Int("turn_image_count", s.turnImages).
 		Int("history_image_count", s.historyImages).
+		Int("room_memory_count", s.roomMemories).
 		Int("prompt_tokens", s.promptTokens).
 		Int("completion_tokens", s.completionTokens).
 		Int("cached_prompt_tokens", s.cachedTokens).
@@ -196,6 +199,7 @@ func (s *turnStats) recordOnSpan(span trace.Span) {
 		attribute.Int("siikabot.chat.prompt_tokens", s.promptTokens),
 		attribute.Int("siikabot.chat.completion_tokens", s.completionTokens),
 		attribute.Int("siikabot.chat.cached_prompt_tokens", s.cachedTokens),
+		attribute.Int("siikabot.chat.room_memory_count", s.roomMemories),
 		attribute.Float64("siikabot.chat.cache_hit_rate", s.cacheHitRate()),
 	)
 	if s.outcome != "ok" && s.outcome != outcomeSilent {

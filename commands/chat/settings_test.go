@@ -353,6 +353,7 @@ func TestMetricBucketsCoverTheSettings(t *testing.T) {
 	metrics.RecordChatRequestDuration("test", 0)
 	metrics.RecordChatTurnPhase("test", phaseModel, 0)
 	metrics.RecordChatAPICallDuration("test", 0)
+	metrics.RecordRoomMemoryReflectionDuration(0, 0)
 
 	families, err := prometheus.DefaultGatherer.Gather()
 	if err != nil {
@@ -376,6 +377,8 @@ func TestMetricBucketsCoverTheSettings(t *testing.T) {
 		"siikabot_chat_request_duration_seconds":    maxTurnTimeout.Seconds(),
 		"siikabot_chat_turn_phase_duration_seconds": maxTurnTimeout.Seconds(),
 		"siikabot_chat_api_call_duration_seconds":   aigateway.MaxCallTimeout.Seconds(),
+		// A pass is bounded by turn_timeout
+		"siikabot_room_memory_reflection_duration_seconds": maxTurnTimeout.Seconds(),
 	} {
 		if top, ok := tops[name]; !ok || top < bound {
 			t.Errorf("the buckets of %s reach %v, short of the bound of %v", name, top, bound)

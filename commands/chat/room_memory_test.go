@@ -166,9 +166,25 @@ func TestReflectionPrompt(t *testing.T) {
 	}
 }
 
+// rejectedReasons lists why each rejected change was rejected, in order
+func rejectedReasons(decisions []changeDecision) string {
+	var reasons []string
+	for _, d := range decisions {
+		if !d.accepted() {
+			reasons = append(reasons, d.reason)
+		}
+	}
+	return strings.Join(reasons, " ")
+}
+
 func TestMemoryChanges(t *testing.T) {
-	changes, rejected, err := memoryChanges(changesCall(`{"changes": [
-		{"action": "add", "memory": "  Several people here play EVE Online.  "},
+	memories := []db.RoomMemory{
+		{ID: 1, Memory: "first"},
+		{ID: 2, Memory: "People here prefer Finnish."},
+		{ID: 3, Memory: "Something that no longer holds."},
+	}
+	decisions, err := memoryChanges(changesCall(`{"changes": [
+		{"action": "add", "memory_id": 2, "memory": "  Several people here play EVE Online.  "},
 		{"action": "update", "memory_id": 2, "memory": "People here ask for answers in Finnish."},
 		{"action": "delete", "memory_id": 3},
 		{"action": "update", "memory_id": 3, "memory": "Too late: it was deleted above."},
@@ -179,9 +195,12 @@ func TestMemoryChanges(t *testing.T) {
 		{"action": "add", "memory": "`+strings.Repeat("x", maxRoomMemoryLength+1)+`"},
 		{"action": "add", "memory": "`+strings.Repeat("ä", maxRoomMemoryLength)+`"},
 		{"action": "forget"}
-	]}`), roomMemories(1, 2, 3))
+	]}`), memories)
 	if err != nil {
 		t.Fatalf("memoryChanges() failed: %v", err)
+	}
+	if len(decisions) != 11 {
+		t.Fatalf("got %d decisions, want one for each of the 11 proposed changes", len(decisions))
 	}
 
 	want := []db.RoomMemoryChange{
@@ -190,6 +209,7 @@ func TestMemoryChanges(t *testing.T) {
 		{Action: db.RoomMemoryDelete, MemoryID: 3},
 		{Action: db.RoomMemoryAdd, Memory: strings.Repeat("ä", maxRoomMemoryLength)},
 	}
+	changes := acceptedChanges(decisions)
 	if len(changes) != len(want) {
 		t.Fatalf("accepted %d changes, want %d: %#v", len(changes), len(want), changes)
 	}
@@ -199,12 +219,14 @@ func TestMemoryChanges(t *testing.T) {
 		}
 	}
 
-	var reasons []string
-	for _, r := range rejected {
-		reasons = append(reasons, r.reason)
+	// The memory's text before the change goes with an update or delete, for the logs and the trace
+	if decisions[0].previous != "" || decisions[1].previous != "People here prefer Finnish." ||
+		decisions[2].previous != "Something that no longer holds." {
+		t.Errorf("the previous texts are %q, %q and %q", decisions[0].previous, decisions[1].previous, decisions[2].previous)
 	}
+
 	wantReasons := "unknown_memory unknown_memory unknown_memory empty multiple_lines too_long unknown_action"
-	if got := strings.Join(reasons, " "); got != wantReasons {
+	if got := rejectedReasons(decisions); got != wantReasons {
 		t.Errorf("rejected for %q, want %q", got, wantReasons)
 	}
 }
@@ -217,7 +239,7 @@ func TestMemoryChangesKeepToTheLimit(t *testing.T) {
 		ids[i] = int64(i + 1)
 	}
 
-	changes, rejected, err := memoryChanges(changesCall(`{"changes": [
+	decisions, err := memoryChanges(changesCall(`{"changes": [
 		{"action": "add", "memory": "No room for this."},
 		{"action": "delete", "memory_id": 1},
 		{"action": "add", "memory": "Room for this."},
@@ -226,29 +248,30 @@ func TestMemoryChangesKeepToTheLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("memoryChanges() failed: %v", err)
 	}
+	changes := acceptedChanges(decisions)
 	if len(changes) != 2 || changes[0].Action != db.RoomMemoryDelete || changes[1].Memory != "Room for this." {
 		t.Errorf("accepted %#v", changes)
 	}
-	if len(rejected) != 2 || rejected[0].reason != "room_full" || rejected[1].reason != "room_full" {
-		t.Errorf("rejected %#v", rejected)
+	if got := rejectedReasons(decisions); got != "room_full room_full" {
+		t.Errorf("rejected for %q", got)
 	}
 }
 
 func TestMemoryChangesWithoutChanges(t *testing.T) {
-	changes, rejected, err := memoryChanges(nil, roomMemories(1))
-	if err != nil || len(changes) != 0 || len(rejected) != 0 {
-		t.Errorf("no tool call gives %#v, %#v, %v; want no change", changes, rejected, err)
+	decisions, err := memoryChanges(nil, roomMemories(1))
+	if err != nil || len(decisions) != 0 {
+		t.Errorf("no tool call gives %#v, %v; want no change", decisions, err)
 	}
 }
 
 // Arguments that can't be read fail the pass, which is then tried again
 func TestMemoryChangesThatCantBeRead(t *testing.T) {
-	if _, _, err := memoryChanges(changesCall(`{"changes": [{"action": "add", "memory": "cut off`), nil); err == nil {
+	if _, err := memoryChanges(changesCall(`{"changes": [{"action": "add", "memory": "cut off`), nil); err == nil {
 		t.Error("cut-off arguments were read")
 	}
 
 	other := []aigateway.ToolCall{{ID: "call_1", Type: "function", Function: aigateway.ToolFunction{Name: "memory", Arguments: "{}"}}}
-	if _, _, err := memoryChanges(other, nil); err == nil {
+	if _, err := memoryChanges(other, nil); err == nil {
 		t.Error("a call of another tool was read as changes")
 	}
 }
@@ -256,17 +279,91 @@ func TestMemoryChangesThatCantBeRead(t *testing.T) {
 // A room is tried again after a failed pass, until the failures reach the limit and the bot moves on
 // past the conversations that failed
 func TestAfterFailure(t *testing.T) {
-	progress := db.RoomMemoryProgress{RoomID: "!room:example.com", ReflectedUntil: 10}
-	for attempt := 1; attempt < maxReflectionFailures; attempt++ {
-		var gaveUp bool
-		progress, gaveUp = afterFailure(progress, 20)
-		if gaveUp || progress.FailedAttempts != attempt || progress.ReflectedUntil != 10 {
-			t.Fatalf("after %d failures: %#v, gave up: %v", attempt, progress, gaveUp)
+	outcome := reflectionRequestFailed
+	base := db.RoomMemoryProgress{RoomID: "!room:example.com", ReflectedUntil: 10, LastOutcome: &outcome}
+	for failedBefore := 0; failedBefore < maxReflectionFailures-1; failedBefore++ {
+		progress, gaveUp := afterFailure(base, failedBefore, 20)
+		if gaveUp || progress.FailedAttempts != failedBefore+1 || progress.ReflectedUntil != 10 {
+			t.Fatalf("after %d failures: %#v, gave up: %v", failedBefore+1, progress, gaveUp)
 		}
 	}
 
-	progress, gaveUp := afterFailure(progress, 20)
-	if !gaveUp || progress.FailedAttempts != 0 || progress.ReflectedUntil != 20 {
+	progress, gaveUp := afterFailure(base, maxReflectionFailures-1, 20)
+	if !gaveUp || progress.FailedAttempts != 0 || progress.ReflectedUntil != 20 || *progress.LastOutcome != outcome {
 		t.Errorf("after %d failures: %#v, gave up: %v", maxReflectionFailures, progress, gaveUp)
+	}
+}
+
+func TestScheduleOf(t *testing.T) {
+	now := time.Date(2026, 11, 13, 23, 0, 0, 0, time.UTC)
+	delay := 30 * time.Minute
+	at := func(minutesAgo int) *time.Time {
+		t := now.Add(-time.Duration(minutesAgo) * time.Minute)
+		return &t
+	}
+
+	for _, tt := range []struct {
+		name  string
+		state db.RoomMemoryState
+		delay *time.Duration
+		want  string
+		// dueIn is how long from now the room is due, when it has new conversations and the passes are on
+		dueIn time.Duration
+	}{
+		{"nothing new", db.RoomMemoryState{After: 10, Until: 10}, &delay, ScheduleUpToDate, 0},
+		{"nothing new while off", db.RoomMemoryState{After: 10, Until: 10}, nil, ScheduleUpToDate, 0},
+		{"new while off", db.RoomMemoryState{After: 10, Until: 12, LatestAt: at(60)}, nil, ScheduleOff, 0},
+		{"still talking", db.RoomMemoryState{Until: 12, LatestAt: at(10)}, &delay, ScheduleWaiting, 20 * time.Minute},
+		{"quiet long enough", db.RoomMemoryState{Until: 12, LatestAt: at(31)}, &delay, ScheduleDue, -time.Minute},
+		{"quiet exactly long enough", db.RoomMemoryState{Until: 12, LatestAt: at(30)}, &delay, ScheduleDue, 0},
+		{"quiet since a pass that went fine", db.RoomMemoryState{After: 5, Until: 12, LatestAt: at(40), LastAttemptAt: at(45)}, &delay, ScheduleDue, -10 * time.Minute},
+		{"failed recently", db.RoomMemoryState{Until: 12, LatestAt: at(60), LastAttemptAt: at(5), FailedAttempts: 1}, &delay, ScheduleRetrying, 25 * time.Minute},
+		{"failed long ago", db.RoomMemoryState{Until: 12, LatestAt: at(90), LastAttemptAt: at(35), FailedAttempts: 2}, &delay, ScheduleDue, -5 * time.Minute},
+	} {
+		got := ScheduleOf(tt.state, tt.delay, now)
+		if got.Status != tt.want {
+			t.Errorf("%s: status %s, want %s", tt.name, got.Status, tt.want)
+			continue
+		}
+		hasDue := tt.want != ScheduleUpToDate && tt.want != ScheduleOff
+		switch {
+		case hasDue && got.DueAt == nil:
+			t.Errorf("%s: no due time", tt.name)
+		case hasDue && !got.DueAt.Equal(now.Add(tt.dueIn)):
+			t.Errorf("%s: due at %s, want %s", tt.name, got.DueAt, now.Add(tt.dueIn))
+		case !hasDue && got.DueAt != nil:
+			t.Errorf("%s: due at %s, want no due time", tt.name, got.DueAt)
+		}
+	}
+}
+
+// A change whose memory the admin deleted while the pass ran is the one that didn't take effect
+func TestNotApplied(t *testing.T) {
+	changes := []db.RoomMemoryChange{
+		{Action: db.RoomMemoryAdd, Memory: "new"},
+		{Action: db.RoomMemoryUpdate, MemoryID: 2, Memory: "revised"},
+		{Action: db.RoomMemoryDelete, MemoryID: 3},
+		{Action: db.RoomMemoryAdd, Memory: "another"},
+	}
+	applied := []db.RoomMemoryChange{
+		{Action: db.RoomMemoryAdd, MemoryID: 41, Memory: "new"},
+		{Action: db.RoomMemoryDelete, MemoryID: 3},
+		{Action: db.RoomMemoryAdd, MemoryID: 42, Memory: "another"},
+	}
+
+	missing := notApplied(changes, applied)
+	if len(missing) != 1 || missing[0].Action != db.RoomMemoryUpdate || missing[0].MemoryID != 2 {
+		t.Errorf("notApplied() = %#v, want the update of memory 2", missing)
+	}
+	if missing := notApplied(changes[:1], applied[:1]); len(missing) != 0 {
+		t.Errorf("with everything applied, notApplied() = %#v", missing)
+	}
+}
+
+// The turns a pass covers are named by their event IDs, which is all the logs say of them
+func TestTurnEventIDs(t *testing.T) {
+	conversations := conversationsOf([]db.ChatMessage{questionRow("$first", "a"), questionRow("$second", "b")})
+	if got := strings.Join(turnEventIDs(conversations), " "); got != "$first $second" {
+		t.Errorf("turnEventIDs() = %q", got)
 	}
 }

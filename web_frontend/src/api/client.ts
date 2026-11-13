@@ -13,6 +13,7 @@ import type {
   DeleteAllMemoriesResponse,
   RoomMemoriesResponse,
   DeleteRoomMemoriesResponse,
+  ReflectResponse,
   ChatUsageResponse,
   ChatConfigResponse,
   RoomStatsResponse,
@@ -412,6 +413,31 @@ export async function deleteRoomMemories(
     }
     const error = await response.json().catch(() => ({ error: response.statusText }))
     throw new Error(error.error || 'Failed to delete the memories')
+  }
+
+  return response.json()
+}
+
+/**
+ * Think back over a room's new conversations at once, whether or not the room is due a pass (admin only)
+ */
+export async function reflectRoom(token: string, roomId: string): Promise<ReflectResponse> {
+  const response = await fetch(`${API_BASE}/admin/rooms/${encodeURIComponent(roomId)}/reflect`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthError('Token invalid or expired')
+    }
+    if (response.status === 403) {
+      throw new Error('Admin access required')
+    }
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || 'Failed to think back over the room')
   }
 
   return response.json()

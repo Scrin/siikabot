@@ -202,6 +202,39 @@ func TestChatCompletionResponseParsing(t *testing.T) {
 	}
 }
 
+// TestReasoningIsReadFromResponses verifies what a reasoning model wrote before its answer is read under
+// either name providers give it, and that a message built for a request never sends it
+func TestReasoningIsReadFromResponses(t *testing.T) {
+	for name, body := range map[string]string{
+		"OpenRouter": `{"role":"assistant","content":"","reasoning":"One message isn't a pattern."}`,
+		"DeepSeek":   `{"role":"assistant","content":"","reasoning_content":"One message isn't a pattern."}`,
+	} {
+		var msg Message
+		if err := json.Unmarshal([]byte(body), &msg); err != nil {
+			t.Fatalf("%s: unexpected error: %v", name, err)
+		}
+		if got := msg.ReasoningText(); got != "One message isn't a pattern." {
+			t.Errorf("%s: reasoning read as %q", name, got)
+		}
+	}
+
+	var none Message
+	if err := json.Unmarshal([]byte(`{"role":"assistant","content":"Red"}`), &none); err != nil {
+		t.Fatal(err)
+	}
+	if none.ReasoningText() != "" {
+		t.Errorf("a response without reasoning reads as %q", none.ReasoningText())
+	}
+
+	encoded, err := json.Marshal(Message{Role: "assistant", Content: "Red"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != `{"role":"assistant","content":"Red"}` {
+		t.Errorf("a request message encodes as %s", encoded)
+	}
+}
+
 // TestChatCompletionResponseToolCall verifies a tool call parses from the top-level shape
 func TestChatCompletionResponseToolCall(t *testing.T) {
 	body := []byte(`{

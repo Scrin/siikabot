@@ -66,6 +66,7 @@ func initHTTP() {
 				adminGroup.GET("/rooms/:roomId/members", api.AdminRoomMembersHandler)
 				adminGroup.GET("/rooms/:roomId/stats", api.AdminRoomStatsHandler)
 				adminGroup.DELETE("/rooms/:roomId/memories", api.DeleteRoomMemoriesHandler)
+				adminGroup.POST("/rooms/:roomId/reflect", api.ReflectRoomHandler)
 				adminGroup.GET("/room-memories", api.RoomMemoriesHandler)
 				adminGroup.DELETE("/room-memories/:id", api.DeleteRoomMemoryHandler)
 				adminGroup.GET("/chat-usage", api.ChatUsageHandler)

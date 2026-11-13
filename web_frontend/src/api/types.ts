@@ -113,20 +113,68 @@ export interface RoomMemory {
   created_at: string
   /** When a later pass last revised the memory, the same as created_at if none has */
   updated_at: string
+  /** The trace of the pass that formed the memory, null when it wasn't recorded */
+  created_trace_id: string | null
+  /** The trace of the pass that last revised the memory, null when it wasn't recorded */
+  updated_trace_id: string | null
 }
 
-/** A room the bot remembers things about, with what it remembers */
+/** How a room stands with the schedule of passes */
+export type RoomMemoryState = 'up_to_date' | 'waiting' | 'retrying' | 'due' | 'off'
+
+/** How a room stands with the bot's passes over it */
+export interface RoomMemoryStatus {
+  /**
+   * up_to_date, waiting for the room to be quiet for long enough, retrying after a failed pass, due at
+   * the next check, or off: new conversations while the passes are off
+   */
+  state: RoomMemoryState
+  /** When the room is due a pass, null when it has nothing new or the passes are off */
+  due_at: string | null
+  /** When the newest conversation the bot hasn't thought back over happened, null if there is none */
+  latest_activity_at: string | null
+  /** How many passes have failed in a row */
+  failed_attempts: number
+  /** When the latest pass ran, null when not recorded */
+  last_attempt_at: string | null
+  /** How the latest pass went, such as changed, unchanged or request_failed, null when not recorded */
+  last_outcome: string | null
+  /** The latest pass's trace, null when not recorded */
+  last_trace_id: string | null
+}
+
+/** A room the bot remembers things about or has been thinking back over */
 export interface RoomMemories {
   room_id: string
   room_name?: string
-  /** When the bot last thought back over the room's conversations, null if it never has */
+  /** When a pass over the room last completed, null if none has */
   last_reflected_at: string | null
+  status: RoomMemoryStatus
   memories: RoomMemory[]
 }
 
 export interface RoomMemoriesResponse {
-  /** The room whose memories changed most recently first */
+  /** The room with the most recent activity first */
   rooms: RoomMemories[]
+}
+
+/** How a pass the admin started went */
+export interface ReflectResponse {
+  /**
+   * changed or unchanged for a pass that completed, and otherwise why it was skipped, such as
+   * nothing_new, or why it failed, such as request_failed
+   */
+  outcome: string
+  skipped: boolean
+  failed: boolean
+  conversation_count: number
+  shown_conversation_count: number
+  added: number
+  updated: number
+  deleted: number
+  rejected: number
+  /** The pass's trace, empty without tracing */
+  trace_id: string
 }
 
 export interface DeleteRoomMemoriesResponse {

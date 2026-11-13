@@ -16,6 +16,7 @@ import {
   fetchRoomMemories,
   deleteRoomMemory,
   deleteRoomMemories,
+  reflectRoom,
   fetchChatUsage,
   fetchChatConfig,
   fetchRoomStats,
@@ -217,6 +218,22 @@ export function useDeleteRoomMemories() {
 
   return useMutation({
     mutationFn: (roomId: string) => deleteRoomMemories(token!, roomId),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.roomMemories })
+    },
+  })
+}
+
+/**
+ * Hook to think back over a room's new conversations at once (admin only). The list is refreshed however
+ * the pass ends, since even a failed one changes how the room stands.
+ */
+export function useReflectRoom() {
+  const { token } = useAuth()
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (roomId: string) => reflectRoom(token!, roomId),
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.roomMemories })
     },
