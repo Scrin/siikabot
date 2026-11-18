@@ -3,8 +3,8 @@ package bot
 import (
 	"bytes"
 	"context"
+	"html/template"
 	"net/http"
-	"text/template"
 	"time"
 
 	"github.com/Scrin/siikabot/constants"
@@ -31,13 +31,53 @@ type Alert struct {
 	GeneratorURL string            `json:"generatorURL"`
 }
 
-const alertMessageTemplate = `<h4>{{ if eq .Status "resolved" }}✅{{ else }}⚠️{{ end }} {{ index .Annotations "description" }}</h4>
+// alertView is what an alert's message shows: its heading, the detail under it, and the alert itself
+type alertView struct {
+	Alert
+	Heading string
+	Detail  string
+}
+
+// The message follows Alertmanager's usual annotations: the summary is the heading and the description
+// the detail under it. An alert with no summary is headed by its description, as rules that only set a
+// description expect. The link goes to where the alert came from, such as the rule's graph or the page
+// of the finding behind it
+const alertMessageTemplate = `<h4>{{ if eq .Status "resolved" }}✅{{ else }}⚠️{{ end }} {{ .Heading }}</h4>
+{{- with .Detail }}
+<p>{{ . }}</p>
+{{- end }}
 Started at <b>{{ .StartsAt.Format "Jan 02, 2006 15:04:05 UTC" }}</b>{{ if eq .Status "resolved" }}, ended at <b>{{ .EndsAt.Format "Jan 02, 2006 15:04:05 UTC" }}</b>{{ end }}<br>
 {{- range $key, $value := .Labels }}
 {{ $key }}: <b>{{ $value }}</b><br>
+{{- end }}
+{{- with .GeneratorURL }}
+<a href="{{ . }}">Source</a>
 {{- end }}`
 
+// html/template escapes every value: annotations can hold any text, such as the log lines an alert quotes,
+// which must show as text, never as markup or links of their own. A source link that isn't http or https
+// is replaced with a harmless one
 var alertTemplate = template.Must(template.New("alert").Parse(alertMessageTemplate))
+
+// alertMessage renders an alert as the HTML of its message
+func alertMessage(alert Alert) (string, error) {
+	view := alertView{Alert: alert, Heading: alert.Annotations["summary"]}
+	description := alert.Annotations["description"]
+	switch {
+	case view.Heading == "":
+		view.Heading = description
+	case description != view.Heading:
+		view.Detail = description
+	}
+	if view.Heading == "" {
+		view.Heading = alert.Labels["alertname"]
+	}
+	var buf bytes.Buffer
+	if err := alertTemplate.Execute(&buf, view); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
 
 func sendAlertmanagerMsg(ctx context.Context, payload AlertmanagerPayload, roomID string) {
 	log.Debug().
@@ -48,17 +88,17 @@ func sendAlertmanagerMsg(ctx context.Context, payload AlertmanagerPayload, roomI
 
 	for _, alert := range payload.Alerts {
 		metrics.RecordWebhookEventHandled(constants.WebhookAlertmanager, constants.WebhookEventType(alert.Status))
-		var buf bytes.Buffer
-		err := alertTemplate.Execute(&buf, alert)
+		message, err := alertMessage(alert)
 		if err != nil {
 			log.Error().
+				Ctx(ctx).
 				Err(err).
 				Str("room_id", roomID).
 				Str("alert_status", alert.Status).
 				Msg("Failed to execute alert template")
 			continue
 		}
-		matrix.SendFormattedMessage(ctx, roomID, buf.String())
+		matrix.SendFormattedMessage(ctx, roomID, message)
 	}
 }
 

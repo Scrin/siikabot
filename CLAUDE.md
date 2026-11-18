@@ -10,7 +10,7 @@ This document provides context for working with SiikaBot using Claude Code CLI.
 - **AI Chat** - LLM-powered conversations with tool calling (FMI weather and environment data, web search, GitHub, news, electricity prices, room message statistics, the bot's own source code). Besides the memories people ask it to keep about themselves, the bot keeps memories of each group room on its own, formed by thinking back over its conversations there once the room has gone quiet
 - **Network Utilities** - Ping and traceroute commands
 - **Reminders** - Time-based reminders, set with `!remind` or in the chat. The chat also lists and deletes them, and posts the command that sets a deleted reminder again. People can delete theirs on the web dashboard too
-- **Alerting** - Alertmanager webhook relayed into Matrix rooms
+- **Alerting** - Alertmanager webhook relayed into Matrix rooms. Each alert is headed by its `summary` annotation, or its `description` when it has no summary, with the description under the heading, its labels, and a link to its `generatorURL`. All of it shows as text, never as markup
 - **Message Webhooks** - Webhooks the admin sets up on the web dashboard, which post the Markdown message a request brings into a room, under the webhook's name
 - **Federation Info** - Matrix server federation details
 - **Web Dashboard** - React-based system health monitoring UI
