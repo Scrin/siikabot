@@ -3,6 +3,7 @@ package federation
 import (
 	"context"
 	"fmt"
+	"html"
 	"sort"
 	"strings"
 	"time"
@@ -108,7 +109,7 @@ func Handle(ctx context.Context, roomID, msg string) {
 			return servers[i].name < servers[j].name
 		})
 
-		response.WriteString(fmt.Sprintf("<h4>%s</h4><ul>", version))
+		response.WriteString(fmt.Sprintf("<h4>%s</h4><ul>", html.EscapeString(version)))
 		for _, server := range servers {
 			// Convert user IDs to HTML links
 			var userLinks []string
@@ -117,10 +118,10 @@ func Handle(ctx context.Context, roomID, msg string) {
 				if displayName == "" {
 					displayName = string(id.UserID(userID).Localpart())
 				}
-				userLinks = append(userLinks, fmt.Sprintf("<a href=\"https://matrix.to/#/%s\">%s</a>", userID, displayName))
+				userLinks = append(userLinks, userLink(userID, displayName))
 			}
 			response.WriteString(fmt.Sprintf("<li>%s with %s</li>",
-				server.name,
+				html.EscapeString(server.name),
 				strings.Join(userLinks, ", "),
 			))
 		}
@@ -134,7 +135,7 @@ func Handle(ctx context.Context, roomID, msg string) {
 			return errorServers[i].name < errorServers[j].name
 		})
 		for _, server := range errorServers {
-			response.WriteString(fmt.Sprintf("%s: %v<br>\n", server.name, server.err))
+			response.WriteString(fmt.Sprintf("%s: %s<br>\n", html.EscapeString(server.name), html.EscapeString(fmt.Sprint(server.err))))
 			// Convert user IDs to HTML links
 			var userLinks []string
 			for _, userID := range server.users {
@@ -142,7 +143,7 @@ func Handle(ctx context.Context, roomID, msg string) {
 				if displayName == "" {
 					displayName = string(id.UserID(userID).Localpart())
 				}
-				userLinks = append(userLinks, fmt.Sprintf("<a href=\"https://matrix.to/#/%s\">%s</a>", userID, displayName))
+				userLinks = append(userLinks, userLink(userID, displayName))
 			}
 			response.WriteString(fmt.Sprintf("Users: %s<br><br>\n", strings.Join(userLinks, ", ")))
 		}
@@ -150,4 +151,10 @@ func Handle(ctx context.Context, roomID, msg string) {
 
 	// Send the response
 	matrix.SendFormattedNotice(ctx, roomID, response.String())
+}
+
+// userLink is a link to a user, named by their display name. Remote servers report the versions and errors,
+// and people choose their display names, so all of it is escaped in the HTML.
+func userLink(userID, displayName string) string {
+	return fmt.Sprintf("<a href=\"https://matrix.to/#/%s\">%s</a>", html.EscapeString(userID), html.EscapeString(displayName))
 }

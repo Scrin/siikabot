@@ -169,7 +169,8 @@ func (r *ToolRegistry) HandleToolCallsIndividually(ctx context.Context, toolCall
 					Str("tool", currentCall.Function.Name).
 					Msg("Unknown tool called")
 				span.SetStatus(codes.Error, "unknown tool")
-				metrics.RecordToolCall(currentCall.Function.Name, false)
+				// The model names the tool, so the name isn't a label: it could be anything
+				metrics.RecordToolCall("unknown", false)
 
 				mu.Lock()
 				responses = append(responses, ToolResponse{

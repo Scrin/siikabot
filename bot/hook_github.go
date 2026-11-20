@@ -6,6 +6,8 @@ import (
 	"crypto/hmac"
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
+	"html"
 	"io"
 	"net/http"
 	"strconv"
@@ -79,25 +81,45 @@ func sendGithubMsg(ctx context.Context, payload GithubPayload, roomID string) {
 	}
 }
 
+// GitHub's payloads hold text anyone can write, such as a pull request's title on a public repository, and the
+// notices are HTML, so every value from a payload is escaped
+
 func sendGithubHookConfig(ctx context.Context, payload GithubPayload, roomID string) {
-	matrix.SendFormattedNotice(ctx, roomID, "[<font color=\"#0000FC\">"+payload.Repository.FullName+"</font>] "+
-		"<font color=\"#9C009C\">"+payload.Sender.Login+"</font> configured a webhook: "+payload.Repository.HtmlUrl)
+	matrix.SendFormattedNotice(ctx, roomID, githubHookConfigNotice(payload))
+}
+
+func githubHookConfigNotice(payload GithubPayload) string {
+	return "[<font color=\"#0000FC\">" + html.EscapeString(payload.Repository.FullName) + "</font>] " +
+		"<font color=\"#9C009C\">" + html.EscapeString(payload.Sender.Login) + "</font> configured a webhook: " +
+		html.EscapeString(payload.Repository.HtmlUrl)
 }
 
 func sendGithubPullrequest(ctx context.Context, payload GithubPayload, roomID string) {
-	matrix.SendFormattedNotice(ctx, roomID, "[<font color=\"#0000FC\">"+payload.Repository.FullName+"</font>] "+
-		"<font color=\"#9C009C\">"+payload.Sender.Login+"</font> <a href=\""+payload.PullRequest.HtmlUrl+"\">"+payload.Action+" a pull request:</a> "+
-		"<font color=\"#7F0000\">"+payload.PullRequest.Title+"</font>")
+	matrix.SendFormattedNotice(ctx, roomID, githubPullRequestNotice(payload))
+}
+
+func githubPullRequestNotice(payload GithubPayload) string {
+	return "[<font color=\"#0000FC\">" + html.EscapeString(payload.Repository.FullName) + "</font>] " +
+		"<font color=\"#9C009C\">" + html.EscapeString(payload.Sender.Login) + "</font> <a href=\"" + html.EscapeString(payload.PullRequest.HtmlUrl) + "\">" +
+		html.EscapeString(payload.Action) + " a pull request:</a> " +
+		"<font color=\"#7F0000\">" + html.EscapeString(payload.PullRequest.Title) + "</font>"
 }
 
 func sendGithubPush(ctx context.Context, payload GithubPayload, roomID string) {
+	if notice := githubPushNotice(payload); notice != "" {
+		matrix.SendFormattedNotice(ctx, roomID, notice)
+	}
+}
+
+// githubPushNotice is the notice of a push, or empty for a push that creates or deletes a branch
+func githubPushNotice(payload GithubPayload) string {
 	nullCommit := "0000000000000000000000000000000000000000"
 	if payload.AfterCommit == nullCommit {
 		// TODO branch was deleted
-		return
+		return ""
 	} else if payload.BeforeCommit == nullCommit {
 		// TODO branch was created
-		return
+		return ""
 	}
 
 	ref := strings.Split(payload.Ref, "/")
@@ -106,20 +128,21 @@ func sendGithubPush(ctx context.Context, payload GithubPayload, roomID string) {
 		branch = ref[2]
 	}
 
-	output := []string{"[<font color=\"#0000FC\">" + payload.Repository.FullName + "</font>] " +
-		"<font color=\"#9C009C\">" + payload.Pusher.Name + "</font> pushed <a href=\"" + payload.Compare + "\">" + strconv.Itoa(len(payload.Commits)) + " commits</a> " +
-		"to <font color=\"#7F0000\">" + branch + "</font> "}
+	output := []string{"[<font color=\"#0000FC\">" + html.EscapeString(payload.Repository.FullName) + "</font>] " +
+		"<font color=\"#9C009C\">" + html.EscapeString(payload.Pusher.Name) + "</font> pushed <a href=\"" + html.EscapeString(payload.Compare) + "\">" +
+		strconv.Itoa(len(payload.Commits)) + " commits</a> " +
+		"to <font color=\"#7F0000\">" + html.EscapeString(branch) + "</font> "}
 
 	for _, commit := range payload.Commits {
 		added := strconv.Itoa(len(commit.Added))
 		modified := strconv.Itoa(len(commit.Modified))
 		removed := strconv.Itoa(len(commit.Removed))
-		output = append(output, "<font color=\"#D2D2D2\">"+commit.ID[0:7]+"</font> "+
+		output = append(output, "<font color=\"#D2D2D2\">"+html.EscapeString(commit.ID[:min(7, len(commit.ID))])+"</font> "+
 			"(<font color=\"#009300\">+"+added+"</font>|<font color=\"#555555\">±"+modified+"</font>|<font color=\"#FF0000\">-"+removed+"</font>) "+
-			"<font color=\"#9C009C\">"+commit.Author.Name+"</font>: "+commit.Message)
+			"<font color=\"#9C009C\">"+html.EscapeString(commit.Author.Name)+"</font>: "+html.EscapeString(commit.Message))
 	}
 
-	matrix.SendFormattedNotice(ctx, roomID, strings.Join(output, "<br />"))
+	return strings.Join(output, "<br />")
 }
 
 func verifySignature(secret []byte, signature string, body []byte) bool {
@@ -138,6 +161,9 @@ func verifySignature(secret []byte, signature string, body []byte) bool {
 	return hmac.Equal([]byte(computed.Sum(nil)), actual)
 }
 
+// maxGithubBodyBytes is the largest webhook payload GitHub sends
+const maxGithubBodyBytes = 25 << 20
+
 // GithubSignatureMiddleware creates Gin middleware that verifies GitHub webhook signatures
 func GithubSignatureMiddleware(hookSecret string) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -148,10 +174,16 @@ func GithubSignatureMiddleware(hookSecret string) gin.HandlerFunc {
 			return
 		}
 
-		// Read the body for signature verification
-		body, err := io.ReadAll(c.Request.Body)
+		// Read the body for signature verification. Anyone can send one before the signature is checked, so
+		// only so much of it is read.
+		body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, maxGithubBodyBytes))
+		if _, tooLarge := errors.AsType[*http.MaxBytesError](err); tooLarge {
+			log.Warn().Ctx(c.Request.Context()).Int64("max_bytes", maxGithubBodyBytes).Msg("GitHub webhook request body is too large")
+			c.AbortWithStatus(http.StatusRequestEntityTooLarge)
+			return
+		}
 		if err != nil {
-			log.Error().Err(err).Msg("Failed to read GitHub webhook request body")
+			log.Error().Ctx(c.Request.Context()).Err(err).Msg("Failed to read GitHub webhook request body")
 			c.AbortWithStatus(http.StatusBadRequest)
 			return
 		}

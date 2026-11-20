@@ -2,7 +2,6 @@ package llmtools
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,7 +11,6 @@ import (
 	"github.com/Scrin/siikabot/aigateway"
 	"github.com/Scrin/siikabot/config"
 	"github.com/rs/zerolog/log"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // FingridToolDefinition returns the tool definition for the Fingrid power production tool
@@ -180,20 +178,7 @@ func getFingridPowerStats(ctx context.Context, targetTime time.Time) (*PowerStat
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true, // fingrid has a fishy cert
-		},
-	}
-	client := &http.Client{
-		Timeout: toolHTTPTimeout,
-		// Its own transport, so it cannot use the shared client — but still instrumented
-		Transport: otelhttp.NewTransport(transport),
-	}
-
-	log.Debug().Ctx(ctx).Msg("Using insecure HTTP client to ignore certificate errors")
-
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("url", url).Msg("Failed to fetch Fingrid power stats")
 		return nil, fmt.Errorf("failed to fetch power stats: %w", err)

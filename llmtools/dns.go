@@ -9,15 +9,20 @@ import (
 	"time"
 
 	"github.com/Scrin/siikabot/aigateway"
+	"github.com/Scrin/siikabot/webfetch"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/net/publicsuffix"
 )
+
+// dnsTimeout bounds a whole DNS lookup, every record type included
+const dnsTimeout = 10 * time.Second
 
 // DNSToolDefinition returns the tool definition for the DNS lookup tool
 var DNSToolDefinition = aigateway.ToolDefinition{
 	Type: "function",
 	Function: aigateway.FunctionSchema{
 		Name:        "dns_lookup",
-		Description: "Look up DNS records for a domain name. Returns A (IPv4), AAAA (IPv6), MX (mail servers), TXT, CNAME, and NS (nameserver) records.",
+		Description: "Look up DNS records for a public domain name. Returns A (IPv4), AAAA (IPv6), MX (mail servers), TXT, CNAME, and NS (nameserver) records.",
 		Parameters: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -61,39 +66,37 @@ func handleDNSToolCall(ctx context.Context, arguments string) (string, error) {
 	if recordType == "" {
 		recordType = "ALL"
 	}
+	lookups, ok := dnsLookups[recordType]
+	if !ok {
+		return "", fmt.Errorf("invalid record type: %s (valid types: A, AAAA, MX, TXT, CNAME, NS, ALL)", recordType)
+	}
+
+	// A lookup reaches whoever runs the name's DNS, so it's a way to send data out, like a fetch
+	if !webfetch.ProvenanceFrom(ctx).AllowsName(domain) {
+		log.Info().Ctx(ctx).Str("domain", domain).Msg("Refused a DNS lookup of a name the turn hasn't seen")
+		return webfetch.DeniedNameMessage, nil
+	}
+	if !isPublicDomain(domain) {
+		log.Info().Ctx(ctx).Str("domain", domain).Msg("Refused a DNS lookup of a name that isn't public")
+		return fmt.Sprintf("%s isn't a public domain name. This tool looks up only names under a public suffix, "+
+			"such as .com or .fi, and never the bot's own network's names.", domain), nil
+	}
 
 	log.Debug().Ctx(ctx).Str("domain", domain).Str("record_type", recordType).Msg("Performing DNS lookup")
 
+	ctx, cancel := context.WithTimeout(ctx, dnsTimeout)
+	defer cancel()
+	lookup := &dnsLookup{domain: domain, resolver: net.DefaultResolver}
+
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("**DNS lookup for %s**\n\n", domain))
-
-	switch recordType {
-	case "A":
-		sb.WriteString(lookupA(ctx, domain))
-	case "AAAA":
-		sb.WriteString(lookupAAAA(ctx, domain))
-	case "MX":
-		sb.WriteString(lookupMX(ctx, domain))
-	case "TXT":
-		sb.WriteString(lookupTXT(ctx, domain))
-	case "CNAME":
-		sb.WriteString(lookupCNAME(ctx, domain))
-	case "NS":
-		sb.WriteString(lookupNS(ctx, domain))
-	case "ALL":
-		sb.WriteString(lookupA(ctx, domain))
-		sb.WriteString("\n")
-		sb.WriteString(lookupAAAA(ctx, domain))
-		sb.WriteString("\n")
-		sb.WriteString(lookupMX(ctx, domain))
-		sb.WriteString("\n")
-		sb.WriteString(lookupTXT(ctx, domain))
-		sb.WriteString("\n")
-		sb.WriteString(lookupCNAME(ctx, domain))
-		sb.WriteString("\n")
-		sb.WriteString(lookupNS(ctx, domain))
-	default:
-		return "", fmt.Errorf("invalid record type: %s (valid types: A, AAAA, MX, TXT, CNAME, NS, ALL)", recordType)
+	// Whoever runs the domain writes its records, TXT records especially
+	sb.WriteString(webfetch.UntrustedLabel + "\n\n")
+	for i, record := range lookups {
+		if i > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(record(ctx, lookup))
 	}
 
 	result := sb.String()
@@ -102,17 +105,63 @@ func handleDNSToolCall(ctx context.Context, arguments string) (string, error) {
 	return result, nil
 }
 
+// dnsLookups are the lookups to make for each record type the tool takes
+var dnsLookups = map[string][]func(context.Context, *dnsLookup) string{
+	"A":     {lookupA},
+	"AAAA":  {lookupAAAA},
+	"MX":    {lookupMX},
+	"TXT":   {lookupTXT},
+	"CNAME": {lookupCNAME},
+	"NS":    {lookupNS},
+	"ALL":   {lookupA, lookupAAAA, lookupMX, lookupTXT, lookupCNAME, lookupNS},
+}
+
+// isPublicDomain reports whether a name is under a public suffix, such as .com, .fi or github.io. Anything
+// else, such as a single word, .internal or .local, can only be one of the bot's own network's names, which the
+// resolver the bot uses would give away.
+func isPublicDomain(domain string) bool {
+	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
+	if domain == "" || net.ParseIP(domain) != nil {
+		return false
+	}
+	suffix, icann := publicsuffix.PublicSuffix(domain)
+	if suffix == "home.arpa" || strings.HasSuffix(suffix, ".home.arpa") {
+		// Reserved for home networks, though ICANN manages .arpa
+		return false
+	}
+	return icann || strings.Contains(suffix, ".")
+}
+
+// dnsLookup is a lookup of one domain, which A and AAAA records share
+type dnsLookup struct {
+	domain   string
+	resolver *net.Resolver
+
+	ips    []net.IPAddr
+	ipsErr error
+	looked bool
+}
+
+// addresses looks up the domain's addresses once, for both A and AAAA records
+func (l *dnsLookup) addresses(ctx context.Context) ([]net.IPAddr, error) {
+	if !l.looked {
+		l.ips, l.ipsErr = l.resolver.LookupIPAddr(ctx, l.domain)
+		l.looked = true
+	}
+	return l.ips, l.ipsErr
+}
+
 // lookupA returns A (IPv4) records for a domain
-func lookupA(ctx context.Context, domain string) string {
-	ips, err := net.LookupIP(domain)
+func lookupA(ctx context.Context, l *dnsLookup) string {
+	ips, err := l.addresses(ctx)
 	if err != nil {
-		log.Debug().Ctx(ctx).Err(err).Str("domain", domain).Msg("Failed to look up A records")
+		log.Debug().Ctx(ctx).Err(err).Str("domain", l.domain).Msg("Failed to look up A records")
 		return fmt.Sprintf("**A Records (IPv4):**\nNo A records found or lookup failed: %s\n", err.Error())
 	}
 
 	var ipv4s []string
 	for _, ip := range ips {
-		if ipv4 := ip.To4(); ipv4 != nil {
+		if ipv4 := ip.IP.To4(); ipv4 != nil {
 			ipv4s = append(ipv4s, ipv4.String())
 		}
 	}
@@ -125,17 +174,17 @@ func lookupA(ctx context.Context, domain string) string {
 }
 
 // lookupAAAA returns AAAA (IPv6) records for a domain
-func lookupAAAA(ctx context.Context, domain string) string {
-	ips, err := net.LookupIP(domain)
+func lookupAAAA(ctx context.Context, l *dnsLookup) string {
+	ips, err := l.addresses(ctx)
 	if err != nil {
-		log.Debug().Ctx(ctx).Err(err).Str("domain", domain).Msg("Failed to look up AAAA records")
+		log.Debug().Ctx(ctx).Err(err).Str("domain", l.domain).Msg("Failed to look up AAAA records")
 		return fmt.Sprintf("**AAAA Records (IPv6):**\nNo AAAA records found or lookup failed: %s\n", err.Error())
 	}
 
 	var ipv6s []string
 	for _, ip := range ips {
-		if ip.To4() == nil && ip.To16() != nil {
-			ipv6s = append(ipv6s, ip.String())
+		if ip.IP.To4() == nil && ip.IP.To16() != nil {
+			ipv6s = append(ipv6s, ip.IP.String())
 		}
 	}
 
@@ -147,10 +196,10 @@ func lookupAAAA(ctx context.Context, domain string) string {
 }
 
 // lookupMX returns MX (mail exchange) records for a domain
-func lookupMX(ctx context.Context, domain string) string {
-	mxRecords, err := net.LookupMX(domain)
+func lookupMX(ctx context.Context, l *dnsLookup) string {
+	mxRecords, err := l.resolver.LookupMX(ctx, l.domain)
 	if err != nil {
-		log.Debug().Ctx(ctx).Err(err).Str("domain", domain).Msg("Failed to look up MX records")
+		log.Debug().Ctx(ctx).Err(err).Str("domain", l.domain).Msg("Failed to look up MX records")
 		return fmt.Sprintf("**MX Records (Mail Servers):**\nNo MX records found or lookup failed: %s\n", err.Error())
 	}
 
@@ -167,10 +216,10 @@ func lookupMX(ctx context.Context, domain string) string {
 }
 
 // lookupTXT returns TXT records for a domain
-func lookupTXT(ctx context.Context, domain string) string {
-	txtRecords, err := net.LookupTXT(domain)
+func lookupTXT(ctx context.Context, l *dnsLookup) string {
+	txtRecords, err := l.resolver.LookupTXT(ctx, l.domain)
 	if err != nil {
-		log.Debug().Ctx(ctx).Err(err).Str("domain", domain).Msg("Failed to look up TXT records")
+		log.Debug().Ctx(ctx).Err(err).Str("domain", l.domain).Msg("Failed to look up TXT records")
 		return fmt.Sprintf("**TXT Records:**\nNo TXT records found or lookup failed: %s\n", err.Error())
 	}
 
@@ -187,15 +236,15 @@ func lookupTXT(ctx context.Context, domain string) string {
 }
 
 // lookupCNAME returns the CNAME record for a domain
-func lookupCNAME(ctx context.Context, domain string) string {
-	cname, err := net.LookupCNAME(domain)
+func lookupCNAME(ctx context.Context, l *dnsLookup) string {
+	cname, err := l.resolver.LookupCNAME(ctx, l.domain)
 	if err != nil {
-		log.Debug().Ctx(ctx).Err(err).Str("domain", domain).Msg("Failed to look up CNAME record")
+		log.Debug().Ctx(ctx).Err(err).Str("domain", l.domain).Msg("Failed to look up CNAME record")
 		return fmt.Sprintf("**CNAME Record:**\nNo CNAME record found or lookup failed: %s\n", err.Error())
 	}
 
 	// If the CNAME is the same as the domain (with trailing dot), there's no CNAME
-	if cname == domain+"." || cname == domain {
+	if cname == l.domain+"." || cname == l.domain {
 		return "**CNAME Record:**\nNo CNAME record (domain resolves directly)\n"
 	}
 
@@ -203,10 +252,10 @@ func lookupCNAME(ctx context.Context, domain string) string {
 }
 
 // lookupNS returns NS (nameserver) records for a domain
-func lookupNS(ctx context.Context, domain string) string {
-	nsRecords, err := net.LookupNS(domain)
+func lookupNS(ctx context.Context, l *dnsLookup) string {
+	nsRecords, err := l.resolver.LookupNS(ctx, l.domain)
 	if err != nil {
-		log.Debug().Ctx(ctx).Err(err).Str("domain", domain).Msg("Failed to look up NS records")
+		log.Debug().Ctx(ctx).Err(err).Str("domain", l.domain).Msg("Failed to look up NS records")
 		return fmt.Sprintf("**NS Records (Nameservers):**\nNo NS records found or lookup failed: %s\n", err.Error())
 	}
 

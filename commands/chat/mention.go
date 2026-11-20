@@ -592,7 +592,11 @@ func buildInitialMessages(ctx context.Context, trigger Trigger, cfg db.ChatConfi
 
 	// Add the current message, with the images it carries or refers to attached if there are any
 	turnImages := shownImages(userTurn)
-	messages = append(messages, aigateway.Message{Role: "user", Content: userContent(userTurn, cfg.ImageDetail)})
+	messages = append(messages, aigateway.Message{
+		Role:    "user",
+		Content: userContent(userTurn, cfg.ImageDetail),
+		OwnText: ownText(userTurn),
+	})
 	if len(turnImages) > 0 {
 		log.Debug().Ctx(ctx).
 			Str("room_id", roomID).
@@ -681,14 +685,13 @@ func processHistoryMessages(ctx context.Context, history []db.ChatMessage, image
 			// there is nothing to attach it to
 			i++
 		case "text":
-			content := any(historyMsg.Message)
+			msg := aigateway.Message{Role: historyMsg.Role, Content: historyMsg.Message}
 			if historyMsg.Role == "user" {
-				content = userContent(historyMsg.UserTurn(), imageDetail)
+				turn := historyMsg.UserTurn()
+				msg.Content = userContent(turn, imageDetail)
+				msg.OwnText = ownText(turn)
 			}
-			*messages = append(*messages, aigateway.Message{
-				Role:    historyMsg.Role,
-				Content: content,
-			})
+			*messages = append(*messages, msg)
 			i++
 		}
 	}

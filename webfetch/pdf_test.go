@@ -3,10 +3,12 @@ package webfetch
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 // makePDF builds a PDF with a title and a page for each list of words. The words are placed apart without
@@ -129,5 +131,24 @@ func TestReadPDFThatIsTooLarge(t *testing.T) {
 
 	if result.Outcome != OutcomeUnsupported || result.Reason != "too_large" {
 		t.Errorf("outcome %q (%q), want a PDF too large to read", result.Outcome, result.Reason)
+	}
+}
+
+// Parses left running past their timeout keep their slots, so PDFs that loop the parser can take only so many
+// cores. Once every slot is taken, a PDF times out waiting for one rather than starting another parse.
+func TestExtractPDFWaitsForAFreeParser(t *testing.T) {
+	for range cap(pdfParsers) {
+		pdfParsers <- struct{}{}
+	}
+	defer func() {
+		for range cap(pdfParsers) {
+			<-pdfParsers
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := extractPDF(ctx, makePDF("Test", [][]string{{"Hello"}})); !errors.Is(err, errPDFTimeout) {
+		t.Errorf("extractPDF() with no parser free = %v, want a timeout", err)
 	}
 }

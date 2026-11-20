@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -79,9 +80,9 @@ func handleWikipediaToolCall(ctx context.Context, arguments string) (string, err
 		lang = "en"
 	}
 
-	// Validate language code (basic check)
-	if len(lang) < 2 || len(lang) > 3 {
-		return "", fmt.Errorf("invalid language code '%s', use 2-3 letter codes like 'en', 'fi', 'de'", lang)
+	// The code becomes the host's first label, so it may hold nothing that would change the host
+	if !wikipediaLanguage.MatchString(lang) {
+		return "", fmt.Errorf("invalid language code '%s', use codes like 'en', 'fi', 'de' or 'simple'", lang)
 	}
 
 	log.Debug().Ctx(ctx).Str("query", args.Query).Str("language", lang).Msg("Fetching Wikipedia summary")
@@ -93,6 +94,9 @@ func handleWikipediaToolCall(ctx context.Context, arguments string) (string, err
 
 	return formatWikipediaSummary(summary, lang), nil
 }
+
+// wikipediaLanguage is what a Wikipedia language code looks like, such as "fi", "simple" or "zh-min-nan"
+var wikipediaLanguage = regexp.MustCompile(`^[a-z]{2,12}(-[a-z]{2,10})*$`)
 
 // fetchWikipediaSummary fetches a summary from the Wikipedia REST API
 func fetchWikipediaSummary(ctx context.Context, query, lang string) (*wikipediaSummaryResponse, error) {

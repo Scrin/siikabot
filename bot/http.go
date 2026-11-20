@@ -1,12 +1,14 @@
 package bot
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/Scrin/siikabot/api"
 	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/metrics"
+	"github.com/Scrin/siikabot/tracing"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
@@ -19,6 +21,12 @@ func initHTTP() {
 
 	router := gin.New()
 
+	// nginx in front sets X-Forwarded-For to the address it was reached from. Only a proxy on a private
+	// network is believed, so a request that reaches the bot directly can't claim to come from elsewhere.
+	if err := router.SetTrustedProxies(trustedProxies); err != nil {
+		log.Error().Err(err).Msg("Failed to set the trusted proxies")
+	}
+
 	// Global middleware. otelgin goes on before anything else so every route is traced, including
 	// /metrics and the healthcheck — Tempo already handles far more than this bot can produce, and a
 	// filter is one more place for a route to end up silently untraced.
@@ -28,9 +36,11 @@ func initHTTP() {
 	router.Use(otelgin.Middleware("siikabot"))
 	router.Use(gin.Recovery())
 	router.Use(requestLoggingMiddleware())
+	router.Use(securityHeaders())
 
 	// API routes group
 	apiGroup := router.Group("/api")
+	apiGroup.Use(limitRequestBody(maxAPIBodyBytes))
 	{
 		// Public endpoints
 		apiGroup.GET("/healthcheck", api.HealthCheckHandler)
@@ -40,7 +50,7 @@ func initHTTP() {
 		authGroup := apiGroup.Group("/auth")
 		{
 			authGroup.POST("/challenge", api.ChallengeHandler)
-			authGroup.GET("/poll", api.PollHandler)
+			authGroup.POST("/poll", api.PollHandler)
 			authGroup.GET("/me", api.MeHandler)
 			authGroup.POST("/logout", api.LogoutHandler)
 		}
@@ -90,6 +100,7 @@ func initHTTP() {
 
 		// Alertmanager webhook with Basic Auth
 		alertmanagerGroup := hooksGroup.Group("/alertmanager")
+		alertmanagerGroup.Use(limitRequestBody(maxAlertmanagerBodyBytes))
 		alertmanagerGroup.Use(AlertmanagerBasicAuthMiddleware(config.AlertmanagerUser, config.AlertmanagerPassword))
 		alertmanagerGroup.POST("", AlertmanagerWebhookHandler)
 
@@ -114,6 +125,37 @@ func initHTTP() {
 	}()
 }
 
+// trustedProxies are the addresses a proxy in front of the bot can have: loopback and the private networks
+// containers run in
+var trustedProxies = []string{"127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"}
+
+// Limits on the size of a request's body. The API takes small JSON bodies, and an Alertmanager notification
+// with many alerts in it can be larger. The GitHub and message webhooks have limits of their own.
+const (
+	maxAPIBodyBytes          = 1 << 20
+	maxAlertmanagerBodyBytes = 10 << 20
+)
+
+// limitRequestBody caps how much of a request's body is read. A handler reading past the cap gets an error,
+// and JSON binding fails, so the request is refused rather than read into memory whatever its size.
+func limitRequestBody(maxBytes int64) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
+		c.Next()
+	}
+}
+
+// securityHeaders keeps other sites from showing the dashboard in a frame, where clicks could be tricked out
+// of whoever is logged in, and browsers from guessing content types
+func securityHeaders() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("Content-Security-Policy", "frame-ancestors 'none'")
+		c.Header("X-Frame-Options", "DENY")
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Next()
+	}
+}
+
 // requestLoggingMiddleware logs HTTP requests and records metrics using zerolog
 func requestLoggingMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -130,7 +172,7 @@ func requestLoggingMiddleware() gin.HandlerFunc {
 			Int("status", status).
 			Str("method", c.Request.Method).
 			Str("path", rawPath).
-			Str("query", query).
+			Str("query", tracing.RedactQuery(query)).
 			Dur("latency", latency).
 			Str("client_ip", c.ClientIP()).
 			Msg("HTTP request")

@@ -3,6 +3,7 @@ package matrix
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,12 +12,31 @@ import (
 	"github.com/Scrin/siikabot/config"
 	"github.com/rs/zerolog/log"
 	"maunium.net/go/mautrix/crypto/attachment"
+	"maunium.net/go/mautrix/id"
 )
 
 // MessageImageURL returns the URL of the image a message carries, or an error if it carries none.
 // For an encrypted image it also returns the encryption info needed for decryption, and for any
-// image the full content.
+// image the full content. The URL is always a valid Matrix content URI (see parseMediaURI).
 func MessageImageURL(ctx context.Context, msg *Message) (string, map[string]any, map[string]any, error) {
+	imageURL, encryptionInfo, fullContent, err := messageImageURL(ctx, msg)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	if _, err := parseMediaURI(imageURL); err != nil {
+		log.Warn().Ctx(ctx).
+			Str("room_id", msg.RoomID).
+			Str("event_id", msg.EventID).
+			Str("sender", msg.Sender).
+			Msg("Image message names a URL that isn't a Matrix content URI")
+		return "", nil, nil, err
+	}
+	return imageURL, encryptionInfo, fullContent, nil
+}
+
+// messageImageURL finds the URL of the image a message carries, as MessageImageURL does, without
+// checking it
+func messageImageURL(ctx context.Context, msg *Message) (string, map[string]any, map[string]any, error) {
 	roomID, eventID := msg.RoomID, msg.EventID
 
 	// Check if the message is an image
@@ -100,267 +120,115 @@ func MessageImageURL(ctx context.Context, msg *Message) (string, map[string]any,
 	return "", nil, nil, fmt.Errorf("image URL not found")
 }
 
-// DownloadImage downloads an image from a Matrix URL, decrypting it if it is encrypted, and returns
-// it as it was uploaded. What kind of image it is, if it is one at all, is for the caller to find out.
+// maxMediaSize is the largest image that is downloaded, encrypted or not
+const maxMediaSize = 5 * 1024 * 1024 // 5MB
+
+// errNotContentURI is what parseMediaURI says about anything but a valid content URI
+var errNotContentURI = errors.New("not a valid Matrix content URI")
+
+// parseMediaURI reads a Matrix content URI, mxc://<server-name>/<media-id>. Nothing else is ever
+// downloaded. Whoever sends a message chooses the URL in it, and the bot downloads media from its
+// homeserver with its access token, so any other URL could send the request, and the token, wherever
+// the sender liked. The server name and media ID are checked too, as they become part of the path.
+func parseMediaURI(raw string) (id.ContentURI, error) {
+	uri, err := id.ParseContentURI(raw)
+	if err != nil || !uri.IsValid() {
+		return id.ContentURI{}, errNotContentURI
+	}
+	return uri, nil
+}
+
+// mediaDownloadURLs are the bot's homeserver's URLs for a content URI, in the order they're tried
+func mediaDownloadURLs(uri id.ContentURI) []string {
+	base := strings.TrimSuffix(config.HomeserverURL, "/")
+	path := uri.Homeserver + "/" + uri.FileID
+	return []string{
+		base + "/_matrix/media/v3/download/" + path,
+		base + "/_matrix/media/r0/download/" + path,
+		// Some homeservers serve media here too
+		base + "/_matrix/media/download/" + path,
+	}
+}
+
+// DownloadImage downloads an image from its content URI, decrypting it if it is encrypted, and
+// returns it as it was uploaded. What kind of image it is, if it is one at all, is for the caller to
+// find out. Only a valid content URI is downloaded, and only from the bot's own homeserver.
 func DownloadImage(ctx context.Context, imageURL string, encryptionInfo map[string]any, fullContent map[string]any) ([]byte, error) {
-	originalURL := imageURL
-	var lastError error
-
-	// Handle encrypted media
+	uri, err := parseMediaURI(imageURL)
+	if err != nil {
+		return nil, err
+	}
 	if encryptionInfo != nil {
-		log.Debug().Ctx(ctx).
-			Str("url", imageURL).
-			Msg("Handling encrypted media with encryption info")
-
-		return downloadAndDecryptMedia(ctx, imageURL, encryptionInfo, fullContent)
-	}
-
-	// Convert MXC URLs to HTTP URLs
-	if strings.HasPrefix(imageURL, "mxc://") {
-		// Extract the server name and media ID from the MXC URL
-		// Format: mxc://<server-name>/<media-id>
-		parts := strings.SplitN(strings.TrimPrefix(imageURL, "mxc://"), "/", 2)
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid MXC URL format: %s", imageURL)
+		if err := checkDeclaredSize(encryptionInfo, fullContent); err != nil {
+			return nil, err
 		}
-		serverName, mediaID := parts[0], parts[1]
-
-		// Convert to HTTP URL using the homeserver's media endpoint
-		// Use v3 API endpoint for better compatibility
-		imageURL = fmt.Sprintf("%s/_matrix/media/v3/download/%s/%s",
-			config.HomeserverURL, serverName, mediaID)
-
-		log.Debug().Ctx(ctx).
-			Str("mxc_url", fmt.Sprintf("mxc://%s/%s", serverName, mediaID)).
-			Str("http_url", imageURL).
-			Msg("Converted MXC URL to HTTP URL")
 	}
 
-	// Try to download the image using v3 endpoint
-	data, err := downloadImage(ctx, imageURL)
-	if err == nil {
+	var lastError error
+	for _, downloadURL := range mediaDownloadURLs(uri) {
+		data, err := downloadMedia(ctx, downloadURL)
+		if err != nil {
+			log.Debug().Ctx(ctx).Err(err).Str("url", downloadURL).Msg("Failed to download media from an endpoint")
+			lastError = err
+			continue
+		}
+		if encryptionInfo == nil {
+			return data, nil
+		}
+		if err := decryptAttachment(data, encryptionInfo); err != nil {
+			log.Error().Ctx(ctx).Err(err).Int("size_bytes", len(data)).Msg("Failed to decrypt an encrypted file")
+			return nil, err
+		}
 		return data, nil
 	}
-
-	lastError = err
-
-	// If original URL was an MXC URL, try fallbacks
-	if strings.HasPrefix(originalURL, "mxc://") {
-		parts := strings.SplitN(strings.TrimPrefix(originalURL, "mxc://"), "/", 2)
-		if len(parts) == 2 {
-			serverName, mediaID := parts[0], parts[1]
-
-			// Try fallback 1: r0 endpoint
-			fallbackURL := fmt.Sprintf("%s/_matrix/media/r0/download/%s/%s",
-				config.HomeserverURL, serverName, mediaID)
-
-			log.Debug().Ctx(ctx).
-				Str("original_url", imageURL).
-				Str("fallback_url", fallbackURL).
-				Msg("First attempt failed, trying r0 media endpoint")
-
-			data, err = downloadImage(ctx, fallbackURL)
-			if err == nil {
-				return data, nil
-			}
-
-			lastError = err
-
-			// Try fallback 2: direct download URL (some homeservers support this)
-			directURL := fmt.Sprintf("%s/_matrix/media/download/%s/%s",
-				config.HomeserverURL, serverName, mediaID)
-
-			log.Debug().Ctx(ctx).
-				Str("original_url", imageURL).
-				Str("direct_url", directURL).
-				Msg("Second attempt failed, trying direct download URL")
-
-			data, err = downloadImage(ctx, directURL)
-			if err == nil {
-				return data, nil
-			}
-
-			lastError = err
-		}
-	}
-
-	// If we got here, all attempts failed
 	return nil, fmt.Errorf("all download attempts failed, last error: %w", lastError)
 }
 
-// downloadAndDecryptMedia downloads and decrypts an encrypted media file
-func downloadAndDecryptMedia(ctx context.Context, encryptedURL string, encryptionInfo map[string]any, fullContent map[string]any) ([]byte, error) {
-	// Check if the size info is available in the encryption info
-	if encryptionInfo != nil {
-		if size, ok := encryptionInfo["size"].(float64); ok {
-			const maxSize = 5 * 1024 * 1024 // 5MB
-			if int(size) > maxSize {
-				return nil, fmt.Errorf("encrypted media is too large: %.0f bytes (max: 5MB)", size)
-			}
+// checkDeclaredSize refuses an encrypted file that its event says is too large, before any of it is
+// downloaded
+func checkDeclaredSize(encryptionInfo, fullContent map[string]any) error {
+	sizes := []any{encryptionInfo["size"]}
+	if info, ok := fullContent["info"].(map[string]any); ok {
+		sizes = append(sizes, info["size"])
+	}
+	for _, declared := range sizes {
+		if size, ok := declared.(float64); ok && size > maxMediaSize {
+			return fmt.Errorf("encrypted media is too large: %.0f bytes (max: 5MB)", size)
 		}
 	}
+	return nil
+}
 
-	// Also check the info section of the full content for size
-	if fullContent != nil {
-		if info, ok := fullContent["info"].(map[string]any); ok {
-			if size, ok := info["size"].(float64); ok {
-				const maxSize = 5 * 1024 * 1024 // 5MB
-				if int(size) > maxSize {
-					return nil, fmt.Errorf("encrypted media is too large: %.0f bytes (max: 5MB)", size)
-				}
-			}
-		}
-	}
-
-	// Convert MXC URLs to HTTP URLs
-	if strings.HasPrefix(encryptedURL, "mxc://") {
-		// Extract the server name and media ID from the MXC URL
-		// Format: mxc://<server-name>/<media-id>
-		parts := strings.SplitN(strings.TrimPrefix(encryptedURL, "mxc://"), "/", 2)
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid MXC URL format: %s", encryptedURL)
-		}
-		serverName, mediaID := parts[0], parts[1]
-
-		// Convert to HTTP URL using the homeserver's media endpoint
-		// Use v3 API endpoint for better compatibility
-		encryptedURL = fmt.Sprintf("%s/_matrix/media/v3/download/%s/%s",
-			config.HomeserverURL, serverName, mediaID)
-
-		log.Debug().Ctx(ctx).
-			Str("mxc_url", fmt.Sprintf("mxc://%s/%s", serverName, mediaID)).
-			Str("http_url", encryptedURL).
-			Msg("Converted MXC URL to HTTP URL for encrypted media")
-	}
-
-	// Create a new HTTP request
-	req, err := http.NewRequestWithContext(ctx, "GET", encryptedURL, nil)
+// downloadMedia downloads media from one of the homeserver's URLs for it, reading at most
+// maxMediaSize bytes
+func downloadMedia(ctx context.Context, downloadURL string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
-
-	// Add authorization header for encrypted media
-	if client.AccessToken != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", client.AccessToken))
+	if client != nil && client.AccessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+client.AccessToken)
 	}
 
-	// Send the request
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		// If the v3 endpoint failed, try the r0 endpoint as fallback
-		if strings.HasPrefix(encryptedURL, config.HomeserverURL+"/_matrix/media/v3/") {
-			fallbackURL := strings.Replace(encryptedURL, "/_matrix/media/v3/", "/_matrix/media/r0/", 1)
-
-			log.Debug().Ctx(ctx).
-				Str("original_url", encryptedURL).
-				Str("fallback_url", fallbackURL).
-				Int("status_code", resp.StatusCode).
-				Msg("First attempt failed with non-OK status, trying r0 media endpoint for encrypted media")
-
-			return downloadAndDecryptMediaWithURL(ctx, fallbackURL, encryptionInfo)
-		}
-
-		// Try direct download URL as a second fallback
-		if strings.HasPrefix(encryptedURL, config.HomeserverURL+"/_matrix/media/v3/") {
-			directURL := strings.Replace(encryptedURL, "/_matrix/media/v3/", "/_matrix/media/download/", 1)
-
-			log.Debug().Ctx(ctx).
-				Str("original_url", encryptedURL).
-				Str("direct_url", directURL).
-				Int("status_code", resp.StatusCode).
-				Msg("First attempt failed with non-OK status, trying direct download URL for encrypted media")
-
-			return downloadAndDecryptMediaWithURL(ctx, directURL, encryptionInfo)
-		}
-
-		return nil, fmt.Errorf("failed to download encrypted image: %w", err)
+		return nil, fmt.Errorf("failed to download media: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// Check if the response is successful
 	if resp.StatusCode != http.StatusOK {
-		// If the v3 endpoint failed, try the r0 endpoint as fallback
-		if strings.HasPrefix(encryptedURL, config.HomeserverURL+"/_matrix/media/v3/") {
-			fallbackURL := strings.Replace(encryptedURL, "/_matrix/media/v3/", "/_matrix/media/r0/", 1)
-
-			log.Debug().Ctx(ctx).
-				Str("original_url", encryptedURL).
-				Str("fallback_url", fallbackURL).
-				Int("status_code", resp.StatusCode).
-				Msg("First attempt failed with non-OK status, trying r0 media endpoint for encrypted media")
-
-			return downloadAndDecryptMediaWithURL(ctx, fallbackURL, encryptionInfo)
-		}
-
-		// Try direct download URL as a second fallback
-		if strings.HasPrefix(encryptedURL, config.HomeserverURL+"/_matrix/media/v3/") {
-			directURL := strings.Replace(encryptedURL, "/_matrix/media/v3/", "/_matrix/media/download/", 1)
-
-			log.Debug().Ctx(ctx).
-				Str("original_url", encryptedURL).
-				Str("direct_url", directURL).
-				Int("status_code", resp.StatusCode).
-				Msg("First attempt failed with non-OK status, trying direct download URL for encrypted media")
-
-			return downloadAndDecryptMediaWithURL(ctx, directURL, encryptionInfo)
-		}
-
-		return nil, fmt.Errorf("failed to download encrypted image: status code %d", resp.StatusCode)
+		return nil, fmt.Errorf("failed to download media: status code %d", resp.StatusCode)
+	}
+	if resp.ContentLength > maxMediaSize {
+		return nil, fmt.Errorf("media is too large: %d bytes (max: 5MB)", resp.ContentLength)
 	}
 
-	return decryptMedia(ctx, resp, encryptionInfo)
-}
-
-// downloadAndDecryptMediaWithURL is a helper function to download and decrypt media with a specific URL
-func downloadAndDecryptMediaWithURL(ctx context.Context, url string, encryptionInfo map[string]any) ([]byte, error) {
-	// Create a new HTTP request
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxMediaSize+1))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+		return nil, fmt.Errorf("failed to read media: %w", err)
 	}
-
-	// Add authorization header for encrypted media
-	if client.AccessToken != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", client.AccessToken))
-	}
-
-	// Send the request
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to download encrypted image: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Check if the response is successful
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to download encrypted image: status code %d", resp.StatusCode)
-	}
-
-	// Check the Content-Length header to avoid downloading large files
-	contentLength := resp.ContentLength
-	if contentLength > 5*1024*1024 { // 5MB
-		return nil, fmt.Errorf("encrypted media is too large: %d bytes (max: 5MB)", contentLength)
-	}
-
-	return decryptMedia(ctx, resp, encryptionInfo)
-}
-
-// maxEncryptedMediaSize is the largest encrypted file that is downloaded
-const maxEncryptedMediaSize = 5 * 1024 * 1024 // 5MB
-
-// decryptMedia reads an encrypted file from an HTTP response and decrypts it (see decryptAttachment)
-func decryptMedia(ctx context.Context, resp *http.Response, encryptionInfo map[string]any) ([]byte, error) {
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxEncryptedMediaSize+1))
-	if err != nil {
-		return nil, fmt.Errorf("failed to read encrypted data: %w", err)
-	}
-	if len(data) > maxEncryptedMediaSize {
-		return nil, fmt.Errorf("encrypted media is too large: %d bytes (max: 5MB)", len(data))
-	}
-
-	if err := decryptAttachment(data, encryptionInfo); err != nil {
-		log.Error().Ctx(ctx).Err(err).Int("size_bytes", len(data)).Msg("Failed to decrypt an encrypted file")
-		return nil, err
+	if len(data) > maxMediaSize {
+		return nil, fmt.Errorf("media is too large: %d bytes (max: 5MB)", len(data))
 	}
 	return data, nil
 }
@@ -395,51 +263,4 @@ func decryptAttachment(data []byte, fileInfo map[string]any) error {
 		return fmt.Errorf("failed to decrypt the file: %w", err)
 	}
 	return nil
-}
-
-// downloadImage downloads an image from a URL
-func downloadImage(ctx context.Context, imageURL string) ([]byte, error) {
-	// Create a new HTTP request
-	req, err := http.NewRequestWithContext(ctx, "GET", imageURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
-	}
-
-	// Add authorization header if needed (for media endpoints)
-	if strings.Contains(imageURL, "/_matrix/media/") && client.AccessToken != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", client.AccessToken))
-	}
-
-	// Send the request
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to download image: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Check if the response is successful
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to download image: status code %d", resp.StatusCode)
-	}
-
-	// Check the Content-Length header to avoid downloading large files
-	contentLength := resp.ContentLength
-	if contentLength > 5*1024*1024 { // 5MB
-		return nil, fmt.Errorf("image is too large: %d bytes (max: 5MB)", contentLength)
-	}
-
-	// Read the image data with a size limit
-	const maxSize = 5 * 1024 * 1024 // 5MB
-	limitedReader := io.LimitReader(resp.Body, maxSize+1)
-	imageData, err := io.ReadAll(limitedReader)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read image data: %w", err)
-	}
-
-	// Double-check the size after reading
-	if len(imageData) > maxSize {
-		return nil, fmt.Errorf("image is too large: %d bytes (max: 5MB)", len(imageData))
-	}
-
-	return imageData, nil
 }

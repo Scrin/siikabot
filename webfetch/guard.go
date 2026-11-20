@@ -34,10 +34,23 @@ var nonPublicPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("240.0.0.0/4"),     // reserved, including the broadcast address
 	netip.MustParsePrefix("2001:db8::/32"),   // documentation
 	netip.MustParsePrefix("fec0::/10"),       // deprecated site-local
+	netip.MustParsePrefix("100::/64"),        // discard-only
+	netip.MustParsePrefix("2001:2::/48"),     // benchmarking
+	// IPv6 addresses that carry an IPv4 address the guard can't tell is public: IPv4-compatible addresses,
+	// which are deprecated; IPv4-translated ones; NAT64 inside a network; and Teredo, which obscures the
+	// address it carries
+	netip.MustParsePrefix("::/96"),
+	netip.MustParsePrefix("::ffff:0:0:0/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("2001::/32"),
 }
 
 // nat64 is the well-known NAT64 prefix. An address in it carries an IPv4 address, which has to be public too.
 var nat64 = netip.MustParsePrefix("64:ff9b::/96")
+
+// sixToFour is the 6to4 prefix. An address in it carries an IPv4 address after the prefix, which has to be
+// public too.
+var sixToFour = netip.MustParsePrefix("2002::/16")
 
 // isPublic reports whether an address is an ordinary public unicast address
 func isPublic(addr netip.Addr) bool {
@@ -54,6 +67,10 @@ func isPublic(addr netip.Addr) bool {
 	if nat64.Contains(addr) {
 		embedded := addr.As16()
 		return isPublic(netip.AddrFrom4([4]byte(embedded[12:])))
+	}
+	if sixToFour.Contains(addr) {
+		embedded := addr.As16()
+		return isPublic(netip.AddrFrom4([4]byte(embedded[2:6])))
 	}
 	return true
 }
@@ -72,10 +89,16 @@ func guardConnection(_, address string, _ syscall.RawConn) error {
 	return nil
 }
 
+// GuardedDialer makes a dialer that refuses to connect to addresses that aren't public, for any tool that
+// connects to hosts a stranger can name
+func GuardedDialer(timeout time.Duration) *net.Dialer {
+	return &net.Dialer{Timeout: timeout, Control: guardConnection}
+}
+
 // newClient makes the HTTP client fetches use. It refuses non-public addresses, and it ignores proxy settings,
 // because a proxy would hide the real destination from the address check.
 func newClient() *http.Client {
-	dialer := &net.Dialer{Timeout: requestTimeout, Control: guardConnection}
+	dialer := GuardedDialer(requestTimeout)
 	transport := &http.Transport{
 		Proxy:                 nil,
 		DialContext:           dialer.DialContext,

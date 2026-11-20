@@ -2,6 +2,7 @@ package tracing
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"strings"
 
@@ -36,6 +37,7 @@ var sensitiveQueryParams = map[string]bool{
 	"token":         true,
 	"x-api-key":     true,
 	"client_secret": true,
+	"poll_secret":   true, // the dashboard's login
 }
 
 // redactingProcessor strips credentials out of URL attributes before a span can be exported.
@@ -136,4 +138,24 @@ func containsSensitiveName(rawQuery string) bool {
 func RedactURL(raw string) string {
 	redacted, _ := redactURL(raw)
 	return redacted
+}
+
+// RedactQuery removes credentials from an encoded query string for logging, by the same rules as RedactURL
+func RedactQuery(rawQuery string) string {
+	redacted, _ := redactQuery(rawQuery)
+	return redacted
+}
+
+// RedactError returns the request error inside err with credentials removed from the URL it names, or err as
+// it is if it holds none. An HTTP client's error names the whole URL of the request, with any API key in its
+// query, and would otherwise carry the key into logs, traces, and whatever the error is shown to. The context
+// err wrapped the request error in is dropped, since its text holds the URL too.
+func RedactError(err error) error {
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) {
+		return err
+	}
+	redacted := *urlErr
+	redacted.URL = RedactURL(urlErr.URL)
+	return &redacted
 }

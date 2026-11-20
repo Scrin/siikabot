@@ -125,16 +125,20 @@ describe('API Client', () => {
   })
 
   describe('pollAuthStatus', () => {
-    it('should encode challenge and pollSecret in URL', async () => {
+    it('should send challenge and pollSecret in the body, never the URL', async () => {
       vi.mocked(fetch).mockResolvedValue({
         ok: true,
         json: () => Promise.resolve({ status: 'pending' }),
       } as Response)
 
       await pollAuthStatus('chal lenge', 'sec/ret')
-      expect(fetch).toHaveBeenCalledWith(
-        '/api/auth/poll?challenge=chal%20lenge&poll_secret=sec%2Fret'
-      )
+      expect(fetch).toHaveBeenCalledWith('/api/auth/poll', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challenge: 'chal lenge', poll_secret: 'sec/ret' }),
+      })
+      const [url] = vi.mocked(fetch).mock.calls[0]
+      expect(String(url)).not.toContain('sec')
     })
 
     it('should return poll response on success', async () => {

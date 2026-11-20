@@ -8,13 +8,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
-	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -485,6 +483,31 @@ func TestFetchHoldsToProvenance(t *testing.T) {
 	}
 }
 
+// The request goes out as the turn saw the URL, so how the model wrote it can't carry anything out. A refusal
+// shows the URL exactly as the model wrote it, as the model's own text, which keeps it unseen.
+func TestFetchRequestsTheURLAsSeen(t *testing.T) {
+	var paths []string
+	server := serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.RequestURI())
+		htmlPage("<article>"+paragraphs(3)+"</article>").ServeHTTP(w, nil)
+	}))
+	ctx := WithProvenance(context.Background(), NewProvenance(true, "See "+server.URL+"/aaaa?a=1&b=2 for more."))
+
+	fetched := Fetch(ctx, server.URL+"/%61a%61a?b=2&a=%31")
+	if fetched.Outcome != OutcomeOK {
+		t.Fatalf("a URL matching a seen one is %q, want ok", fetched.Outcome)
+	}
+	if len(paths) != 1 || paths[0] != "/aaaa?a=1&b=2" {
+		t.Errorf("the server was asked for %q, want the URL as seen", paths)
+	}
+
+	asked := server.URL + "/c?d=Room%20Secret"
+	refused := Fetch(ctx, asked)
+	if refused.Outcome != OutcomeDeniedProvenance || refused.URL != asked {
+		t.Errorf("an unseen URL is %q with URL %q, want it refused and shown as asked", refused.Outcome, refused.URL)
+	}
+}
+
 func TestFetchExplainsCertificateProblems(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -544,17 +567,4 @@ func makeCertificate(t *testing.T, names []string, notBefore, notAfter time.Time
 		t.Fatal(err)
 	}
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
-}
-
-func TestRedactError(t *testing.T) {
-	err := &url.Error{Op: "Get", URL: "https://api.example.com/data?token=hunter2&city=Oulu", Err: errors.New("timeout")}
-
-	redacted := redactError(fmt.Errorf("fetching: %w", err)).Error()
-
-	if strings.Contains(redacted, "hunter2") || !strings.Contains(redacted, "city=Oulu") {
-		t.Errorf("redactError() = %q, want the token gone and the rest kept", redacted)
-	}
-	if !strings.Contains(err.Error(), "hunter2") {
-		t.Error("redactError() changed the original error")
-	}
 }

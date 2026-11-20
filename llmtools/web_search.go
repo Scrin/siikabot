@@ -158,6 +158,8 @@ func performGoogleSearch(ctx context.Context, query string) (*GoogleSearchRespon
 	// Execute the request
 	resp, err := httpClient.Do(req)
 	if err != nil {
+		// The error names the request's URL, and the API key is in its query
+		err = tracing.RedactError(err)
 		log.Error().Ctx(ctx).Err(err).Str("url", tracing.RedactURL(requestURL)).Msg("Failed to fetch web search results")
 		return nil, fmt.Errorf("failed to fetch web search results: %w", err)
 	}

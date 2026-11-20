@@ -2,6 +2,7 @@ package tracing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -158,5 +159,21 @@ func TestRedactURLIsSharedWithLogging(t *testing.T) {
 	got := RedactURL("https://www.googleapis.com/customsearch/v1?key=SECRET&q=x")
 	if strings.Contains(got, "SECRET") {
 		t.Errorf("RedactURL left the secret in place: %s", got)
+	}
+}
+
+func TestRedactError(t *testing.T) {
+	err := &url.Error{Op: "Get", URL: "https://api.example.com/data?key=AIzaSecret&city=Oulu", Err: errors.New("timeout")}
+
+	redacted := RedactError(fmt.Errorf("fetching: %w", err)).Error()
+
+	if strings.Contains(redacted, "AIzaSecret") || !strings.Contains(redacted, "city=Oulu") {
+		t.Errorf("RedactError() = %q, want the key gone and the rest kept", redacted)
+	}
+	if !strings.Contains(err.Error(), "AIzaSecret") {
+		t.Error("RedactError() changed the original error")
+	}
+	if plain := errors.New("no URL here"); RedactError(plain) != plain {
+		t.Error("RedactError() changed an error that names no URL")
 	}
 }

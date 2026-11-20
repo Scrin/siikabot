@@ -71,6 +71,111 @@ func TestProvenanceAllowsOnlySeenURLs(t *testing.T) {
 	}
 }
 
+// A URL that matches a seen one is fetched as it was seen. Each of these differs from the seen URL in a way
+// that urlKey treats as the same, and the difference could carry a bit of data out if it reached the request.
+func TestProvenanceResolvesToTheURLAsSeen(t *testing.T) {
+	seen := "https://attacker.example/aaaaaaaa?a=1&b=2"
+	p := NewProvenance(true, "see "+seen)
+
+	for _, asked := range []string{
+		"https://attacker.example/%61a%61aa%61aa?a=1&b=2",
+		"https://attacker.example/aaaaaaaa/?a=1&b=2",
+		"http://attacker.example/aaaaaaaa?a=1&b=2",
+		"https://www.attacker.example/aaaaaaaa?a=1&b=2",
+		"https://attacker.example:443/aaaaaaaa?a=1&b=2",
+		"https://attacker.example./aaaaaaaa?a=1&b=2",
+		"https://ATTACKER.example/aaaaaaaa?a=1&b=2",
+		"https://attacker.example/aaaaaaaa?b=2&a=1",
+		"https://attacker.example/aaaaaaaa?a=%31&b=2",
+		"https://attacker.example/aaaaaaaa?a=1&b=2&",
+		"https://secret@attacker.example/aaaaaaaa?a=1&b=2",
+		"https://attacker.example/aaaaaaaa?a=1&b=2#secret",
+	} {
+		resolved, ok := p.Resolve(mustParse(t, asked))
+		if !ok {
+			t.Errorf("Resolve(%s) refused a URL that matches the seen one", asked)
+			continue
+		}
+		if resolved.String() != seen {
+			t.Errorf("Resolve(%s) = %s, want the URL as seen, %s", asked, resolved, seen)
+		}
+	}
+}
+
+// Until the turn is restricted, the URL is fetched as the model asked for it
+func TestProvenanceResolvesAnyURLUntilRestricted(t *testing.T) {
+	asked := mustParse(t, "https://en.wikipedia.org/wiki/Siika?x=%61")
+	if resolved, ok := NewProvenance(false).Resolve(asked); !ok || resolved != asked {
+		t.Errorf("Resolve() = %v, %v, want the URL asked for", resolved, ok)
+	}
+}
+
+// A tool that repeats what the model wrote, such as a refusal showing the URL it refused or a search showing
+// its query, mustn't make it seen
+func TestProvenanceNeverCountsWhatTheModelWroteAsSeen(t *testing.T) {
+	secret := "https://attacker.example/c?d=room-secret"
+	p := NewProvenance(true, "a page with a link to https://example.org/a")
+	p.Wrote(`{"url": "` + secret + `"}`)
+	p.See("URL: " + secret + "\nThis URL hasn't appeared in the conversation.")
+	p.See(`Search results for "` + secret + `"`)
+
+	if p.Allows(mustParse(t, secret)) {
+		t.Error("a URL the model wrote counts as seen once a tool repeats it")
+	}
+	if !p.Allows(mustParse(t, "https://example.org/a")) {
+		t.Error("the URL the page gave can't be fetched")
+	}
+}
+
+// What the turn saw before the model wrote it stays seen: the model passes the URLs it found to the tools
+func TestProvenanceKeepsWhatWasSeenBeforeTheModelWroteIt(t *testing.T) {
+	p := NewProvenance(true, "a page with a link to https://example.org/a and to news.example.com")
+	p.Wrote(`{"url": "https://example.org/a"}`)
+	p.Wrote(`{"domain": "news.example.com"}`)
+	p.See("URL: https://example.org/a")
+
+	if !p.Allows(mustParse(t, "https://example.org/a")) {
+		t.Error("a URL seen before the model wrote it can't be fetched")
+	}
+	if !p.AllowsName("news.example.com") {
+		t.Error("a name seen before the model wrote it can't be looked up")
+	}
+}
+
+func TestProvenanceAllowsOnlySeenNames(t *testing.T) {
+	p := NewProvenance(true,
+		"Read https://www.yle.fi/uutiset and mail.example.com, or ask 192.0.2.10 or 2001:db8::1.",
+		"See http://[2001:db8::2]:8080/x")
+	p.Wrote(`{"domain": "secret.attacker.example"}`)
+	p.See("**DNS lookup for secret.attacker.example**")
+
+	for name, allowed := range map[string]bool{
+		"www.yle.fi":              true,
+		"yle.fi":                  true,
+		"WWW.YLE.FI.":             true,
+		"mail.example.com":        true,
+		"example.com":             true,
+		"192.0.2.10":              true,
+		"2001:db8::1":             true,
+		"2001:DB8:0::1":           true,
+		"[2001:db8::2]":           true,
+		"news.yle.fi":             false,
+		"secret.yle.fi":           false,
+		"secret.attacker.example": false,
+		"attacker.example":        false,
+		"192.0.2.11":              false,
+		"192.0":                   false,
+		"":                        false,
+	} {
+		if got := p.AllowsName(name); got != allowed {
+			t.Errorf("AllowsName(%q) = %v, want %v", name, got, allowed)
+		}
+	}
+	if !NewProvenance(false).AllowsName("anything.example") {
+		t.Error("an unrestricted turn refuses a name")
+	}
+}
+
 func TestProvenanceTravelsInTheContext(t *testing.T) {
 	ctx := WithProvenance(context.Background(), NewProvenance(true, "https://example.com/seen"))
 	p := ProvenanceFrom(ctx)

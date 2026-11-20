@@ -100,6 +100,10 @@ type Message struct {
 	// from a response, so they never send them back.
 	Reasoning        string `json:"reasoning,omitempty"`
 	ReasoningContent string `json:"reasoning_content,omitempty"`
+
+	// OwnText is the text in a user message that the bot wrote itself, such as a quote of one of its
+	// answers. It's never sent: the chat turn reads it to tell what the model wrote from what the room did.
+	OwnText []string `json:"-"`
 }
 
 // ReasoningText returns what a reasoning model wrote before its answer, empty if the response has

@@ -105,7 +105,8 @@ The referenced events are resolved once, in `bot/reply.go`, and handed to the ch
 
 - **`./webfetch/`** - Reads web pages for the `get_web_content` LLM tool (`llmtools/web.go`): fetches a URL, extracts the main content with readability, reads PDFs, and judges how the fetch went (`judge.go`), so a failure reaches the model as an explanation rather than an error
   - `guard.go` refuses connections to addresses that aren't public, checked when connecting so redirects are covered
-  - `provenance.go` holds the provenance rule: once a chat turn holds a result from a tool that isn't `Trusted`, it may fetch only URLs that appeared in the room's messages or in tool results. The chat turn passes the rule to the tools through the context
+  - `provenance.go` holds the provenance rule: once a chat turn holds a result from a tool that isn't `Trusted`, it may fetch only URLs that appeared in the room's messages or in tool results, and look up (DNS, whois) only names that did. What the model wrote never counts, even when a tool repeats it: its answers, its tool calls' arguments, and the bot's own messages the room quotes. A URL that matches a seen one is fetched as it was seen, not as the model wrote it. The chat turn passes the rule to the tools through the context
+  - `GuardedDialer` in `guard.go` is for any other tool that connects to hosts a stranger can name, as whois follows referrals
 
 - **`./sourcecode/`** - The bot's own source code, for the `get_own_source_code` LLM tool (`llmtools/source_code.go`): downloads the default branch of the repository in `SIIKABOT_SOURCE_URL` from GitHub as one archive, keeps it in memory for 15 minutes, and searches and reads its files
   - Only a repository on GitHub can be read. Elsewhere the chat still links to the repository, but the tool tells the model it can't look anything up there
@@ -270,6 +271,7 @@ LLM tools allow the AI chatbot to call functions. Follow this pattern:
 6. **Format response** as markdown string for the LLM
 7. **Use caching** where appropriate (with mutex for thread safety)
 8. **Set `Trusted: true`** only if the tool's results can't hold text a stranger wrote: they come from the bot, the room, or a source the bot relies on, such as FMI. A tool that returns web pages, search results, issues or other text from the internet stays untrusted, and labels that text with `webfetch.UntrustedLabel`
+9. **Check the provenance rule** in a tool that reaches a host or name the model chooses, since that's a way to send the room's content out: `webfetch.ProvenanceFrom(ctx).AllowsName` before a lookup, as `dns_lookup` and `whois_lookup` do. Fetching goes through `webfetch.Fetch`, which checks it itself
 
 #### Example Tool Structure
 
@@ -470,6 +472,12 @@ go test -v ./...
 
 # Run with coverage
 go test -cover ./...
+```
+
+The `db` tests that need PostgreSQL run against the server in `SIIKABOT_TEST_POSTGRES`, a connection string whose user can create databases; each test makes a database of its own, runs the migrations and drops it after. Without the variable they're skipped. Without libolm installed, build with `-tags goolm`.
+
+```bash
+SIIKABOT_TEST_POSTGRES="postgres://user@localhost:5432/postgres?sslmode=disable" go test ./db
 ```
 
 #### Frontend Tests

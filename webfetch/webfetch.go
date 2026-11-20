@@ -173,7 +173,7 @@ func Fetch(ctx context.Context, rawURL string) Result {
 		level = zerolog.WarnLevel
 	}
 	// URLs can carry credentials in their queries, which don't belong in the logs
-	log.WithLevel(level).Ctx(ctx).Err(redactError(err)).
+	log.WithLevel(level).Ctx(ctx).Err(tracing.RedactError(err)).
 		Str("url", tracing.RedactURL(rawURL)).
 		Str("final_url", tracing.RedactURL(result.URL)).
 		Str("host", result.Host).
@@ -196,12 +196,15 @@ func fetch(ctx context.Context, rawURL string) (Result, int, error) {
 	if err != nil {
 		return Result{URL: rawURL, Outcome: OutcomeInvalidURL, Reason: err.Error()}, 0, err
 	}
-	result := Result{URL: pageURL.String(), Host: pageURL.Hostname()}
-
-	if !ProvenanceFrom(ctx).Allows(pageURL) {
-		result.Outcome = OutcomeDeniedProvenance
-		return result, 0, nil
+	// A URL the turn has seen is fetched as it was seen, not as the model wrote it (Provenance.Resolve). A
+	// refused one is shown as the model wrote it: a URL the model wrote never becomes one the turn has seen,
+	// which only holds while its tool results repeat it exactly.
+	resolved, allowed := ProvenanceFrom(ctx).Resolve(pageURL)
+	if !allowed {
+		return Result{URL: rawURL, Host: pageURL.Hostname(), Outcome: OutcomeDeniedProvenance}, 0, nil
 	}
+	pageURL = resolved
+	result := Result{URL: pageURL.String(), Host: pageURL.Hostname()}
 	if site := deniedSite(pageURL.Hostname()); site != "" {
 		result.Outcome, result.Reason = OutcomeDeniedHost, site
 		return result, 0, nil
@@ -311,18 +314,6 @@ func requestFailure(err error) (Outcome, string) {
 		return OutcomeError, "cancelled"
 	}
 	return OutcomeError, "connection_failed"
-}
-
-// redactError returns the request error inside err with credentials removed from the URL it names, or err
-// itself when it holds no request error
-func redactError(err error) error {
-	var urlErr *url.Error
-	if !errors.As(err, &urlErr) {
-		return err
-	}
-	redacted := *urlErr
-	redacted.URL = tracing.RedactURL(urlErr.URL)
-	return &redacted
 }
 
 // isTimeout reports whether an error is a network timeout

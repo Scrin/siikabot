@@ -19,6 +19,7 @@ var httpRequestLatency = makeCollector(prometheus.NewHistogramVec(prometheus.His
 
 // RecordHTTPRequest records an HTTP request being handled
 func RecordHTTPRequest(method, path string, statusCode int, latencySec float64) {
+	method = known(knownHTTPMethods, method)
 	httpRequestsTotal.WithLabelValues(method, path, strconv.Itoa(statusCode)).Inc()
 	if latencySec > 0 {
 		httpRequestLatency.WithLabelValues(method, path).Observe(latencySec)

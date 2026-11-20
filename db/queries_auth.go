@@ -2,8 +2,10 @@ package db
 
 import (
 	"context"
-	"crypto/subtle"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
@@ -11,15 +13,33 @@ import (
 
 var ErrInvalidToken = errors.New("invalid or expired token")
 
+const (
+	// SessionIdleTimeout is how long a dashboard session lasts unused. An open dashboard keeps using it.
+	SessionIdleTimeout = 30 * 24 * time.Hour
+
+	// sessionTouchInterval is how old a session's last use may get before a request records a new one, so
+	// that not every request writes
+	sessionTouchInterval = time.Hour
+)
+
+// hashSessionToken is what a session token is stored as. Only the hash is kept, so the database holds
+// nothing that would log anyone in. A token is random, so a plain hash is enough.
+func hashSessionToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
 // SetWebSessionToken sets the web session token for a user.
 // This will create the user_authorizations row if it doesn't exist,
 // or update the existing token (invalidating any previous session).
 func SetWebSessionToken(ctx context.Context, userID, token string) error {
 	_, err := pool.Exec(ctx, `
-		INSERT INTO user_authorizations (user_id, web_session_token)
-		VALUES ($1, $2)
-		ON CONFLICT (user_id) DO UPDATE SET web_session_token = $2
-	`, userID, token)
+		INSERT INTO user_authorizations (user_id, web_session_token_hash, web_session_last_used_at)
+		VALUES ($1, $2, now())
+		ON CONFLICT (user_id) DO UPDATE
+		SET web_session_token_hash = EXCLUDED.web_session_token_hash,
+			web_session_last_used_at = EXCLUDED.web_session_last_used_at
+	`, userID, hashSessionToken(token))
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("user_id", userID).Msg("Failed to set web session token")
 		return err
@@ -30,7 +50,8 @@ func SetWebSessionToken(ctx context.Context, userID, token string) error {
 // ClearWebSessionToken clears the web session token for a user (logout).
 func ClearWebSessionToken(ctx context.Context, userID string) error {
 	_, err := pool.Exec(ctx, `
-		UPDATE user_authorizations SET web_session_token = NULL WHERE user_id = $1
+		UPDATE user_authorizations SET web_session_token_hash = NULL, web_session_last_used_at = NULL
+		WHERE user_id = $1
 	`, userID)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("user_id", userID).Msg("Failed to clear web session token")
@@ -39,58 +60,41 @@ func ClearWebSessionToken(ctx context.Context, userID string) error {
 	return nil
 }
 
-// GetUserByWebSessionToken validates a token and returns the associated user with authorizations.
-// Uses constant-time comparison to prevent timing attacks.
+// GetUserByWebSessionToken validates a token and returns the associated user. A session unused for
+// SessionIdleTimeout has ended. Using one keeps it going.
 func GetUserByWebSessionToken(ctx context.Context, token string) (User, error) {
-	rows, err := pool.Query(ctx, `
-		SELECT user_id, web_session_token FROM user_authorizations WHERE web_session_token IS NOT NULL
-	`)
-	if err != nil {
-		log.Error().Ctx(ctx).Err(err).Msg("Failed to query web session tokens")
-		return User{}, err
-	}
-	defer rows.Close()
+	hash := hashSessionToken(token)
 
-	// Iterate through all tokens using constant-time comparison
-	for rows.Next() {
-		var userID, storedToken string
-		if err := rows.Scan(&userID, &storedToken); err != nil {
-			log.Error().Ctx(ctx).Err(err).Msg("Failed to scan web session token row")
-			continue
-		}
-
-		// Constant-time comparison to prevent timing attacks
-		if subtle.ConstantTimeCompare([]byte(token), []byte(storedToken)) == 1 {
-			return User{UserID: userID}, nil
-		}
-	}
-
-	if err := rows.Err(); err != nil {
-		log.Error().Ctx(ctx).Err(err).Msg("Error iterating web session token rows")
-		return User{}, err
-	}
-
-	return User{}, ErrInvalidToken
-}
-
-// GetWebSessionToken retrieves the current web session token for a user.
-// Returns empty string if no token is set.
-func GetWebSessionToken(ctx context.Context, userID string) (string, error) {
-	var token *string
+	var userID string
+	var lastUsed, now time.Time
 	err := pool.QueryRow(ctx, `
-		SELECT web_session_token FROM user_authorizations WHERE user_id = $1
-	`, userID).Scan(&token)
+		SELECT user_id, web_session_last_used_at, now() FROM user_authorizations WHERE web_session_token_hash = $1
+	`, hash).Scan(&userID, &lastUsed, &now)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, ErrInvalidToken
+	}
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return "", nil
+		log.Error().Ctx(ctx).Err(err).Msg("Failed to look up a web session token")
+		return User{}, err
+	}
+
+	idle := now.Sub(lastUsed)
+	if idle > SessionIdleTimeout {
+		log.Info().Ctx(ctx).Str("user_id", userID).Dur("idle", idle).Msg("Web session ended after going unused")
+		return User{}, ErrInvalidToken
+	}
+	if idle > sessionTouchInterval {
+		_, err := pool.Exec(ctx, `
+			UPDATE user_authorizations SET web_session_last_used_at = now()
+			WHERE user_id = $1 AND web_session_token_hash = $2
+		`, userID, hash)
+		if err != nil {
+			// The session still works; it's only recorded as used a little earlier than it was
+			log.Error().Ctx(ctx).Err(err).Str("user_id", userID).Msg("Failed to record the use of a web session")
 		}
-		log.Error().Ctx(ctx).Err(err).Str("user_id", userID).Msg("Failed to get web session token")
-		return "", err
 	}
-	if token == nil {
-		return "", nil
-	}
-	return *token, nil
+
+	return User{UserID: userID}, nil
 }
 
 // User represents an authenticated user

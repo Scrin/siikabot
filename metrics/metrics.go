@@ -64,7 +64,8 @@ func RecordWebhookEventHandled(hook constants.WebhookType, eventType constants.W
 
 // RecordEventHandled records a Matrix event being handled
 func RecordEventHandled(eventType, subType string, encrypted bool) {
-	eventsHandled.WithLabelValues(eventType, subType, strconv.FormatBool(encrypted)).Inc()
+	eventsHandled.WithLabelValues(known(knownEventTypes, eventType), known(knownMessageTypes, subType),
+		strconv.FormatBool(encrypted)).Inc()
 }
 
 // RecordCommandHandled records a chat command being handled

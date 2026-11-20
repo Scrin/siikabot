@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/Scrin/siikabot/auth"
@@ -50,34 +51,31 @@ func handleLogout(ctx context.Context, roomID, sender string) {
 func handleAuthenticate(ctx context.Context, roomID, sender, challenge string) {
 	log.Debug().Ctx(ctx).Str("room_id", roomID).Str("sender", sender).Str("challenge", challenge[:min(8, len(challenge))]+"...").Msg("Processing auth challenge")
 
-	// Generate a new session token
-	token, err := auth.GenerateSessionToken()
-	if err != nil {
-		log.Error().Ctx(ctx).Err(err).Str("sender", sender).Msg("Failed to generate session token")
-		matrix.SendMessage(ctx, roomID, "Failed to authenticate: internal error")
-		return
-	}
-
-	// Store the token in the database (this invalidates any previous session)
-	err = db.SetWebSessionToken(ctx, sender, token)
-	if err != nil {
-		log.Error().Ctx(ctx).Err(err).Str("sender", sender).Msg("Failed to store session token")
-		matrix.SendMessage(ctx, roomID, "Failed to authenticate: internal error")
-		return
-	}
-
-	// Complete the challenge so the web UI can retrieve the token
-	err = auth.CompleteChallenge(ctx, challenge, sender, token)
-	if err != nil {
-		// The token is already stored in the DB, but we couldn't complete the challenge
-		// This might happen if the challenge expired or was invalid
-		// Clear the token since the auth flow failed
-		_ = db.ClearWebSessionToken(ctx, sender)
-		log.Warn().Ctx(ctx).Err(err).Str("sender", sender).Str("challenge", challenge[:min(8, len(challenge))]+"...").Msg("Failed to complete auth challenge")
+	// The session token is made only for a challenge that checks out, so a mistyped or expired one leaves
+	// the session the sender already has alone. Storing the new token ends any previous session.
+	err := auth.CompleteChallenge(ctx, challenge, sender, func() (string, error) {
+		token, err := auth.GenerateSessionToken()
+		if err != nil {
+			log.Error().Ctx(ctx).Err(err).Str("sender", sender).Msg("Failed to generate session token")
+			return "", err
+		}
+		if err := db.SetWebSessionToken(ctx, sender, token); err != nil {
+			// Already logged
+			return "", err
+		}
+		return token, nil
+	})
+	switch {
+	case err == nil:
+		log.Info().Ctx(ctx).Str("sender", sender).Msg("User authenticated for web")
+		matrix.SendMessage(ctx, roomID, "Authenticated for web access")
+	case errors.Is(err, auth.ErrChallengeNotFound):
+		log.Info().Ctx(ctx).Str("sender", sender).Str("challenge", challenge[:min(8, len(challenge))]+"...").Msg("Auth challenge not found or expired")
 		matrix.SendMessage(ctx, roomID, "Authentication failed: invalid or expired challenge")
-		return
+	case errors.Is(err, auth.ErrChallengeCompleted):
+		matrix.SendMessage(ctx, roomID, "Authentication failed: this challenge has already been used. Start the login again in your browser.")
+	default:
+		log.Error().Ctx(ctx).Err(err).Str("sender", sender).Msg("Failed to complete auth challenge")
+		matrix.SendMessage(ctx, roomID, "Failed to authenticate: internal error")
 	}
-
-	log.Info().Ctx(ctx).Str("sender", sender).Msg("User authenticated for web")
-	matrix.SendMessage(ctx, roomID, "Authenticated for web access")
 }

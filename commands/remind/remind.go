@@ -113,7 +113,9 @@ func StartReminder(ctx context.Context, rem db.Reminder) {
 		}
 
 		tracing.Run(deliverCtx, tracer, "remind.deliver", func(ctx context.Context) {
-			matrix.SendFormattedMessage(ctx, rem.RoomID, "<a href=\"https://matrix.to/#/"+rem.UserID+"\">"+matrix.GetDisplayName(ctx, rem.UserID)+"</a> "+rem.Message)
+			// The display name is the person's to choose, so it's escaped. The message is HTML already.
+			matrix.SendFormattedMessage(ctx, rem.RoomID, "<a href=\"https://matrix.to/#/"+html.EscapeString(rem.UserID)+"\">"+
+				html.EscapeString(matrix.GetDisplayName(ctx, rem.UserID))+"</a> "+rem.Message)
 			if err := db.RemoveReminder(ctx, rem.ID); err != nil {
 				log.Error().Ctx(ctx).Err(err).Int64("id", rem.ID).Msg("Failed to remove triggered reminder")
 			}
@@ -207,7 +209,9 @@ func Handle(ctx context.Context, roomID, sender, msg, msgType, formattedBody str
 	t := time.Now()
 	reminderTime, err := ParseTime(t, params[1])
 	if timeErr, ok := errors.AsType[*TimeError](err); ok {
-		matrix.SendFormattedMessage(ctx, roomID, "Invalid date/time or duration: "+params[1]+"<br>duration error: "+timeErr.DurationErr.Error()+"<br> date/time error: "+timeErr.TimeErr.Error())
+		matrix.SendFormattedMessage(ctx, roomID, "Invalid date/time or duration: "+html.EscapeString(params[1])+
+			"<br>duration error: "+html.EscapeString(timeErr.DurationErr.Error())+
+			"<br> date/time error: "+html.EscapeString(timeErr.TimeErr.Error()))
 		return
 	}
 

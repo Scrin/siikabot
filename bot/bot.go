@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"runtime/debug"
 	"strings"
 
 	"github.com/Scrin/siikabot/aigateway"
@@ -63,11 +64,19 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 	var handled constants.Command
 	switch msgtype {
 	case "m.text":
-		msg := evt.Content.Raw["body"].(string)
-
 		// An edit is never handled as a new message, not even when it reads like a command
 		if isEdit {
 			handled = routeEdit(ctx, evt, attrs)
+			break
+		}
+
+		// Anyone in a room can send a message without a body, or with one that isn't text
+		msg, ok := evt.Content.Raw["body"].(string)
+		if !ok {
+			log.Debug().Ctx(ctx).
+				Str("room_id", evt.RoomID.String()).
+				Str("sender", evt.Sender.String()).
+				Msg("Ignoring a text message without a body")
 			break
 		}
 
@@ -202,7 +211,23 @@ func handleMemberEvent(ctx context.Context, evt *event.Event) {
 	}
 }
 
+// handleEvent handles an event from the sync loop. It runs in the loop itself, where a panic would
+// end the sync and with it the bot, and anyone in a room can send an event that the code doesn't
+// expect, so a panic is recovered and logged here.
 func handleEvent(ctx context.Context, evt *event.Event, wasEncrypted bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().Ctx(ctx).
+				Interface("panic", r).
+				Str("stack", string(debug.Stack())).
+				Str("room_id", evt.RoomID.String()).
+				Str("sender", evt.Sender.String()).
+				Str("event_id", evt.ID.String()).
+				Str("event_type", evt.Type.String()).
+				Msg("Recovered from a panic while handling an event")
+		}
+	}()
+
 	switch evt.Type {
 	case event.EventMessage:
 		handleTextEvent(ctx, evt)

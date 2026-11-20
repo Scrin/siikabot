@@ -3,6 +3,7 @@ package bot
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"html/template"
 	"net/http"
 	"time"
@@ -106,7 +107,10 @@ func sendAlertmanagerMsg(ctx context.Context, payload AlertmanagerPayload, roomI
 func AlertmanagerBasicAuthMiddleware(expectedUser, expectedPassword string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user, password, ok := c.Request.BasicAuth()
-		if !ok || user != expectedUser || password != expectedPassword {
+		// Compared in constant time, both of them, so that the time taken tells nothing about either
+		userMatches := subtle.ConstantTimeCompare([]byte(user), []byte(expectedUser))
+		passwordMatches := subtle.ConstantTimeCompare([]byte(password), []byte(expectedPassword))
+		if !ok || userMatches&passwordMatches != 1 {
 			log.Warn().
 				Bool("auth_provided", ok).
 				Msg("Alertmanager webhook received with invalid credentials")

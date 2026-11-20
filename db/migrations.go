@@ -25,7 +25,11 @@ CREATE TABLE IF NOT EXISTS migrations (
 );`
 
 func migrate() error {
-	ctx := context.Background()
+	return runMigrations(context.Background(), func(string) bool { return true })
+}
+
+// runMigrations runs the migrations that haven't run yet, of those include picks
+func runMigrations(ctx context.Context, include func(fileName string) bool) error {
 
 	// Create migrations table if it doesn't exist
 	_, err := pool.Exec(ctx, createMigrationsTableSQL)
@@ -44,7 +48,7 @@ func migrate() error {
 	// Get all .sql files and sort them
 	var migrationFiles []string
 	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".sql") {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".sql") && include(entry.Name()) {
 			migrationFiles = append(migrationFiles, entry.Name())
 		}
 	}

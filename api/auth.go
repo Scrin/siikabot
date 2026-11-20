@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"unicode"
@@ -57,8 +58,8 @@ func ChallengeHandler(c *gin.Context) {
 
 	challenge, pollSecret, expiresAt, err := auth.GenerateChallenge(ctx)
 	if err != nil {
-		log.Error().Ctx(ctx).Err(err).Msg("Failed to generate auth challenge")
-		c.JSON(http.StatusServiceUnavailable, ErrorResponse{Error: "Too many pending authentication requests"})
+		// Already logged
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "Failed to create an authentication challenge"})
 		return
 	}
 
@@ -69,51 +70,39 @@ func ChallengeHandler(c *gin.Context) {
 	})
 }
 
-// PollHandler checks if a challenge has been completed
-// GET /api/auth/poll?challenge=xxx&poll_secret=yyy
+// PollRequest is the body of a poll. The poll secret travels in the body rather than in the URL, which access
+// logs keep.
+type PollRequest struct {
+	Challenge  string `json:"challenge"`
+	PollSecret string `json:"poll_secret"`
+}
+
+// PollHandler checks if a challenge has been completed, and hands over its session token if it has
+// POST /api/auth/poll with a PollRequest
 func PollHandler(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	challenge := c.Query("challenge")
-	pollSecret := c.Query("poll_secret")
-	if challenge == "" || pollSecret == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "Missing challenge or poll_secret parameter"})
+	var req PollRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.Challenge == "" || req.PollSecret == "" {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "Missing challenge or poll_secret"})
 		return
 	}
 
 	// Try to consume the result (this removes it from the store)
-	token, userID, err := auth.ConsumeChallengeResult(ctx, challenge, pollSecret)
-	if err == nil {
+	token, userID, err := auth.ConsumeChallengeResult(ctx, req.Challenge, req.PollSecret)
+	switch {
+	case err == nil:
 		c.JSON(http.StatusOK, PollResponse{
 			Status: "authenticated",
 			Token:  token,
 			UserID: userID,
 		})
-		return
-	}
-
-	// Check if the error is invalid poll secret (potential attack)
-	if err == auth.ErrInvalidPollSecret {
+	case errors.Is(err, auth.ErrInvalidPollSecret):
 		c.JSON(http.StatusForbidden, ErrorResponse{Error: "Invalid poll secret"})
-		return
+	default:
+		// Not completed yet, or expired: the browser finds out when the challenge expires
+		c.JSON(http.StatusOK, PollResponse{Status: "pending"})
 	}
-
-	// Check if the challenge is still pending (not completed yet)
-	completed, _, _, pollErr := auth.PollChallenge(ctx, challenge, pollSecret)
-	if pollErr == auth.ErrInvalidPollSecret {
-		c.JSON(http.StatusForbidden, ErrorResponse{Error: "Invalid poll secret"})
-		return
-	}
-	if completed {
-		// Shouldn't happen since ConsumeChallengeResult would have caught it
-		// but handle it gracefully
-		c.JSON(http.StatusGone, ErrorResponse{Error: "Challenge already consumed"})
-		return
-	}
-
-	// Challenge exists but not yet completed, or challenge doesn't exist
-	// We don't distinguish to avoid leaking information about valid challenges
-	c.JSON(http.StatusOK, PollResponse{Status: "pending"})
 }
 
 // MeHandler returns the current authenticated user

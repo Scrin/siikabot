@@ -81,15 +81,18 @@ export async function requestAuthChallenge(): Promise<ChallengeResponse> {
 
 /**
  * Poll for authentication completion
- * Requires the poll_secret which is only known to the originating browser session
+ * Requires the poll_secret which is only known to the originating browser session. It goes in the body of a
+ * POST, never in the URL, which access logs keep.
  */
 export async function pollAuthStatus(
   challenge: string,
   pollSecret: string
 ): Promise<PollResponse> {
-  const response = await fetch(
-    `${API_BASE}/auth/poll?challenge=${encodeURIComponent(challenge)}&poll_secret=${encodeURIComponent(pollSecret)}`
-  )
+  const response = await fetch(`${API_BASE}/auth/poll`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ challenge, poll_secret: pollSecret }),
+  })
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: response.statusText }))

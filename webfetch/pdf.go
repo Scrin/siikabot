@@ -60,11 +60,24 @@ func readPDF(ctx context.Context, page response, result Result) Result {
 	return result
 }
 
+// pdfParsers bounds how many PDFs are parsed at once. A parse that runs past its timeout can't be stopped, only
+// left behind, and a PDF made to send the parser into a loop would keep a core busy for good. So only this many
+// can, and once they all have, PDFs can't be read until the bot restarts, rather than each new one taking
+// another core.
+var pdfParsers = make(chan struct{}, 2)
+
 // extractPDF reads a PDF's text in a goroutine of its own, so a PDF that sends the parser into a loop can't
 // hold up the turn, and a panic in the parser doesn't reach the bot
 func extractPDF(ctx context.Context, data []byte) (pdfText, error) {
 	ctx, cancel := context.WithTimeout(ctx, pdfTimeout)
 	defer cancel()
+
+	select {
+	case pdfParsers <- struct{}{}:
+	case <-ctx.Done():
+		log.Warn().Ctx(ctx).Int("parsers", cap(pdfParsers)).Msg("No PDF parser was free in time")
+		return pdfText{}, errPDFTimeout
+	}
 
 	type outcome struct {
 		text pdfText
@@ -72,6 +85,8 @@ func extractPDF(ctx context.Context, data []byte) (pdfText, error) {
 	}
 	done := make(chan outcome, 1)
 	go func() {
+		// Only when the parse ends, which a parse that loops never does
+		defer func() { <-pdfParsers }()
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				done <- outcome{err: fmt.Errorf("the PDF parser panicked: %v", recovered)}
