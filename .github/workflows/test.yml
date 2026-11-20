@@ -34,6 +34,42 @@ jobs:
           SIIKABOT_TEST_POSTGRES: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
         run: go test -race ./...
 
+  e2e-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.7
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27'
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Install libolm-dev
+        run: sudo apt-get update && sudo apt-get install -y libolm-dev
+      # The venv scripts/install-synapse.sh makes, kept until the script's Synapse version changes
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/siikabot
+          key: synapse-${{ runner.os }}-${{ hashFiles('scripts/install-synapse.sh') }}
+      - name: Install Synapse
+        run: scripts/install-synapse.sh
+      - name: Run end-to-end tests
+        env:
+          SIIKABOT_TEST_POSTGRES: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
+        run: go test -tags e2e ./e2e/...
+
   frontend-tests:
     runs-on: ubuntu-latest
     defaults:

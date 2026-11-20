@@ -131,6 +131,15 @@ The referenced events are resolved once, in `bot/reply.go`, and handed to the ch
 - **`./testutil/`** - Helpers for tests only, never imported by the bot itself
   - `pgtest` - A PostgreSQL database of a test's own (see *Testing*)
   - `dbtest` - Points the `db` package at such a database, with the migrations run
+  - `synapsetest` - A throwaway, non-federated Synapse for the end-to-end tests
+  - `fakenet` - The end-to-end tests' stand-in for the network, with a scripted model on the AI gateway's hosts
+  - `leftovers` - Removes the temporary directories that test processes ending with a panic leave behind
+
+- **`./testhooks/`** - Where a build with the `e2e` tag reaches into the bot: it sends the bot's outbound HTTP to the tests' stand-in for the network, lets the fetch guard reach it, and turns tracing off. In every other build each hook is a pass-through, so production can't be switched into it. A client that reaches the internet wraps its transport with `testhooks.Transport`
+
+- **`./e2e/`** - The end-to-end tests (see *Testing*)
+
+- **`./scripts/`** - `install-synapse.sh` installs the Synapse the end-to-end tests run against
 
 ## Coding Conventions
 
@@ -493,7 +502,27 @@ SIIKABOT_TEST_POSTGRES="postgres://user@localhost:5432/postgres?sslmode=disable"
 
 Without libolm installed, build with `-tags goolm`.
 
-CI runs the Go tests with `-race`, the frontend tests on every pull request, and both on every push to master, before `main.yml` builds and publishes the image. A failing test stops the image from being published.
+CI runs the Go tests with `-race`, the end-to-end tests and the frontend tests on every pull request, and all of them on every push to master, before `main.yml` builds and publishes the image. A failing test stops the image from being published.
+
+#### End-to-End Tests
+
+The end-to-end tests (`e2e/`) run the bot as it's deployed and talk to it the way people do. Each test run gets its own temporary directories and free ports, so runs never meet each other.
+- **The bot:** built with the `e2e` tag and run as a subprocess, with its configuration in the environment.
+- **Its surroundings:** a throwaway Synapse with federation off (`testutil/synapsetest`), and a throwaway PostgreSQL.
+- **The network:** a stand-in (`testutil/fakenet`). Every outbound request goes there, the model's included, which is scripted per room and records every request it gets.
+- **The people:** test users are real Matrix clients registered on that Synapse.
+
+```bash
+scripts/install-synapse.sh        # once; it does nothing when Synapse is already installed
+go test -tags e2e ./e2e/...
+```
+
+The tests check what the model was shown (`e.Model.Requests`, `e.Model.Saw`), what the room got, and what the bot stored (`e.Query`). Writing one:
+- **Rooms of its own:** each test has rooms and users of its own, so tests can run in parallel. A test scripts the model only for its own rooms.
+- **Unique text:** `marker` makes text no other message has, to look for in what the model saw.
+- **Final checks:** `conclude` addresses the bot once more and waits for the answer, so everything sent before has been handled before a test checks what the model saw.
+- **Waiting:** a test waits for the bot with `WaitForBot` and `WaitForBotMessage`, never with a fixed sleep, except to check that something doesn't happen.
+- **Known bugs:** a test for a known open bug is skipped with a reference to it, and the fix removes the skip.
 
 #### Frontend Tests
 ```bash
@@ -536,6 +565,8 @@ docker build -t siikabot .
 ### Environment Variables
 
 All configuration is via environment variables (no config files). See `config/config.go` for required variables. A required variable that is missing or invalid stops the bot at startup, with an error naming it.
+
+`SIIKABOT_HTTP_ADDR` is where the HTTP server listens, `:8080` unless it's set.
 
 `SIIKABOT_SOURCE_URL` and `SIIKABOT_FRONTEND_URL` are where the bot's source code repository and web dashboard are. The chat model gives them out as links, and reads the bot's own source code from the repository.
 

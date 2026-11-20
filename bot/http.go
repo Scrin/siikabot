@@ -23,8 +23,8 @@ func initHTTP() {
 
 	// Start the server
 	go func() {
-		log.Info().Msg("Starting HTTP server on :8080")
-		if err := router.Run(":8080"); err != nil {
+		log.Info().Str("addr", config.HTTPAddr).Msg("Starting HTTP server")
+		if err := router.Run(config.HTTPAddr); err != nil {
 			log.Error().Err(err).Msg("HTTP server failed")
 		}
 	}()

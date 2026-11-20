@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Scrin/siikabot/testutil/leftovers"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -67,10 +68,14 @@ func Main(m *testing.M) {
 }
 
 // Run runs a package's tests and stops the cluster after them, returning the exit code. For a TestMain that does
-// more than Main does.
-func Run(m *testing.M) int {
+// more than Main does. The cleanups run after the tests and before the cluster stops, for anything still using it,
+// such as a process the tests started.
+func Run(m *testing.M, cleanups ...func()) int {
 	inMain.Store(true)
 	code := m.Run()
+	for _, cleanup := range cleanups {
+		cleanup()
+	}
 	dropTemplates()
 	if stop != nil {
 		stop()
@@ -88,6 +93,26 @@ func URL(t testing.TB) string {
 	}
 	dropAfter(t, name)
 	return WithDatabase(admin, name)
+}
+
+// NewDatabase creates an empty database that isn't any one test's, such as one for a process the tests start
+// once and share, and returns its connection string. It's dropped with the cluster, or by drop. Call it from a
+// test, or after Run has started the tests.
+func NewDatabase() (connString string, drop func(), err error) {
+	if !inMain.Load() {
+		return "", nil, errors.New("pgtest: call pgtest.Main or pgtest.Run from the package's TestMain first")
+	}
+	once.Do(func() { admin, stop, startErr = start() })
+	if startErr != nil {
+		return "", nil, startErr
+	}
+	name := newName("shared")
+	if err := run(context.Background(), "CREATE DATABASE "+name); err != nil {
+		return "", nil, fmt.Errorf("pgtest: %w", err)
+	}
+	return WithDatabase(admin, name), func() {
+		_ = run(context.Background(), "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)")
+	}, nil
 }
 
 // Prepared returns the connection string of a new database for t, dropped when t ends, as prepare leaves a
@@ -213,7 +238,7 @@ func start() (string, func(), error) {
 	if err != nil {
 		return "", nil, err
 	}
-	removeAbandonedClusters()
+	leftovers.Remove(clusterDirPrefix, filepath.Join("data", "postmaster.pid"))
 	dir, err := os.MkdirTemp("", clusterDirPrefix)
 	if err != nil {
 		return "", nil, err
@@ -293,28 +318,6 @@ func start() (string, func(), error) {
 
 // clusterDirPrefix starts the names of the clusters' temporary directories
 const clusterDirPrefix = "siikabot-pg-"
-
-// removeAbandonedClusters removes the directories of clusters whose test processes ended without stopping
-// them, such as with a panic, before the kernel stopped them. Other test runs' clusters may be starting or
-// running at the same time, so only a directory with no running server in it, and old enough not to be one
-// that's just starting, goes.
-func removeAbandonedClusters() {
-	dirs, _ := filepath.Glob(filepath.Join(os.TempDir(), clusterDirPrefix+"*"))
-	for _, dir := range dirs {
-		info, err := os.Stat(dir)
-		if err != nil || time.Since(info.ModTime()) < time.Hour {
-			continue
-		}
-		pidFile, err := os.ReadFile(filepath.Join(dir, "data", "postmaster.pid"))
-		if err == nil {
-			pid, _ := strconv.Atoi(strings.TrimSpace(strings.SplitN(string(pidFile), "\n", 2)[0]))
-			if pid > 0 && syscall.Kill(pid, 0) == nil {
-				continue // still running
-			}
-		}
-		_ = os.RemoveAll(dir)
-	}
-}
 
 var majorRE = regexp.MustCompile(`/postgresql/(\d+)/bin$`)
 

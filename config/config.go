@@ -14,6 +14,8 @@ func LoadEnv() (err error) {
 }
 
 var (
+	// HTTPAddr is where the HTTP server listens, :8080 unless SIIKABOT_HTTP_ADDR says otherwise
+	HTTPAddr                 = ":8080"
 	HomeserverURL            = ""
 	UserID                   = ""
 	Password                 = ""
@@ -59,6 +61,10 @@ func loadConfig() error {
 	TempoPassword = os.Getenv("SIIKABOT_TEMPO_PASSWORD")
 	SourceURL = os.Getenv("SIIKABOT_SOURCE_URL")
 	FrontendURL = os.Getenv("SIIKABOT_FRONTEND_URL")
+	HTTPAddr = os.Getenv("SIIKABOT_HTTP_ADDR")
+	if HTTPAddr == "" {
+		HTTPAddr = ":8080"
+	}
 
 	if HomeserverURL == "" {
 		return fmt.Errorf("SIIKABOT_HOMESERVER_URL is not set")

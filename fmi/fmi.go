@@ -24,6 +24,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Scrin/siikabot/testhooks"
 	"github.com/rs/zerolog/log"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
@@ -48,7 +49,7 @@ const maxErrorMessageLength = 300
 
 var httpClient = &http.Client{
 	Timeout:   requestTimeout,
-	Transport: otelhttp.NewTransport(http.DefaultTransport),
+	Transport: testhooks.Transport(otelhttp.NewTransport(http.DefaultTransport)),
 }
 
 // APIError is an error response from FMI, carrying FMI's own explanation, such as "Unknown location: Xyzzyville"

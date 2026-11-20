@@ -14,6 +14,7 @@ import (
 
 	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/metrics"
+	"github.com/Scrin/siikabot/testhooks"
 	"github.com/rs/zerolog/log"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
@@ -45,7 +46,7 @@ const gatewayBackoff = "exponential"
 // under by way of the trace headers set on the request
 var httpClient = &http.Client{
 	Timeout:   httpTimeout,
-	Transport: otelhttp.NewTransport(http.DefaultTransport),
+	Transport: testhooks.Transport(otelhttp.NewTransport(http.DefaultTransport)),
 }
 
 // chatCompletionsURL builds the Unified API URL for the configured account and gateway.

@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Scrin/siikabot/metrics"
+	"github.com/Scrin/siikabot/testhooks"
 	"github.com/rs/zerolog/log"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
@@ -46,7 +47,7 @@ var githubURL = "https://github.com"
 
 var client = &http.Client{
 	Timeout:   downloadTimeout,
-	Transport: otelhttp.NewTransport(http.DefaultTransport),
+	Transport: testhooks.Transport(otelhttp.NewTransport(http.DefaultTransport)),
 }
 
 // Repository is a repository on GitHub

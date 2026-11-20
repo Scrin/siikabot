@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Scrin/siikabot/config"
+	"github.com/Scrin/siikabot/testhooks"
 	"github.com/rs/zerolog/log"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -35,6 +36,9 @@ const exportTimeout = 10 * time.Second
 // Init configures the global tracer provider and returns a shutdown function that flushes any
 // pending spans. Call the shutdown before exiting, or the last spans of a run are lost.
 func Init(ctx context.Context) (func(context.Context) error, error) {
+	if testhooks.NoTracing() {
+		return func(context.Context) error { return nil }, nil
+	}
 	opts := []otlptracegrpc.Option{
 		// WithEndpointURL rather than WithEndpoint: the endpoint is configured as a URL, matching
 		// SIIKABOT_HOMESERVER_URL and the rest of the project, and this strips the scheme itself.

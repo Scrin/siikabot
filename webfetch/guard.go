@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Scrin/siikabot/testhooks"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
@@ -18,7 +19,7 @@ var errAddressNotAllowed = errors.New("address not allowed")
 // allowedAddress reports whether the bot may connect to an address. A variable so tests can let the bot reach
 // their local servers.
 var allowedAddress = func(address netip.AddrPort) bool {
-	return isPublic(address.Addr())
+	return isPublic(address.Addr()) || testhooks.AllowAddress(address)
 }
 
 // nonPublicPrefixes are the ranges isPublic refuses on top of what netip already classifies as loopback,
@@ -110,7 +111,7 @@ func newClient() *http.Client {
 	}
 	return &http.Client{
 		Timeout:   requestTimeout,
-		Transport: otelhttp.NewTransport(transport),
+		Transport: testhooks.Transport(otelhttp.NewTransport(transport)),
 		CheckRedirect: func(_ *http.Request, via []*http.Request) error {
 			if len(via) >= maxRedirects {
 				return errTooManyRedirects

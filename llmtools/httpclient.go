@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Scrin/siikabot/testhooks"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
@@ -18,5 +19,5 @@ const toolHTTPTimeout = 10 * time.Second
 // timeout consistent by construction rather than by everyone remembering the same number.
 var httpClient = &http.Client{
 	Timeout:   toolHTTPTimeout,
-	Transport: otelhttp.NewTransport(http.DefaultTransport),
+	Transport: testhooks.Transport(otelhttp.NewTransport(http.DefaultTransport)),
 }
