@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 )
 
@@ -25,11 +26,11 @@ CREATE TABLE IF NOT EXISTS migrations (
 );`
 
 func migrate() error {
-	return runMigrations(context.Background(), func(string) bool { return true })
+	return runMigrations(context.Background(), pool, func(string) bool { return true })
 }
 
-// runMigrations runs the migrations that haven't run yet, of those include picks
-func runMigrations(ctx context.Context, include func(fileName string) bool) error {
+// runMigrations runs the migrations that haven't run yet on the database of a pool, of those include picks
+func runMigrations(ctx context.Context, pool *pgxpool.Pool, include func(fileName string) bool) error {
 
 	// Create migrations table if it doesn't exist
 	_, err := pool.Exec(ctx, createMigrationsTableSQL)

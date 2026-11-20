@@ -19,6 +19,20 @@ func initHTTP() {
 	// Set Gin to release mode for production
 	gin.SetMode(gin.ReleaseMode)
 
+	router := newRouter()
+
+	// Start the server
+	go func() {
+		log.Info().Msg("Starting HTTP server on :8080")
+		if err := router.Run(":8080"); err != nil {
+			log.Error().Err(err).Msg("HTTP server failed")
+		}
+	}()
+}
+
+// newRouter builds the bot's HTTP routes: the API, the webhooks, the metrics and the dashboard. Tests build it
+// too, to check every route as it's really set up.
+func newRouter() *gin.Engine {
 	router := gin.New()
 
 	// nginx in front sets X-Forwarded-For to the address it was reached from. Only a proxy on a private
@@ -116,13 +130,7 @@ func initHTTP() {
 	// Static file serving with SPA fallback (must be last)
 	SetupStaticRoutes(router)
 
-	// Start the server
-	go func() {
-		log.Info().Msg("Starting HTTP server on :8080")
-		if err := router.Run(":8080"); err != nil {
-			log.Error().Err(err).Msg("HTTP server failed")
-		}
-	}()
+	return router
 }
 
 // trustedProxies are the addresses a proxy in front of the bot can have: loopback and the private networks

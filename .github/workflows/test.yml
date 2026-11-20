@@ -1,14 +1,27 @@
 name: test
 
 on:
-  push:
-    branches: [master]
   pull_request:
     branches: [master]
+  # main.yml runs the tests on every push to master, and publishes the image only once they pass
+  workflow_call:
 
 jobs:
   go-tests:
     runs-on: ubuntu-latest
+    services:
+      # Production's PostgreSQL, where the database tests make databases of their own (testutil/pgtest)
+      postgres:
+        image: postgres:18.7
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -17,7 +30,9 @@ jobs:
       - name: Install libolm-dev
         run: sudo apt-get update && sudo apt-get install -y libolm-dev
       - name: Run Go tests
-        run: go test ./...
+        env:
+          SIIKABOT_TEST_POSTGRES: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
+        run: go test -race ./...
 
   frontend-tests:
     runs-on: ubuntu-latest

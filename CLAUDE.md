@@ -128,6 +128,10 @@ The referenced events are resolved once, in `bot/reply.go`, and handed to the ch
 - **`./web_frontend/`** - React SPA for system monitoring
   - Built with Vite, embedded in Go binary via `bot/static.go`
 
+- **`./testutil/`** - Helpers for tests only, never imported by the bot itself
+  - `pgtest` - A PostgreSQL database of a test's own (see *Testing*)
+  - `dbtest` - Points the `db` package at such a database, with the migrations run
+
 ## Coding Conventions
 
 ### Go Code - Logging Rules
@@ -474,11 +478,22 @@ go test -v ./...
 go test -cover ./...
 ```
 
-The `db` tests that need PostgreSQL run against the server in `SIIKABOT_TEST_POSTGRES`, a connection string whose user can create databases; each test makes a database of its own, runs the migrations and drops it after. Without the variable they're skipped. Without libolm installed, build with `-tags goolm`.
+Tests that need PostgreSQL run against a real one, and are never skipped:
+- **The server:** `testutil/pgtest` starts a throwaway cluster from the PostgreSQL server binaries installed here. It listens only on a Unix socket in a temporary directory, so test runs never meet each other, and it stops after the tests.
+- **CI and other servers:** CI points the tests at a `postgres:18.7` service with `SIIKABOT_TEST_POSTGRES`, a connection string whose user can create databases. Each database's name carries the test process's ID.
+- **A database per test:** each test gets a database of its own, copied from a template that has had the migrations run once.
+- **Outside `db`:** a package's tests call `dbtest.Use(t)` (`testutil/dbtest`), which points the `db` package at the test's database until the test ends. `db`'s own tests use `useTestDatabase(t)` instead.
+- **One at a time:** the `db` package works on one database at a time, so these tests can't call `t.Parallel()`.
+- **`TestMain`:** a package with such tests calls `dbtest.Main(m)`, or `pgtest.Run(m)` from a `TestMain` that does more, so the cluster stops after the tests.
 
 ```bash
+# On a server of your own instead of a throwaway cluster
 SIIKABOT_TEST_POSTGRES="postgres://user@localhost:5432/postgres?sslmode=disable" go test ./db
 ```
+
+Without libolm installed, build with `-tags goolm`.
+
+CI runs the Go tests with `-race`, the frontend tests on every pull request, and both on every push to master, before `main.yml` builds and publishes the image. A failing test stops the image from being published.
 
 #### Frontend Tests
 ```bash

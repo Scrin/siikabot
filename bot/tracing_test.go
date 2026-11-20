@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"github.com/Scrin/siikabot/testutil/pgtest"
 	"os"
 	"testing"
 	"time"
@@ -23,7 +24,7 @@ var testExporter = tracetest.NewInMemoryExporter()
 
 func TestMain(m *testing.M) {
 	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSyncer(testExporter)))
-	os.Exit(m.Run())
+	os.Exit(pgtest.Run(m))
 }
 
 // recordSpans clears previously collected spans and returns the exporter

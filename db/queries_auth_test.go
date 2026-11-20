@@ -9,7 +9,7 @@ import (
 
 // The database holds only hashes of the tokens, so reading it logs nobody in
 func TestSessionTokensAreStoredHashed(t *testing.T) {
-	useTestDatabase(t, allMigrations)
+	useTestDatabase(t)
 	ctx := context.Background()
 
 	if err := SetWebSessionToken(ctx, "@alice:example.com", "alice-token"); err != nil {
@@ -35,7 +35,7 @@ func TestSessionTokensAreStoredHashed(t *testing.T) {
 
 // A new session ends the one before it, and logging out ends it
 func TestSessionTokenReplacementAndLogout(t *testing.T) {
-	useTestDatabase(t, allMigrations)
+	useTestDatabase(t)
 	ctx := context.Background()
 
 	_ = SetWebSessionToken(ctx, "@alice:example.com", "first")
@@ -61,7 +61,7 @@ func TestSessionTokenReplacementAndLogout(t *testing.T) {
 
 // A session ends once it has gone unused for SessionIdleTimeout, and using it keeps it going
 func TestSessionEndsWhenUnused(t *testing.T) {
-	useTestDatabase(t, allMigrations)
+	useTestDatabase(t)
 	ctx := context.Background()
 	_ = SetWebSessionToken(ctx, "@alice:example.com", "alice-token")
 
@@ -95,8 +95,11 @@ func TestSessionEndsWhenUnused(t *testing.T) {
 // The migration that started hashing the tokens keeps the sessions people had
 func TestHashingMigrationKeepsSessions(t *testing.T) {
 	const migration = "0033__hash-web-session-tokens.sql"
-	useTestDatabase(t, migrationsBefore(migration))
+	p := useEmptyTestDatabase(t)
 	ctx := context.Background()
+	if err := runMigrations(ctx, p, migrationsBefore(migration)); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := pool.Exec(ctx, `INSERT INTO user_authorizations (user_id, web_session_token) VALUES
 		('@alice:example.com', 'Alice_Token-1'), ('@bob:example.com', NULL)`); err != nil {
