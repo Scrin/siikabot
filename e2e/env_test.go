@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -97,6 +98,7 @@ func setUp(t *testing.T) *environment {
 	t.Cleanup(func() {
 		if t.Failed() {
 			t.Logf("the bot's log, ending:\n%s", tail(env.botLog, 12000))
+			t.Logf("Synapse's errors and rate limits:\n%s", synapseTrouble(env.synapse.Log()))
 		}
 	})
 	return env
@@ -254,6 +256,32 @@ func (e *environment) StartBot(t *testing.T) {
 	}
 }
 
+// RestartBotWith restarts the bot with more environment for the rest of a test, and as it was after the test.
+// Every test sharing the bot waits meanwhile, so only a test that doesn't run in parallel may.
+func (e *environment) RestartBotWith(t *testing.T, env ...string) {
+	t.Helper()
+	e.stopBot()
+	usual := e.botEnv
+	e.botEnv = append(slices.Clone(usual), env...)
+	err := e.startBot()
+	e.botEnv = usual
+	if err != nil {
+		t.Fatalf("restarting the bot: %v", err)
+	}
+	t.Cleanup(func() {
+		e.stopBot()
+		if err := e.startBot(); err != nil {
+			t.Fatalf("restarting the bot as it was: %v", err)
+		}
+		if err := e.waitUntilReady(); err != nil {
+			t.Fatalf("the bot wasn't ready after restarting as it was: %v", err)
+		}
+	})
+	if err := e.waitUntilReady(); err != nil {
+		t.Fatalf("the bot wasn't ready after restarting: %v", err)
+	}
+}
+
 // waitUntilReady waits for the bot's HTTP server, then for it to join a room it's invited to, which it does
 // only once its sync loop runs
 func (e *environment) waitUntilReady() error {
@@ -302,9 +330,18 @@ func (e *environment) checkAlive(deadline time.Time) error {
 	return nil
 }
 
-// stop stops everything that started
+// stop stops everything that started. With SIIKABOT_E2E_LOGDIR set, the bot's and Synapse's logs are kept there.
 func (e *environment) stop() {
 	e.stopBot()
+	if dir := os.Getenv("SIIKABOT_E2E_LOGDIR"); dir != "" && e.dir != "" {
+		_ = os.MkdirAll(dir, 0o755)
+		if data, err := os.ReadFile(e.botLog); err == nil {
+			_ = os.WriteFile(filepath.Join(dir, "bot.log"), data, 0o644)
+		}
+		if e.synapse != nil {
+			_ = os.WriteFile(filepath.Join(dir, "synapse.log"), []byte(e.synapse.FullLog()), 0o644)
+		}
+	}
 	if e.synapse != nil {
 		e.synapse.Stop()
 	}
@@ -869,6 +906,20 @@ func freePort() (int, error) {
 	}
 	defer l.Close()
 	return l.Addr().(*net.TCPAddr).Port, nil
+}
+
+// synapseTrouble picks the lines of Synapse's log that explain a failure: its errors and the requests it limited
+func synapseTrouble(log string) string {
+	var lines []string
+	for _, line := range strings.Split(log, "\n") {
+		if strings.Contains(line, "ERROR") || strings.Contains(line, "Ratelimit") || strings.Contains(line, " 429 ") {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) > 40 {
+		lines = lines[len(lines)-40:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // tail returns the end of a file

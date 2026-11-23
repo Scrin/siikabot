@@ -131,11 +131,12 @@ The referenced events are resolved once, in `bot/reply.go`, and handed to the ch
 - **`./testutil/`** - Helpers for tests only, never imported by the bot itself
   - `pgtest` - A PostgreSQL database of a test's own (see *Testing*)
   - `dbtest` - Points the `db` package at such a database, with the migrations run
-  - `synapsetest` - A throwaway, non-federated Synapse for the end-to-end tests
+  - `synapsetest` - A throwaway, non-federated Synapse for the end-to-end tests, with every user it registers exempt from its rate limits
   - `fakenet` - The end-to-end tests' stand-in for the network, with a scripted model on the AI gateway's hosts
   - `leftovers` - Removes the temporary directories that test processes ending with a panic leave behind
+  - `knownbug` - Skips the tests for known open bugs, unless `SIIKABOT_KNOWN_BUGS` is set
 
-- **`./testhooks/`** - Where a build with the `e2e` tag reaches into the bot: it sends the bot's outbound HTTP to the tests' stand-in for the network, lets the fetch guard reach it, and turns tracing off. In every other build each hook is a pass-through, so production can't be switched into it. A client that reaches the internet wraps its transport with `testhooks.Transport`
+- **`./testhooks/`** - Where a build with the `e2e` tag reaches into the bot: it sends the bot's outbound HTTP to the tests' stand-in for the network, lets the fetch guard reach it, turns tracing off, and has the bot look for rooms due a pass as often as `SIIKABOT_E2E_REFLECTION_INTERVAL` says when a test sets it. In every other build each hook is a pass-through, so production can't be switched into it. A client that reaches the internet wraps its transport with `testhooks.Transport`
 
 - **`./e2e/`** - The end-to-end tests (see *Testing*)
 
@@ -285,6 +286,7 @@ LLM tools allow the AI chatbot to call functions. Follow this pattern:
 7. **Use caching** where appropriate (with mutex for thread safety)
 8. **Set `Trusted: true`** only if the tool's results can't hold text a stranger wrote: they come from the bot, the room, or a source the bot relies on, such as FMI. A tool that returns web pages, search results, issues or other text from the internet stays untrusted, and labels that text with `webfetch.UntrustedLabel`
 9. **Check the provenance rule** in a tool that reaches a host or name the model chooses, since that's a way to send the room's content out: `webfetch.ProvenanceFrom(ctx).AllowsName` before a lookup, as `dns_lookup` and `whois_lookup` do. Fetching goes through `webfetch.Fetch`, which checks it itself
+10. **Test it against fakes,** never the internet. `useFakeInternet` (`llmtools/fakeinternet_test.go`) answers the shared client's requests with a handler per host, and `useFakeDNS` and `useFakeWhois` stand in for DNS and whois servers. A tool whose package has a client of its own, as FMI's has, is tested end to end with `e.net.Handle`. The package's tests run against PostgreSQL (`dbtest.Main`)
 
 #### Example Tool Structure
 
@@ -527,8 +529,10 @@ The tests check what the model was shown (`e.Model.Requests`, `e.Model.Saw`), wh
   - `waitForTheTurn` waits until the turn is waiting for that answer;
   - `settle` waits until the bot has handled everything sent so far.
 - **Encryption:** `User.Encrypted` gives a test user end-to-end encryption, and `WithEncryption` creates an encrypted room.
-- **Restarts:** `StopBot` and `StartBot` stop and restart the bot. Every test shares it, so a test that stops it doesn't run in parallel, and nor does one that changes the chat settings (`changeSettings`).
-- **Known bugs:** a test for a known open bug calls `knownBug` with the bug's ID, which skips it. Set `SIIKABOT_E2E_KNOWN_BUGS=1` to run those tests and see which bugs are still there. The fix removes the call.
+- **Restarts:** `StopBot` and `StartBot` stop and restart the bot, and `RestartBotWith` restarts it with more environment until the test ends. Every test shares it, so a test that stops it doesn't run in parallel, and nor does one that changes the chat settings (`changeSettings`).
+- **Other hosts:** `e.net.Handle` serves a host of the internet for a test, as `TestFMITool` does FMI's. Only one test at a time may serve a host.
+- **Known bugs:** a test for a known open bug calls `knownbug.Skip` (`testutil/knownbug`, `knownBug` in `e2e`) with the bug's ID, which skips it. Set `SIIKABOT_KNOWN_BUGS=1` to run those tests, unit and end-to-end alike, and see which bugs are still there. The fix removes the call.
+- **Logs and coverage:** a failing test logs the end of the bot's log and Synapse's errors. `SIIKABOT_E2E_LOGDIR` keeps both logs whole in a directory, and `SIIKABOT_E2E_COVERDIR` collects the bot's coverage for `go tool covdata`.
 
 #### Frontend Tests
 ```bash

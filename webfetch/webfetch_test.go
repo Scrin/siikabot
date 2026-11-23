@@ -8,8 +8,10 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
 	"fmt"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -567,4 +569,48 @@ func makeCertificate(t *testing.T, names []string, notBefore, notAfter time.Time
 		t.Fatal(err)
 	}
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+}
+
+// A site that doesn't answer within the fetch's time is a timeout, which the model is told about, rather than a
+// fetch that hangs
+func TestFetchTimesOut(t *testing.T) {
+	release := make(chan struct{})
+	server := serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer close(release)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	if result := Fetch(ctx, server.URL); result.Outcome != OutcomeError || result.Reason != "timeout" {
+		t.Errorf("a site that never answers is %q (%q), want a timeout", result.Outcome, result.Reason)
+	}
+}
+
+// A connection the guard lets through that nothing listens on fails to connect
+func TestFetchConnectionFails(t *testing.T) {
+	server := serve(t, http.NotFoundHandler())
+	server.Close()
+	if result := Fetch(context.Background(), server.URL); result.Outcome != OutcomeError || result.Reason != "connection_failed" {
+		t.Errorf("a closed port is %q (%q), want a failed connection", result.Outcome, result.Reason)
+	}
+}
+
+func TestIsTimeout(t *testing.T) {
+	conn, err := net.Dial("udp", "127.0.0.1:9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(-time.Second))
+	_, readErr := conn.Read(make([]byte, 1))
+	if !isTimeout(readErr) {
+		t.Errorf("isTimeout(%v) = false for a read past its deadline", readErr)
+	}
+	if isTimeout(errors.New("refused")) {
+		t.Error("isTimeout() = true for an error that isn't a timeout")
+	}
 }

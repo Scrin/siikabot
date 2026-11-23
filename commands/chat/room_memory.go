@@ -14,6 +14,7 @@ import (
 	"github.com/Scrin/siikabot/config"
 	"github.com/Scrin/siikabot/db"
 	"github.com/Scrin/siikabot/metrics"
+	"github.com/Scrin/siikabot/testhooks"
 	"github.com/Scrin/siikabot/tracing"
 	"github.com/rs/zerolog/log"
 	"go.opentelemetry.io/otel/attribute"
@@ -209,7 +210,7 @@ type ReflectionResult struct {
 // ends
 func startReflecting(ctx context.Context) {
 	go func() {
-		ticker := time.NewTicker(reflectionInterval)
+		ticker := time.NewTicker(testhooks.ReflectionInterval(reflectionInterval))
 		defer ticker.Stop()
 
 		for {

@@ -15,10 +15,12 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -44,6 +46,12 @@ type Server struct {
 	cmd    *exec.Cmd
 	logs   string
 	exited chan struct{}
+
+	// adminToken is the token of a server admin the package registers for itself, to exempt the tests' users from
+	// rate limits
+	adminOnce  sync.Once
+	adminToken string
+	adminErr   error
 }
 
 // Start starts a homeserver for the tests, or finds the one ServerEnv names
@@ -142,8 +150,10 @@ func Start() (*Server, error) {
 	}
 }
 
-// config is Synapse's configuration: one client listener on loopback and nothing else, no federation, and rate
-// limits out of the way
+// config is Synapse's configuration: one client listener on loopback and nothing else, no federation, and every
+// client rate limit out of the way. The bot makes far more requests than a person, in parallel tests far more
+// still, and Synapse limits more than messages: joins, invites, profile lookups and so on. A new Synapse that adds a
+// limit shows up as M_LIMIT_EXCEEDED in the bot's log.
 func (s *Server) config(port int) string {
 	limit := "{per_second: 1000, burst_count: 1000}"
 	return fmt.Sprintf(`server_name: localhost
@@ -188,6 +198,14 @@ rc_invites:
 rc_admin_redaction: %[4]s
 rc_room_creation: %[4]s
 rc_media_create: %[4]s
+rc_profile: %[4]s
+rc_presence:
+  per_user: %[4]s
+rc_key_requests: %[4]s
+rc_delayed_event_mgmt: %[4]s
+rc_reports: %[4]s
+rc_user_directory: %[4]s
+rc_third_party_invite: %[4]s
 `, s.dir, port, s.secret, limit)
 }
 
@@ -205,6 +223,15 @@ func (s *Server) Stop() {
 	if s.dir != "" {
 		_ = os.RemoveAll(s.dir)
 	}
+}
+
+// FullLog returns the homeserver's whole log, for keeping
+func (s *Server) FullLog() string {
+	if s.logs == "" {
+		return ""
+	}
+	data, _ := os.ReadFile(s.logs)
+	return string(data)
 }
 
 // Log returns the end of the homeserver's log, for a failing test to show
@@ -226,8 +253,33 @@ type Account struct {
 	DeviceID    string `json:"device_id"`
 }
 
-// Register registers a user through the shared-secret admin API and logs them in
+// Register registers a user through the shared-secret admin API and logs them in. The user is exempt from Synapse's
+// limit on messages: the bot makes far more requests than a person, and tests running in parallel far more still,
+// and the configuration alone doesn't keep Synapse from limiting them.
 func (s *Server) Register(ctx context.Context, localpart, password string, admin bool) (Account, error) {
+	account, err := s.register(ctx, localpart, password, admin)
+	if err != nil {
+		return Account{}, err
+	}
+	s.adminOnce.Do(func() {
+		var admin Account
+		admin, s.adminErr = s.register(ctx, "synapsetest-admin", "synapsetest-"+filepath.Base(s.dir), true)
+		s.adminToken = admin.AccessToken
+	})
+	if s.adminErr != nil {
+		return Account{}, fmt.Errorf("synapsetest: registering its admin: %w", s.adminErr)
+	}
+	// No messages per second at all means no limit
+	var override map[string]any
+	if err := s.callAs(ctx, s.adminToken, http.MethodPost, "/_synapse/admin/v1/users/"+url.PathEscape(account.UserID)+"/override_ratelimit",
+		map[string]int{"messages_per_second": 0, "burst_count": 0}, &override); err != nil {
+		return Account{}, fmt.Errorf("synapsetest: exempting %s from rate limits: %w", account.UserID, err)
+	}
+	return account, nil
+}
+
+// register registers a user through the shared-secret admin API and logs them in
+func (s *Server) register(ctx context.Context, localpart, password string, admin bool) (Account, error) {
 	var nonce struct {
 		Nonce string `json:"nonce"`
 	}
@@ -252,6 +304,11 @@ func (s *Server) Register(ctx context.Context, localpart, password string, admin
 
 // call makes a request to the homeserver and reads its JSON answer
 func (s *Server) call(ctx context.Context, method, path string, body, into any) error {
+	return s.callAs(ctx, "", method, path, body, into)
+}
+
+// callAs makes a request to the homeserver with an access token, if it isn't empty, and reads its JSON answer
+func (s *Server) callAs(ctx context.Context, token, method, path string, body, into any) error {
 	var reader *bytes.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -267,6 +324,9 @@ func (s *Server) call(ctx context.Context, method, path string, body, into any) 
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err

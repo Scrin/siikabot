@@ -22,25 +22,11 @@ func SendMessage(ctx context.Context, roomID string, message string) <-chan stri
 	return sendMessage(ctx, roomID, simpleMessage{MsgType: "m.text", Body: message}, nil)
 }
 
-// SendMessageWithDebugData queues a message to be sent and returns immediatedly.
-//
-// The returned channel will provide the event ID of the message after the message has been sent
-func SendMessageWithDebugData(ctx context.Context, roomID string, message string, debugData map[string]any) <-chan string {
-	return sendMessage(ctx, roomID, simpleMessage{MsgType: "m.text", Body: message, DebugData: debugData}, nil)
-}
-
 // SendFormattedMessage queues a html-formatted message to be sent and returns immediatedly.
 //
 // The returned channel will provide the event ID of the message after the message has been sent
 func SendFormattedMessage(ctx context.Context, roomID string, message string) <-chan string {
 	return sendMessage(ctx, roomID, formattedMessage("m.text", message, nil), nil)
-}
-
-// SendFormattedMessageWithDebugData queues a html-formatted message to be sent and returns immediatedly.
-//
-// The returned channel will provide the event ID of the message after the message has been sent
-func SendFormattedMessageWithDebugData(ctx context.Context, roomID string, message string, debugData map[string]any) <-chan string {
-	return sendMessage(ctx, roomID, formattedMessage("m.text", message, debugData), nil)
 }
 
 // SendNotice queues a notice to be sent and returns immediatedly.
@@ -50,57 +36,11 @@ func SendNotice(ctx context.Context, roomID string, notice string) <-chan string
 	return sendMessage(ctx, roomID, simpleMessage{MsgType: "m.notice", Body: notice}, nil)
 }
 
-// SendNoticeWithDebugData queues a notice to be sent and returns immediatedly.
-//
-// The returned channel will provide the event ID of the notice after the notice has been sent
-func SendNoticeWithDebugData(ctx context.Context, roomID string, notice string, debugData map[string]any) <-chan string {
-	return sendMessage(ctx, roomID, simpleMessage{MsgType: "m.notice", Body: notice, DebugData: debugData}, nil)
-}
-
 // SendFormattedNotice queues a html-formatted notice to be sent and returns immediatedly.
 //
 // The returned channel will provide the event ID of the notice after the notice has been sent
 func SendFormattedNotice(ctx context.Context, roomID string, notice string) <-chan string {
 	return sendMessage(ctx, roomID, formattedMessage("m.notice", notice, nil), nil)
-}
-
-// SendFormattedNotice queues a html-formatted notice to be sent and returns immediatedly.
-//
-// The returned channel will provide the event ID of the notice after the notice has been sent
-func SendFormattedNoticeWithDebugData(ctx context.Context, roomID string, notice string, debugData map[string]any) <-chan string {
-	return sendMessage(ctx, roomID, formattedMessage("m.notice", notice, debugData), nil)
-}
-
-// SendMarkdownFormattedMessage converts markdown text to HTML and queues the formatted message to be sent.
-//
-// The returned channel will provide the event ID of the message after the message has been sent
-func SendMarkdownFormattedMessage(ctx context.Context, roomID string, markdownText string) <-chan string {
-	htmlOutput := markdownToHTML(markdownText, nil)
-	return SendFormattedMessage(ctx, roomID, htmlOutput)
-}
-
-// SendMarkdownFormattedMessageWithDebugData converts markdown text to HTML and queues the formatted message to be sent.
-//
-// The returned channel will provide the event ID of the message after the message has been sent
-func SendMarkdownFormattedMessageWithDebugData(ctx context.Context, roomID string, markdownText string, debugData map[string]any) <-chan string {
-	htmlOutput := markdownToHTML(markdownText, nil)
-	return SendFormattedMessageWithDebugData(ctx, roomID, htmlOutput, debugData)
-}
-
-// SendMarkdownFormattedNotice converts markdown text to HTML and queues the formatted notice to be sent.
-//
-// The returned channel will provide the event ID of the notice after the notice has been sent
-func SendMarkdownFormattedNotice(ctx context.Context, roomID string, markdownText string) <-chan string {
-	htmlOutput := markdownToHTML(markdownText, nil)
-	return SendFormattedNotice(ctx, roomID, htmlOutput)
-}
-
-// SendMarkdownFormattedNotice converts markdown text to HTML and queues the formatted notice to be sent.
-//
-// The returned channel will provide the event ID of the notice after the notice has been sent
-func SendMarkdownFormattedNoticeWithDebugData(ctx context.Context, roomID string, markdownText string, debugData map[string]any) <-chan string {
-	htmlOutput := markdownToHTML(markdownText, nil)
-	return SendFormattedNoticeWithDebugData(ctx, roomID, htmlOutput, debugData)
 }
 
 // Target says where a message goes, and whether it is still wanted when its turn to be sent comes.

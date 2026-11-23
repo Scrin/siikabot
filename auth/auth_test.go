@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -196,4 +197,58 @@ func lastCharSpelledOtherwise(t *testing.T, challenge string) string {
 		t.Fatalf("the challenge's last character %q has its unused bits set", challenge[len(challenge)-1])
 	}
 	return challenge[:len(challenge)-1] + string(alphabet[last+1])
+}
+
+// A result whose browser never came is forgotten once it expires, but never while its token is being made
+func TestCleanupForgetsResultsNobodyCameFor(t *testing.T) {
+	now := useStore(t)
+	ctx := context.Background()
+	abandoned, _, _, _ := GenerateChallenge(ctx)
+	if err := CompleteChallenge(ctx, abandoned, "@alice:example.com", issueToken("alice-token")); err != nil {
+		t.Fatal(err)
+	}
+	*now = now.Add(50 * time.Second)
+	waiting, pollSecret, _, _ := GenerateChallenge(ctx)
+	if err := CompleteChallenge(ctx, waiting, "@bob:example.com", issueToken("bob-token")); err != nil {
+		t.Fatal(err)
+	}
+	store.completed["being-made"] = &completion{pending: true}
+	*now = now.Add(20 * time.Second)
+
+	store.mu.Lock()
+	store.cleanup()
+	_, abandonedKept := store.completed[abandoned]
+	_, pendingKept := store.completed["being-made"]
+	store.mu.Unlock()
+	if abandonedKept {
+		t.Error("a result past its time is still kept")
+	}
+	if !pendingKept {
+		t.Error("a result whose token is being made was forgotten")
+	}
+	if token, _, err := ConsumeChallengeResult(ctx, waiting, pollSecret); err != nil || token != "bob-token" {
+		t.Errorf("a result still in its time = %q, %v", token, err)
+	}
+}
+
+// A full store makes room by forgetting expired results, and refuses more only when none have expired
+func TestFullStoreMakesRoom(t *testing.T) {
+	now := useStore(t)
+	ctx := context.Background()
+	for i := range MaxCompletedChallenges {
+		store.completed[fmt.Sprint("old-", i)] = &completion{token: "old", expiresAt: now.Add(time.Second)}
+	}
+
+	challenge, _, _, _ := GenerateChallenge(ctx)
+	if err := CompleteChallenge(ctx, challenge, "@alice:example.com", issueToken("alice-token")); !errors.Is(err, ErrTooManyChallenges) {
+		t.Errorf("completing a challenge in a store full of live results = %v, want ErrTooManyChallenges", err)
+	}
+	*now = now.Add(2 * time.Second)
+	challenge, _, _, _ = GenerateChallenge(ctx)
+	if err := CompleteChallenge(ctx, challenge, "@alice:example.com", issueToken("alice-token")); err != nil {
+		t.Errorf("completing a challenge once the full store's results expired = %v", err)
+	}
+	if len(store.completed) != 1 {
+		t.Errorf("the store holds %d results, want only the new one", len(store.completed))
+	}
 }

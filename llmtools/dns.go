@@ -17,6 +17,9 @@ import (
 // dnsTimeout bounds a whole DNS lookup, every record type included
 const dnsTimeout = 10 * time.Second
 
+// dnsResolver is the resolver lookups use, a variable so tests can give it a DNS server of their own
+var dnsResolver = net.DefaultResolver
+
 // DNSToolDefinition returns the tool definition for the DNS lookup tool
 var DNSToolDefinition = aigateway.ToolDefinition{
 	Type: "function",
@@ -86,7 +89,7 @@ func handleDNSToolCall(ctx context.Context, arguments string) (string, error) {
 
 	ctx, cancel := context.WithTimeout(ctx, dnsTimeout)
 	defer cancel()
-	lookup := &dnsLookup{domain: domain, resolver: net.DefaultResolver}
+	lookup := &dnsLookup{domain: domain, resolver: dnsResolver}
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("**DNS lookup for %s**\n\n", domain))

@@ -4,25 +4,22 @@ package e2e
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Scrin/siikabot/testutil/fakenet"
+	"github.com/Scrin/siikabot/testutil/knownbug"
 )
 
 // Redacted messages leave the chat history, and edited ones are stored as edited (the chat privacy invariant's
 // last bullets), including when the redaction or edit races the turn
 
-// knownBug skips a test for a bug the review found and nothing has fixed yet, unless SIIKABOT_E2E_KNOWN_BUGS is
-// set, which runs them to see which still fail. The fix removes the call.
+// knownBug skips a test for a bug the review found and nothing has fixed yet (see testutil/knownbug)
 func knownBug(t *testing.T, finding, what string) {
 	t.Helper()
-	if os.Getenv("SIIKABOT_E2E_KNOWN_BUGS") == "" {
-		t.Skipf("known bug %s (.scratch/review-2026-11-20.md): %s", finding, what)
-	}
+	knownbug.Skip(t, finding, what)
 }
 
 // historyHolds reports whether a room's chat history, its quotes included, holds text

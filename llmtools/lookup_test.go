@@ -7,7 +7,6 @@ import (
 	"net"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/Scrin/siikabot/webfetch"
 )
@@ -71,7 +70,7 @@ func TestIsPublicDomain(t *testing.T) {
 
 // Referrals in whois records can name any host and port, and the record's holder chooses some of them
 func TestWhoisDialerConnectsOnlyToPublicWhoisServers(t *testing.T) {
-	dialer := whoisDialer{ctx: context.Background(), dialer: webfetch.GuardedDialer(time.Second)}
+	dialer := whoisDialer{ctx: context.Background()}
 	for _, address := range []string{"127.0.0.1:43", "10.0.0.5:43", "[::1]:43", "169.254.169.254:43", "192.0.2.1:6379"} {
 		if conn, err := dialer.Dial("tcp", address); err == nil {
 			conn.Close()

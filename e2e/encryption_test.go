@@ -89,3 +89,22 @@ func TestLateJoinerReadsTheBot(t *testing.T) {
 		t.Errorf("Bob read the bot's answer as %q", answer.Body)
 	}
 }
+
+// In an encrypted room the bot decrypts the message a reply quotes, and the one a link points to
+func TestEncryptedReferences(t *testing.T) {
+	e := setUp(t)
+	t.Parallel()
+	alice, bob := e.User(t, "alice").Encrypted(t), e.User(t, "bob").Encrypted(t)
+	room := e.Room(t, alice, []*User{bob}, WithEncryption())
+	asBob := room.As(bob)
+	replied, linked := marker(t, "replied"), marker(t, "linked")
+
+	question := e.Pill("what do you think of this?")
+	question["m.relates_to"] = map[string]any{"m.in_reply_to": map[string]any{"event_id": bob.Say(t, asBob, replied)}}
+	room.WaitForBot(t, alice.Send(t, room, question))
+	assertSaw(t, e, room, replied, true)
+
+	room.WaitForBot(t, alice.Ask(t, room, "and "+Link(room, bob.Say(t, asBob, linked))))
+	assertSaw(t, e, room, linked, true)
+	assertNothingInTheClear(t, alice, room)
+}

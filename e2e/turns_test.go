@@ -17,7 +17,7 @@ import (
 // toolThenAnswer calls a tool once, then answers with the given text
 func toolThenAnswer(tool, arguments, answer string) fakenet.Script {
 	return func(req fakenet.ModelRequest) fakenet.Reply {
-		if len(req.ToolResults()) == 0 {
+		if len(req.TurnToolResults()) == 0 {
 			return fakenet.CallTool("call-1", tool, arguments)
 		}
 		return fakenet.Answer(answer)
@@ -249,6 +249,53 @@ func TestNoRoomMemoriesOfDirectChats(t *testing.T) {
 	}
 }
 
+// Once a group room has been quiet for room_memory_delay, the bot thinks back over it without anyone asking. A
+// direct chat that has been as quiet gets no pass. This changes a setting and restarts the bot, so it doesn't run
+// in parallel.
+func TestQuietRoomsAreThoughtBackOver(t *testing.T) {
+	e := setUp(t)
+	alice, bob := e.User(t, "alice"), e.User(t, "bob")
+	room := e.Room(t, alice, []*User{bob})
+	dm := e.Room(t, alice, nil)
+	memory := marker(t, "memory")
+	reflection(t, e, room, func(fakenet.ModelRequest) fakenet.Reply {
+		return fakenet.CallTool("pass-1", "update_room_memories",
+			fmt.Sprintf(`{"changes":[{"action":"add","memory":"The room talks about %s"}]}`, memory))
+	})
+	reflection(t, e, dm, func(fakenet.ModelRequest) fakenet.Reply {
+		return fakenet.CallTool("pass-1", "update_room_memories", `{"changes":[{"action":"add","memory":"a note on Alice"}]}`)
+	})
+	room.WaitForBot(t, alice.Ask(t, room, "let's talk about fish"))
+	dm.WaitForBot(t, alice.Ask(t, dm, "remember this"))
+
+	// room_memory_delay can't be set below five minutes, so the test adds a configuration with a shorter one, as the
+	// admin's command would, and puts the configuration back after. Its cleanup runs after the bot's restart's.
+	original := e.Query(t, "SELECT max(id) FROM chat_config")[0]
+	e.Query(t, `INSERT INTO chat_config (model, context_high_tokens, context_low_tokens, max_tool_iterations,
+			max_response_tokens, image_detail, web_part_bytes, turn_timeout, model_timeout, model_attempts, room_memory_delay)
+		SELECT model, context_high_tokens, context_low_tokens, max_tool_iterations, max_response_tokens, image_detail,
+			web_part_bytes, turn_timeout, model_timeout, model_attempts, INTERVAL '1 second'
+		FROM chat_config WHERE id = $1::bigint RETURNING id`, original)
+	adminRoom := e.Room(t, e.admin, nil)
+	t.Cleanup(func() { adminRoom.WaitForBot(t, e.admin.Say(t, adminRoom, "!chat config revert "+original)) })
+	e.RestartBotWith(t, "SIIKABOT_E2E_REFLECTION_INTERVAL=1s")
+
+	eventually(t, "a pass over both rooms", func() bool {
+		return e.Query(t, "SELECT count(*) FROM room_memory_progress WHERE room_id IN ($1, $2)", room.ID.String(), dm.ID.String())[0] == "2"
+	})
+	if stored := e.Query(t, "SELECT count(*) FROM room_memory WHERE room_id = $1", room.ID.String())[0]; stored != "1" {
+		t.Errorf("%s memories of the quiet room are stored, want the one its pass added", stored)
+	}
+	if stored := e.Query(t, "SELECT count(*) FROM room_memory WHERE room_id = $1", dm.ID.String())[0]; stored != "0" {
+		t.Errorf("%s memories of a direct chat are stored", stored)
+	}
+	for _, req := range e.Model.Requests(dm.ID.String()) {
+		if req.Metadata["kind"] == "reflection" {
+			t.Error("a pass over a direct chat asked the model")
+		}
+	}
+}
+
 // A pass whose answer was cut off doesn't count as having thought back over the conversations (B1)
 func TestCutOffPassDoesntAdvance(t *testing.T) {
 	knownBug(t, "B1", "a pass whose answer was cut off counts as a clean unchanged pass")
@@ -262,5 +309,70 @@ func TestCutOffPassDoesntAdvance(t *testing.T) {
 	reflect(t, admin, room)
 	if progress := e.Query(t, "SELECT reflected_until FROM room_memory_progress WHERE room_id = $1", room.ID.String()); len(progress) == 1 && progress[0] != "0" {
 		t.Errorf("a cut-off pass moved the progress to %s", progress[0])
+	}
+}
+
+// Once the history is over context_high_tokens, the window moves on to a turn boundary within context_low_tokens,
+// and the turns after it start from there
+func TestContextWindowMovesOn(t *testing.T) {
+	e := setUp(t)
+	e.changeSettings(t, "context_low_tokens 150", "context_high_tokens 300")
+	alice := e.User(t, "alice")
+	room := e.Room(t, alice, nil)
+	// About 90 tokens a question, so the window goes over the high mark in a few turns
+	padding := strings.Repeat("words to fill the window ", 14)
+	var questions []string
+	for i := range 5 {
+		question := marker(t, fmt.Sprintf("q%d", i))
+		questions = append(questions, question)
+		room.WaitForBot(t, alice.Ask(t, room, question+" "+padding))
+	}
+
+	requests := e.Model.Requests(room.ID.String())
+	if len(requests) != len(questions) {
+		t.Fatalf("the model got %d requests, want one a turn", len(requests))
+	}
+	moved := -1
+	for i, req := range requests {
+		if !strings.Contains(req.Text(), questions[i]) {
+			t.Errorf("turn %d didn't show the model its own question", i)
+		}
+		if moved < 0 && !strings.Contains(req.Text(), questions[0]) {
+			moved = i
+		}
+	}
+	if moved < 0 {
+		t.Fatal("the window never moved on")
+	}
+	if moved == len(requests)-1 {
+		t.Fatal("the window moved on only in the last turn, so nothing shows it stays moved")
+	}
+	// The turn after the move starts from where the window moved to, rather than working it out again
+	if next := requests[moved+1].Text(); !strings.Contains(next, questions[moved]) || strings.Contains(next, questions[0]) {
+		t.Errorf("the turn after the window moved on, at turn %d, doesn't start from there", moved)
+	}
+	if anchors := e.Query(t, "SELECT count(*) FROM chat_context_anchors WHERE room_id = $1", room.ID.String())[0]; anchors != "1" {
+		t.Errorf("the room has %s context anchors, want the one the window moved to", anchors)
+	}
+}
+
+// A tool that fails gives the model the error to work with, and the turn still ends with an answer
+func TestToolFailureReachesTheModel(t *testing.T) {
+	e := setUp(t)
+	t.Parallel()
+	alice := e.User(t, "alice")
+	room := e.Room(t, alice, nil)
+
+	e.Model.Script(t, room.ID.String(), toolThenAnswer("dns_lookup", `{"domain":"example.com","record_type":"SRV"}`,
+		"the lookup failed"))
+	room.WaitForBotMessage(t, alice.Ask(t, room, "look up example.com"), bodyContains("the lookup failed"))
+	var result string
+	for _, req := range e.Model.Requests(room.ID.String()) {
+		if r, ok := req.TurnToolResults()["call-1"]; ok {
+			result = r
+		}
+	}
+	if !strings.Contains(result, "Error executing dns_lookup") {
+		t.Errorf("the model was given %q for the failed call", result)
 	}
 }

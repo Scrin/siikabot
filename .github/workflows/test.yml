@@ -56,8 +56,9 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
-      - name: Install libolm-dev
-        run: sudo apt-get update && sudo apt-get install -y libolm-dev
+      # traceroute and ping for !traceroute and !ping, as the bot's image has them
+      - name: Install libolm-dev, traceroute and ping
+        run: sudo apt-get update && sudo apt-get install -y libolm-dev traceroute iputils-ping
       # The venv scripts/install-synapse.sh makes, kept until the script's Synapse version changes
       - uses: actions/cache@v6
         with:
@@ -68,7 +69,16 @@ jobs:
       - name: Run end-to-end tests
         env:
           SIIKABOT_TEST_POSTGRES: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
+          SIIKABOT_E2E_LOGDIR: ${{ runner.temp }}/e2e-logs
         run: go test -tags e2e ./e2e/...
+      # The bot's and Synapse's whole logs, for a failure the test output doesn't explain
+      - name: Keep the logs of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-logs
+          path: ${{ runner.temp }}/e2e-logs
+          if-no-files-found: ignore
 
   frontend-tests:
     runs-on: ubuntu-latest

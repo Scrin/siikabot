@@ -3,12 +3,14 @@
 package e2e
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/Scrin/siikabot/testutil/fakenet"
 	"maunium.net/go/mautrix/event"
+	"maunium.net/go/mautrix/id"
 )
 
 // The chat privacy invariant (CLAUDE.md), checked against exactly what the model was shown. Each test has rooms of
@@ -161,6 +163,28 @@ func TestReferencedMessages(t *testing.T) {
 		assertSaw(t, e, room, otherRoom, false)
 	})
 
+	// A link may name the room by an alias, which counts only if it is an alias of the turn's room
+	t.Run("links_through_aliases", func(t *testing.T) {
+		t.Parallel()
+		alice, bob := e.User(t, "alice"), e.User(t, "bob")
+		room := e.Room(t, alice, []*User{bob})
+		elsewhere := e.Room(t, bob, nil)
+		server := e.botID.Homeserver()
+		here, there := id.NewRoomAlias("here-"+randomString()[:8], server), id.NewRoomAlias("there-"+randomString()[:8], server)
+		if _, err := alice.CreateAlias(context.Background(), here, room.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := bob.CreateAlias(context.Background(), there, elsewhere.ID); err != nil {
+			t.Fatal(err)
+		}
+		inTheRoom, inAnother := marker(t, "aliased"), marker(t, "aliased-elsewhere")
+		links := fmt.Sprintf("https://matrix.to/#/%s/%s https://matrix.to/#/%s/%s",
+			here, bob.Say(t, room, inTheRoom), there, bob.Say(t, elsewhere, inAnother))
+		room.WaitForBot(t, alice.Ask(t, room, "compare "+links))
+		assertSaw(t, e, room, inTheRoom, true)
+		assertSaw(t, e, room, inAnother, false)
+	})
+
 	t.Run("links_in_a_quote", func(t *testing.T) {
 		t.Parallel()
 		alice, bob := e.User(t, "alice"), e.User(t, "bob")
@@ -203,7 +227,7 @@ func TestRoomScopedTools(t *testing.T) {
 	// script calls a tool once, then answers
 	script := func(t *testing.T, room *Room, tool, arguments string) {
 		e.Model.Script(t, room.ID.String(), func(req fakenet.ModelRequest) fakenet.Reply {
-			if len(req.ToolResults()) == 0 {
+			if len(req.TurnToolResults()) == 0 {
 				return fakenet.CallTool("call-1", tool, arguments)
 			}
 			return fakenet.Answer("done")

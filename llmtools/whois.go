@@ -97,14 +97,19 @@ const (
 // much, and gives up when the turn does.
 func newWhoisClient(ctx context.Context) *whois.Client {
 	return whois.NewClient().
-		SetDialer(whoisDialer{ctx: ctx, dialer: webfetch.GuardedDialer(whoisTimeout)}).
+		SetDialer(whoisDialer{ctx: ctx}).
 		SetTimeout(whoisTimeout)
+}
+
+// dialWhois connects to a whois server once whoisDialer has checked its port: on a public address only. A variable
+// so tests can connect to a whois server of their own.
+var dialWhois = func(ctx context.Context, network, address string) (net.Conn, error) {
+	return webfetch.GuardedDialer(whoisTimeout).DialContext(ctx, network, address)
 }
 
 // whoisDialer connects a whois client to whois servers (newWhoisClient)
 type whoisDialer struct {
-	ctx    context.Context
-	dialer *net.Dialer
+	ctx context.Context
 }
 
 // Dial connects to a whois server on a public address and the whois port
@@ -116,7 +121,7 @@ func (d whoisDialer) Dial(network, address string) (net.Conn, error) {
 	if port != whoisPort {
 		return nil, fmt.Errorf("whois servers are reached on port %s only, not %s", whoisPort, port)
 	}
-	conn, err := d.dialer.DialContext(d.ctx, network, address)
+	conn, err := dialWhois(d.ctx, network, address)
 	if err != nil {
 		return nil, err
 	}

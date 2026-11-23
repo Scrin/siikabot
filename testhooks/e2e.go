@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"time"
 )
 
 // The end-to-end tests' stand-in for the network: every request the bot makes to the internet goes to it, with
@@ -58,3 +59,12 @@ func AllowAddress(address netip.AddrPort) bool {
 
 // NoTracing reports whether tracing is off
 func NoTracing() bool { return true }
+
+// ReflectionInterval is how often the bot looks for rooms due a pass over their conversations: as often as
+// SIIKABOT_E2E_REFLECTION_INTERVAL says when a test sets it, so the test needn't wait minutes, and every d otherwise
+func ReflectionInterval(d time.Duration) time.Duration {
+	if interval, err := time.ParseDuration(os.Getenv("SIIKABOT_E2E_REFLECTION_INTERVAL")); err == nil && interval > 0 {
+		return interval
+	}
+	return d
+}

@@ -93,6 +93,21 @@ func (r ModelRequest) ToolsAllowed() bool {
 	return len(r.Tools) > 0 && strings.Trim(string(r.ToolChoice), `"`) != "none"
 }
 
+// TurnToolResults are the results of the tool calls in the request's own turn, after its last user message, by tool
+// call ID. The history before it can hold earlier turns' results.
+func (r ModelRequest) TurnToolResults() map[string]string {
+	results := map[string]string{}
+	for _, m := range r.Messages {
+		switch m.Role {
+		case "user":
+			results = map[string]string{}
+		case "tool":
+			results[m.ToolCallID] = m.Text()
+		}
+	}
+	return results
+}
+
 // ImageCount is how many images the request shows the model
 func (r ModelRequest) ImageCount() int {
 	count := 0
