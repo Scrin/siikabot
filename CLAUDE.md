@@ -521,8 +521,14 @@ The tests check what the model was shown (`e.Model.Requests`, `e.Model.Saw`), wh
 - **Rooms of its own:** each test has rooms and users of its own, so tests can run in parallel. A test scripts the model only for its own rooms.
 - **Unique text:** `marker` makes text no other message has, to look for in what the model saw.
 - **Final checks:** `conclude` addresses the bot once more and waits for the answer, so everything sent before has been handled before a test checks what the model saw.
-- **Waiting:** a test waits for the bot with `WaitForBot` and `WaitForBotMessage`, never with a fixed sleep, except to check that something doesn't happen.
-- **Known bugs:** a test for a known open bug is skipped with a reference to it, and the fix removes the skip.
+- **Waiting:** a test waits for the bot with `WaitForBot` and `WaitForBotMessage`, never with a fixed sleep, except to check that something doesn't happen. When a message may get more than one answer, such as a command, it waits for the one it wants by its text.
+- **Races:** a test of something happening while a turn runs makes the race certain instead of timing it:
+  - `heldModel` holds the model's answer until the test releases it;
+  - `waitForTheTurn` waits until the turn is waiting for that answer;
+  - `settle` waits until the bot has handled everything sent so far.
+- **Encryption:** `User.Encrypted` gives a test user end-to-end encryption, and `WithEncryption` creates an encrypted room.
+- **Restarts:** `StopBot` and `StartBot` stop and restart the bot. Every test shares it, so a test that stops it doesn't run in parallel, and nor does one that changes the chat settings (`changeSettings`).
+- **Known bugs:** a test for a known open bug calls `knownBug` with the bug's ID, which skips it. Set `SIIKABOT_E2E_KNOWN_BUGS=1` to run those tests and see which bugs are still there. The fix removes the call.
 
 #### Frontend Tests
 ```bash

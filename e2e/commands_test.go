@@ -40,7 +40,9 @@ func TestReminderDeletedOnTheDashboardNeverGoesOff(t *testing.T) {
 	dashboard := e.Login(t, alice, room)
 	text := marker(t, "deleted")
 
-	set := alice.Say(t, room, "!remind 4s "+text)
+	// Long enough away for the deletion to beat it on a busy machine
+	set := alice.Say(t, room, "!remind 15s "+text)
+	due := time.Now().Add(15 * time.Second)
 	room.WaitForBot(t, set)
 	var reminders struct {
 		Reminders []struct {
@@ -54,7 +56,7 @@ func TestReminderDeletedOnTheDashboardNeverGoesOff(t *testing.T) {
 		t.Fatalf("deleting the reminder gave %d", code)
 	}
 
-	time.Sleep(6 * time.Second)
+	time.Sleep(time.Until(due) + 3*time.Second)
 	for _, evt := range room.botMessagesAfter(t, set) {
 		if body, _ := evt.Content.Raw["body"].(string); strings.Contains(body, text) && !strings.HasPrefix(body, "Reminding") {
 			t.Errorf("the deleted reminder went off: %q", body)
@@ -105,10 +107,8 @@ func TestDashboardLogin(t *testing.T) {
 		PollSecret string `json:"poll_secret"`
 	}
 	e.api(t, http.MethodPost, "/api/auth/challenge", "", nil, &challenge)
-	room.WaitForBot(t, alice.Say(t, room, "!auth "+challenge.Challenge))
-	if again := room.WaitForBot(t, mallory.Say(t, room, "!auth "+challenge.Challenge)); !strings.Contains(again.Body, "already been used") {
-		t.Errorf("completing Alice's challenge again got %q", again.Body)
-	}
+	room.WaitForBotMessage(t, alice.Say(t, room, "!auth "+challenge.Challenge), bodyContains("Authenticated for web access"))
+	room.WaitForBotMessage(t, mallory.Say(t, room, "!auth "+challenge.Challenge), bodyContains("already been used"))
 	var poll struct {
 		UserID string `json:"user_id"`
 	}
@@ -119,12 +119,12 @@ func TestDashboardLogin(t *testing.T) {
 
 	// A mistyped challenge leaves the session Alice has alone
 	second := e.Login(t, alice, room)
-	room.WaitForBot(t, alice.Say(t, room, "!auth not-a-challenge"))
+	room.WaitForBotMessage(t, alice.Say(t, room, "!auth not-a-challenge"), bodyContains("invalid or expired challenge"))
 	if code := second.Call(t, http.MethodGet, "/api/auth/me", nil, nil); code != http.StatusOK {
 		t.Errorf("after a mistyped !auth, Alice's session gets %d", code)
 	}
 
-	room.WaitForBot(t, alice.Say(t, room, "!auth logout"))
+	room.WaitForBotMessage(t, alice.Say(t, room, "!auth logout"), bodyContains("Logged out"))
 	if code := second.Call(t, http.MethodGet, "/api/auth/me", nil, nil); code != http.StatusUnauthorized {
 		t.Errorf("after !auth logout, Alice's session gets %d, want 401", code)
 	}

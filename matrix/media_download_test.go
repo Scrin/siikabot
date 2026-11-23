@@ -97,7 +97,7 @@ func TestDownloadImageRequestsNothingForAURLThatIsntAContentURI(t *testing.T) {
 
 func TestDownloadImageFromTheHomeserver(t *testing.T) {
 	png := testPNG(t)
-	fakeHomeserver(t, map[string][]byte{"/_matrix/media/v3/download/example.com/cat": png})
+	fakeHomeserver(t, map[string][]byte{"/_matrix/client/v1/media/download/example.com/cat": png})
 
 	data, err := DownloadImage(context.Background(), "mxc://example.com/cat", nil, nil)
 	if err != nil {
@@ -108,11 +108,11 @@ func TestDownloadImageFromTheHomeserver(t *testing.T) {
 	}
 }
 
-// An encrypted file goes through the same endpoints as any other, falling back when one fails
-func TestDownloadImageDecryptsFromAFallbackEndpoint(t *testing.T) {
+// An encrypted file is downloaded like any other, then decrypted
+func TestDownloadImageDecrypts(t *testing.T) {
 	png := testPNG(t)
 	ciphertext, fileInfo := encryptFile(t, png, [32]byte{1, 2, 3}, [16]byte{4, 5, 6})
-	requests := fakeHomeserver(t, map[string][]byte{"/_matrix/media/r0/download/example.com/file": ciphertext})
+	requests := fakeHomeserver(t, map[string][]byte{"/_matrix/client/v1/media/download/example.com/file": ciphertext})
 
 	data, err := DownloadImage(context.Background(), "mxc://example.com/file", fileInfo, map[string]any{})
 	if err != nil {
@@ -121,13 +121,27 @@ func TestDownloadImageDecryptsFromAFallbackEndpoint(t *testing.T) {
 	if !bytes.Equal(data, png) {
 		t.Error("DownloadImage() didn't decrypt the file back to the original")
 	}
-	if n := requests.Load(); n != 2 {
-		t.Errorf("DownloadImage() made %d requests, want 2: v3, then r0", n)
+	if n := requests.Load(); n != 1 {
+		t.Errorf("DownloadImage() made %d requests, want 1", n)
 	}
 }
 
-// A download that fails at every endpoint is an error, not a panic, even when the connection
-// itself fails
+// Media comes from the authenticated endpoint only: the legacy ones are deprecated, and homeservers don't serve
+// recent media there
+func TestDownloadImageDoesntUseTheLegacyEndpoints(t *testing.T) {
+	requests := fakeHomeserver(t, map[string][]byte{
+		"/_matrix/media/v3/download/example.com/cat": testPNG(t),
+		"/_matrix/media/r0/download/example.com/cat": testPNG(t),
+	})
+	if _, err := DownloadImage(context.Background(), "mxc://example.com/cat", nil, nil); err == nil {
+		t.Error("DownloadImage() got an image from a legacy endpoint")
+	}
+	if n := requests.Load(); n != 1 {
+		t.Errorf("DownloadImage() made %d requests, want only the authenticated one", n)
+	}
+}
+
+// A download that fails is an error, not a panic, even when the connection itself fails
 func TestDownloadImageWhenTheHomeserverIsUnreachable(t *testing.T) {
 	server := httptest.NewServer(http.NotFoundHandler())
 	server.Close()

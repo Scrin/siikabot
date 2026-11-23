@@ -25,6 +25,8 @@ type ModelRequest struct {
 	Messages  []Message         `json:"messages"`
 	Tools     []json.RawMessage `json:"tools"`
 	MaxTokens int               `json:"max_tokens"`
+	// ToolChoice is "none" when the model mustn't call tools, as past the tool limit
+	ToolChoice json.RawMessage `json:"tool_choice"`
 	// Metadata is what the bot sent in cf-aig-metadata: the room, the sender and the iteration
 	Metadata map[string]string `json:"-"`
 }
@@ -86,6 +88,29 @@ func (r ModelRequest) LastUserText() string {
 	return ""
 }
 
+// ToolsAllowed reports whether the request lets the model call tools
+func (r ModelRequest) ToolsAllowed() bool {
+	return len(r.Tools) > 0 && strings.Trim(string(r.ToolChoice), `"`) != "none"
+}
+
+// ImageCount is how many images the request shows the model
+func (r ModelRequest) ImageCount() int {
+	count := 0
+	for _, m := range r.Messages {
+		var parts []struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(m.Content, &parts) == nil {
+			for _, part := range parts {
+				if part.Type == "image_url" {
+					count++
+				}
+			}
+		}
+	}
+	return count
+}
+
 // ToolResults are the results of the tool calls in the request, by tool call ID
 func (r ModelRequest) ToolResults() map[string]string {
 	results := map[string]string{}
@@ -104,6 +129,8 @@ type Reply struct {
 	FinishReason string
 	// Delay holds the answer back, for a model slower than the bot waits for
 	Delay time.Duration
+	// Hold holds the answer back until it's closed, for a test to do something while the turn waits
+	Hold <-chan struct{}
 	// Status answers with an HTTP error instead, when it isn't 0
 	Status int
 }
@@ -192,6 +219,13 @@ func (m *Model) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	reply := Answer(DefaultAnswer)
 	if script != nil {
 		reply = script(req)
+	}
+	if reply.Hold != nil {
+		select {
+		case <-reply.Hold:
+		case <-r.Context().Done():
+			return
+		}
 	}
 	if reply.Delay > 0 {
 		select {

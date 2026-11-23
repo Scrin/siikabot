@@ -27,7 +27,10 @@ import (
 	"github.com/Scrin/siikabot/testutil/pgtest"
 	"github.com/Scrin/siikabot/testutil/synapsetest"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
+	"go.mau.fi/util/dbutil"
 	"maunium.net/go/mautrix"
+	"maunium.net/go/mautrix/crypto/cryptohelper"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 )
@@ -60,6 +63,8 @@ type environment struct {
 	database string
 	dropDB   func()
 	dir      string
+	binary   string
+	botEnv   []string
 	bot      *exec.Cmd
 	botLog   string
 	exited   chan struct{}
@@ -98,7 +103,7 @@ func setUp(t *testing.T) *environment {
 }
 
 func start() (*environment, error) {
-	e := &environment{exited: make(chan struct{})}
+	e := &environment{}
 	var err error
 	leftovers.Remove("siikabot-e2e-", "harness.pid")
 	if e.dir, err = os.MkdirTemp("", "siikabot-e2e-"); err != nil {
@@ -143,16 +148,8 @@ func start() (*environment, error) {
 	}
 	e.apiURL = fmt.Sprintf("http://127.0.0.1:%d", port)
 	e.botLog = filepath.Join(e.dir, "bot.log")
-	logFile, err := os.Create(e.botLog)
-	if err != nil {
-		e.stop()
-		return nil, err
-	}
-
-	e.bot = exec.Command(binary)
-	// Its own directory, so it can't pick up a .env from wherever the tests run
-	e.bot.Dir = e.dir
-	e.bot.Env = append(os.Environ(),
+	e.binary = binary
+	e.botEnv = append(os.Environ(),
 		"SIIKABOT_HOMESERVER_URL="+e.synapse.URL,
 		"SIIKABOT_USER_ID="+botAccount.UserID,
 		"SIIKABOT_PASSWORD="+botPassword,
@@ -177,27 +174,84 @@ func start() (*environment, error) {
 		"SIIKABOT_E2E_NET="+e.net.URL(),
 	)
 	if dir := os.Getenv("SIIKABOT_E2E_COVERDIR"); dir != "" {
-		e.bot.Env = append(e.bot.Env, "GOCOVERDIR="+dir)
+		e.botEnv = append(e.botEnv, "GOCOVERDIR="+dir)
 	}
-	e.bot.Stdout, e.bot.Stderr = logFile, logFile
-	e.bot.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGTERM}
-	if err := e.bot.Start(); err != nil {
-		_ = logFile.Close()
+	if err := e.startBot(); err != nil {
 		e.stop()
 		return nil, err
 	}
-	go func() {
-		_ = e.bot.Wait()
-		_ = logFile.Close()
-		close(e.exited)
-	}()
-
 	if err := e.waitUntilReady(); err != nil {
 		log := tail(e.botLog, 12000)
 		e.stop()
 		return nil, fmt.Errorf("%w\nthe bot's log, ending:\n%s", err, log)
 	}
 	return e, nil
+}
+
+// startBot starts the bot, its log going on where the last run's left off
+func (e *environment) startBot() error {
+	logFile, err := os.OpenFile(e.botLog, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	e.bot = exec.Command(e.binary)
+	// Its own directory, so it can't pick up a .env from wherever the tests run
+	e.bot.Dir = e.dir
+	e.bot.Env = e.botEnv
+	e.bot.Stdout, e.bot.Stderr = logFile, logFile
+	e.bot.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGTERM}
+	if err := e.bot.Start(); err != nil {
+		_ = logFile.Close()
+		return err
+	}
+	exited := make(chan struct{})
+	e.exited = exited
+	go func(cmd *exec.Cmd) {
+		_ = cmd.Wait()
+		_ = logFile.Close()
+		close(exited)
+	}(e.bot)
+	return nil
+}
+
+// stopBot stops the bot the way the deployment does, with SIGTERM
+func (e *environment) stopBot() {
+	if e.bot == nil || e.bot.Process == nil {
+		return
+	}
+	_ = e.bot.Process.Signal(syscall.SIGTERM)
+	select {
+	case <-e.exited:
+	case <-time.After(20 * time.Second):
+		_ = e.bot.Process.Kill()
+		<-e.exited
+	}
+	e.bot = nil
+}
+
+// StopBot stops the bot for a test that has things happen while it's down. Every test sharing the bot then
+// waits, so only a test that doesn't run in parallel may.
+func (e *environment) StopBot(t *testing.T) {
+	t.Helper()
+	e.stopBot()
+	t.Cleanup(func() {
+		if e.bot == nil {
+			if err := e.startBot(); err != nil {
+				t.Fatalf("starting the bot again: %v", err)
+			}
+		}
+	})
+}
+
+// StartBot starts the bot again after StopBot, and waits until it's ready
+func (e *environment) StartBot(t *testing.T) {
+	t.Helper()
+	if err := e.startBot(); err != nil {
+		t.Fatalf("starting the bot again: %v", err)
+	}
+	if err := e.waitUntilReady(); err != nil {
+		t.Fatalf("the bot wasn't ready after starting again: %v", err)
+	}
 }
 
 // waitUntilReady waits for the bot's HTTP server, then for it to join a room it's invited to, which it does
@@ -250,15 +304,7 @@ func (e *environment) checkAlive(deadline time.Time) error {
 
 // stop stops everything that started
 func (e *environment) stop() {
-	if e.bot != nil && e.bot.Process != nil {
-		_ = e.bot.Process.Signal(syscall.SIGTERM)
-		select {
-		case <-e.exited:
-		case <-time.After(20 * time.Second):
-			_ = e.bot.Process.Kill()
-			<-e.exited
-		}
-	}
+	e.stopBot()
 	if e.synapse != nil {
 		e.synapse.Stop()
 	}
@@ -316,7 +362,45 @@ func (e *environment) register(localpart string) (*User, error) {
 	if err != nil {
 		return nil, err
 	}
+	client.DeviceID = id.DeviceID(account.DeviceID)
 	return &User{Client: client, ID: id.UserID(account.UserID)}, nil
+}
+
+// Encrypted gives a test user end-to-end encryption until the test ends: a crypto store of its own, in a database
+// of its own, and a sync loop that keeps its keys and its view of the rooms up to date. Messages it sends to an
+// encrypted room are then encrypted, and the messages it reads decrypted.
+func (u *User) Encrypted(t *testing.T) *User {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	config, err := pgx.ParseConfig(pgtest.URL(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB := stdlib.OpenDB(*config)
+	database, err := dbutil.NewWithDB(sqlDB, "postgres")
+	if err != nil {
+		t.Fatal(err)
+	}
+	helper, err := cryptohelper.NewCryptoHelper(u.Client, []byte("e2e-pickle-key"), database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := helper.Init(ctx); err != nil {
+		t.Fatalf("setting up encryption for %s: %v", u.ID, err)
+	}
+	u.Crypto = helper
+	synced := make(chan struct{})
+	go func() {
+		defer close(synced)
+		_ = u.SyncWithContext(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-synced
+		_ = helper.Close()
+		_ = sqlDB.Close()
+	})
+	return u
 }
 
 // Room is a room with the bot in it
@@ -330,6 +414,12 @@ type Room struct {
 type roomOptions struct {
 	historyVisibility event.HistoryVisibility
 	withoutBot        bool
+	encrypted         bool
+}
+
+// WithEncryption creates an end-to-end encrypted room. Its owner has to be Encrypted.
+func WithEncryption() RoomOption {
+	return func(o *roomOptions) { o.encrypted = true }
 }
 
 // RoomOption changes how a room is created
@@ -360,14 +450,17 @@ func (e *environment) Room(t *testing.T, owner *User, members []*User, options .
 	for _, m := range members {
 		invite = append(invite, m.ID)
 	}
-	created, err := owner.CreateRoom(ctx, &mautrix.ReqCreateRoom{
-		Preset: "private_chat",
-		Invite: invite,
-		InitialState: []*event.Event{{
-			Type:    event.StateHistoryVisibility,
-			Content: event.Content{Parsed: &event.HistoryVisibilityEventContent{HistoryVisibility: opts.historyVisibility}},
-		}},
-	})
+	initialState := []*event.Event{{
+		Type:    event.StateHistoryVisibility,
+		Content: event.Content{Parsed: &event.HistoryVisibilityEventContent{HistoryVisibility: opts.historyVisibility}},
+	}}
+	if opts.encrypted {
+		initialState = append(initialState, &event.Event{
+			Type:    event.StateEncryption,
+			Content: event.Content{Parsed: &event.EncryptionEventContent{Algorithm: id.AlgorithmMegolmV1}},
+		})
+	}
+	created, err := owner.CreateRoom(ctx, &mautrix.ReqCreateRoom{Preset: "private_chat", Invite: invite, InitialState: initialState})
 	if err != nil {
 		t.Fatalf("creating a room: %v", err)
 	}
@@ -378,7 +471,32 @@ func (e *environment) Room(t *testing.T, owner *User, members []*User, options .
 	if !opts.withoutBot {
 		room.waitForMember(t, e.botID)
 	}
+	if opts.encrypted {
+		// Until its sync has seen the room is encrypted, a member's messages would go out in the clear
+		for _, u := range append([]*User{owner}, members...) {
+			room.WaitUntilEncryptedFor(t, u)
+		}
+	}
 	return room
+}
+
+// WaitUntilEncryptedFor waits until a user's client knows the room is encrypted, so that it encrypts what it sends
+func (r *Room) WaitUntilEncryptedFor(t *testing.T, u *User) {
+	t.Helper()
+	if u.Crypto == nil {
+		t.Fatalf("%s has no encryption", u.ID)
+	}
+	ctx := context.Background()
+	eventually(t, "the room to be encrypted for "+u.ID.String(), func() bool {
+		encrypted, err := u.StateStore.IsEncrypted(ctx, r.ID)
+		return err == nil && encrypted
+	})
+	// A client shares the keys to what it sends only with the members it knows of, as a real one has synced the
+	// room's members by the time anyone types into it
+	eventually(t, u.ID.String()+" to know the bot is in the room", func() bool {
+		member, err := u.StateStore.GetMember(ctx, r.ID, r.env.botID)
+		return err == nil && member.Membership == event.MembershipJoin
+	})
 }
 
 // Invite invites someone into the room, as its owner
@@ -496,8 +614,19 @@ func (r *Room) messages(t *testing.T) []*event.Event {
 	}
 	var events []*event.Event
 	for i := len(resp.Chunk) - 1; i >= 0; i-- {
-		if resp.Chunk[i].Type == event.EventMessage {
-			events = append(events, resp.Chunk[i])
+		evt := resp.Chunk[i]
+		if evt.Type == event.EventEncrypted && r.owner.Crypto != nil {
+			// Its key may not have arrived yet, in which case it's left out until it has
+			_ = evt.Content.ParseRaw(evt.Type)
+			decrypted, err := r.owner.Crypto.Decrypt(context.Background(), evt)
+			if err != nil {
+				continue
+			}
+			evt = decrypted
+			evt.Content.Raw = decryptedRaw(evt)
+		}
+		if evt.Type == event.EventMessage {
+			events = append(events, evt)
 		}
 	}
 	return events
@@ -511,6 +640,20 @@ func (r *Room) Latest(t *testing.T) id.EventID {
 		return ""
 	}
 	return messages[len(messages)-1].ID
+}
+
+// decryptedRaw is a decrypted event's content as JSON fields, as the tests read every message's
+func decryptedRaw(evt *event.Event) map[string]any {
+	if evt.Content.Raw != nil {
+		return evt.Content.Raw
+	}
+	data, err := json.Marshal(evt.Content.Parsed)
+	if err != nil {
+		return nil
+	}
+	var raw map[string]any
+	_ = json.Unmarshal(data, &raw)
+	return raw
 }
 
 // botMessagesAfter returns the bot's messages after an event, oldest first
@@ -567,6 +710,14 @@ func (r *Room) WaitForBotMessage(t *testing.T, after id.EventID, match func(cont
 		return false
 	})
 	return content
+}
+
+// bodyContains matches a message whose body contains text
+func bodyContains(text string) func(content map[string]any) bool {
+	return func(content map[string]any) bool {
+		body, _ := content["body"].(string)
+		return strings.Contains(body, text)
+	}
 }
 
 // ExpectSilence checks that the bot says nothing after an event for a while
@@ -633,7 +784,9 @@ func (e *environment) Login(t *testing.T, u *User, room *Room) *Dashboard {
 	if code := e.api(t, http.MethodPost, "/api/auth/challenge", "", nil, &challenge); code != http.StatusOK {
 		t.Fatalf("asking for a challenge: %d", code)
 	}
-	u.Say(t, room, "!auth "+challenge.Challenge)
+	sent := u.Say(t, room, "!auth "+challenge.Challenge)
+	// Its confirmation, which a test waiting on the next message mustn't take for the answer to that
+	room.WaitForBotMessage(t, sent, bodyContains("Authenticated for web access"))
 
 	var poll struct {
 		Status string `json:"status"`

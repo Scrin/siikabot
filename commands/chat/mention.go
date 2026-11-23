@@ -69,10 +69,15 @@ func startTypingIndicator(ctx context.Context, roomID string) func() {
 // keepAlive calls refresh on an interval until the returned stop function is called or the context
 // ends, then calls onStop exactly once. Stopping more than once is safe: the stop runs from a defer
 // while the error paths return early, so a double stop is easy to reach.
+//
+// Stopping waits for the refreshing to end before onStop runs, so no refresh comes after it: a
+// typing notice refreshed after the one that ends it would show the bot typing after it answered.
 func keepAlive(ctx context.Context, interval time.Duration, refresh, onStop func()) func() {
 	done := make(chan struct{})
+	exited := make(chan struct{})
 
 	go func() {
+		defer close(exited)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -91,6 +96,7 @@ func keepAlive(ctx context.Context, interval time.Duration, refresh, onStop func
 	return func() {
 		once.Do(func() {
 			close(done)
+			<-exited
 			onStop()
 		})
 	}

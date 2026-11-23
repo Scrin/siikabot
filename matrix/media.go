@@ -138,16 +138,11 @@ func parseMediaURI(raw string) (id.ContentURI, error) {
 	return uri, nil
 }
 
-// mediaDownloadURLs are the bot's homeserver's URLs for a content URI, in the order they're tried
-func mediaDownloadURLs(uri id.ContentURI) []string {
-	base := strings.TrimSuffix(config.HomeserverURL, "/")
-	path := uri.Homeserver + "/" + uri.FileID
-	return []string{
-		base + "/_matrix/media/v3/download/" + path,
-		base + "/_matrix/media/r0/download/" + path,
-		// Some homeservers serve media here too
-		base + "/_matrix/media/download/" + path,
-	}
+// mediaDownloadURL is the bot's homeserver's URL for a content URI: the authenticated media endpoint, which
+// the bot gives its access token to. The legacy endpoints under /_matrix/media are deprecated, and homeservers
+// serve media uploaded since they froze them only here.
+func mediaDownloadURL(uri id.ContentURI) string {
+	return strings.TrimSuffix(config.HomeserverURL, "/") + "/_matrix/client/v1/media/download/" + uri.Homeserver + "/" + uri.FileID
 }
 
 // DownloadImage downloads an image from its content URI, decrypting it if it is encrypted, and
@@ -164,24 +159,18 @@ func DownloadImage(ctx context.Context, imageURL string, encryptionInfo map[stri
 		}
 	}
 
-	var lastError error
-	for _, downloadURL := range mediaDownloadURLs(uri) {
-		data, err := downloadMedia(ctx, downloadURL)
-		if err != nil {
-			log.Debug().Ctx(ctx).Err(err).Str("url", downloadURL).Msg("Failed to download media from an endpoint")
-			lastError = err
-			continue
-		}
-		if encryptionInfo == nil {
-			return data, nil
-		}
-		if err := decryptAttachment(data, encryptionInfo); err != nil {
-			log.Error().Ctx(ctx).Err(err).Int("size_bytes", len(data)).Msg("Failed to decrypt an encrypted file")
-			return nil, err
-		}
+	data, err := downloadMedia(ctx, mediaDownloadURL(uri))
+	if err != nil {
+		return nil, err
+	}
+	if encryptionInfo == nil {
 		return data, nil
 	}
-	return nil, fmt.Errorf("all download attempts failed, last error: %w", lastError)
+	if err := decryptAttachment(data, encryptionInfo); err != nil {
+		log.Error().Ctx(ctx).Err(err).Int("size_bytes", len(data)).Msg("Failed to decrypt an encrypted file")
+		return nil, err
+	}
+	return data, nil
 }
 
 // checkDeclaredSize refuses an encrypted file that its event says is too large, before any of it is
