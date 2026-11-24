@@ -62,7 +62,7 @@ func ownText(body, formattedBody string, rel *event.RelatesTo) (string, string) 
 // membership began in a room that hides such history from them (see matrix.VisibleTo). Either way
 // the chat turn learns only that there was a message it couldn't read.
 func fetchReferenced(ctx context.Context, roomID, sender, eventID string) *matrix.Message {
-	msg, err := matrix.FetchMessage(ctx, roomID, eventID)
+	msg, err := matrix.FetchCurrentMessage(ctx, roomID, eventID)
 	if err != nil {
 		// Already logged
 		return nil

@@ -28,6 +28,9 @@ type Message struct {
 	// RelatesTo is where the message sits: the message it replies to, and the thread it is in. Nil
 	// for a message that relates to no other, or whose content couldn't be read.
 	RelatesTo *event.RelatesTo
+	// EditEventID is the edit the content comes from, for a message fetched as it now reads (see
+	// FetchCurrentMessage), and empty for one as it was sent
+	EditEventID string
 
 	// content is the event content as sent, for the media details of an image
 	content map[string]any
@@ -55,6 +58,28 @@ func FetchMessage(ctx context.Context, roomID, eventID string) (*Message, error)
 		return nil, fmt.Errorf("failed to fetch event: %w", err)
 	}
 	return messageFromEvent(roomID, decrypted(ctx, roomID, evt)), nil
+}
+
+// FetchCurrentMessage fetches a message as it now reads: as its sender's latest edit that stands, or
+// as sent. Homeservers no longer apply edits to the events they return, so the edits are asked for
+// separately. Who sent the message, when, and where it sits stay as sent.
+func FetchCurrentMessage(ctx context.Context, roomID, eventID string) (*Message, error) {
+	msg, err := FetchMessage(ctx, roomID, eventID)
+	if err != nil || msg.MsgType == "" {
+		return msg, err
+	}
+	edit, err := LatestEdit(ctx, roomID, eventID, msg.Sender)
+	if err != nil {
+		// Already logged. The message as sent would show what an edit may have taken back.
+		return nil, err
+	}
+	if edit == nil {
+		return msg, nil
+	}
+	current := *msg
+	current.MsgType, current.Body, current.FormattedBody = edit.MsgType, edit.Body, edit.FormattedBody
+	current.content, current.EditEventID = edit.content, edit.EventID
+	return &current, nil
 }
 
 // LatestEdit returns the latest edit of a message by its sender that still stands, as the message

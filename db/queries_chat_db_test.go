@@ -385,6 +385,15 @@ func TestMessagesEditedBy(t *testing.T) {
 	if got := editedBy(roomA, "$e1"); len(got) != 0 {
 		t.Errorf("the edit still changed %+v after the message read as sent again", got)
 	}
+
+	// A quote of a message already edited when the turn quoted it holds that edit's text from the start
+	late := question(roomA, "$q4", bob, "and this?")
+	late.ReplyTo = &QuotedMessage{EventID: "$q9", Sender: alice, SenderName: "alice", SentAt: chatT0, Kind: QuoteText,
+		Body: "edited before the quote", EditEventID: "$e9"}
+	storeTurn(t, late, "", "ok", "$a4")
+	if got := editedBy(roomA, "$e9"); len(got) != 1 || got[0] != (EditedMessage{EventID: "$q9", Sender: alice}) {
+		t.Errorf("the edit a quote was stored with changed %+v, want the quoted message", got)
+	}
 }
 
 // Resetting the main timeline leaves threads alone; resetting a thread drops the turn it was started from too

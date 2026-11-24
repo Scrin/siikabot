@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -86,14 +87,35 @@ func TestMigrationsNeverRestartIdentity(t *testing.T) {
 	}
 }
 
+// latestClearing returns the statement that clears the chat history in the latest migration that does, and the
+// migration's name
+func latestClearing(t *testing.T) (string, string) {
+	t.Helper()
+	files := migrationFiles(t)
+	for i := len(files) - 1; i >= 0; i-- {
+		content, err := fs.ReadFile(migrations, "migrations/"+files[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if statement := clearingStatement.FindString(string(content)); statement != "" {
+			return files[i], statement
+		}
+	}
+	t.Fatal("no migration clears the chat history")
+	return "", ""
+}
+
+var clearingStatement = regexp.MustCompile(`(?m)^TRUNCATE chat_history\b[^;]*;`)
+
 // Clearing the chat history empties the chat context and keeps everything people saved, and the bot's own
-// memories of rooms with their progress. The latest migration that clears it is run on a database with one of
-// everything.
+// memories of rooms with their progress. The statement that clears it in the latest migration that does is run on
+// a database with one of everything. Every migration runs first, as the one that clears the history may also
+// change the tables the code writes, which a new column often is the reason for.
 func TestClearingTheChatHistoryKeepsWhatPeopleSaved(t *testing.T) {
-	const clearing = "0034__label-untrusted-tool-results.sql"
+	name, clearing := latestClearing(t)
 	p := useEmptyTestDatabase(t)
 	ctx := context.Background()
-	if err := runMigrations(ctx, p, migrationsBefore(clearing)); err != nil {
+	if err := runMigrations(ctx, p, allMigrations); err != nil {
 		t.Fatal(err)
 	}
 
@@ -116,8 +138,8 @@ func TestClearingTheChatHistoryKeepsWhatPeopleSaved(t *testing.T) {
 	must(SaveChatUsage(ctx, ChatUsage{Kind: UsageTurn, RoomID: roomA, UserID: alice, Model: "m", Outcome: "ok"}))
 	must(SetWebSessionToken(ctx, alice, "token"))
 
-	if err := migrate(); err != nil {
-		t.Fatal(err)
+	if _, err := p.Exec(ctx, clearing); err != nil {
+		t.Fatalf("%s: %v", name, err)
 	}
 
 	for table, want := range map[string]int{

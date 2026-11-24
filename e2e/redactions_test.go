@@ -367,23 +367,45 @@ func TestEditRedactedDuringItsTurn(t *testing.T) {
 	}
 }
 
-// A quoted message is quoted as edited (P4)
+// A message edited before a turn quotes it, by a reply or a link, is quoted as edited, and as sent again once the
+// edit is redacted (P4). The bot remembers the edits it follows only until it restarts, after which the edit has to
+// come from the homeserver, so this restarts it, and doesn't run in parallel.
 func TestQuotedMessageIsQuotedAsEdited(t *testing.T) {
-	knownBug(t, "P4", "replied-to and linked messages are read as originally sent")
 	e := setUp(t)
-	t.Parallel()
 	alice, bob := e.User(t, "alice"), e.User(t, "bob")
 	room := e.Room(t, alice, []*User{bob})
-	before, after := marker(t, "before"), marker(t, "after")
+	repliedBefore, repliedAfter := marker(t, "replied-before"), marker(t, "replied-after")
+	linkedBefore, linkedAfter := marker(t, "linked-before"), marker(t, "linked-after")
 
-	quoted := bob.Say(t, room, before)
-	bob.Edit(t, room, quoted, after, nil)
-	question := e.Pill("what do you think?")
-	question["m.relates_to"] = map[string]any{"m.in_reply_to": map[string]any{"event_id": quoted}}
+	replied := bob.Say(t, room, repliedBefore)
+	repliedEdit := bob.Edit(t, room, replied, repliedAfter, nil)
+	linked := bob.Say(t, room, linkedBefore)
+	bob.Edit(t, room, linked, linkedAfter, nil)
+	settle(t, e, room, bob)
+	e.StopBot(t)
+	e.StartBot(t)
+
+	question := e.Pill("what do you think of this and " + Link(room, linked) + "?")
+	question["m.relates_to"] = map[string]any{"m.in_reply_to": map[string]any{"event_id": replied}}
 	room.WaitForBot(t, alice.Send(t, room, question))
+	for _, text := range []string{repliedAfter, linkedAfter} {
+		assertSaw(t, e, room, text, true)
+		if !historyHolds(t, e, room, text) {
+			t.Errorf("the history doesn't hold %q", text)
+		}
+	}
+	for _, text := range []string{repliedBefore, linkedBefore} {
+		assertSaw(t, e, room, text, false)
+		if historyHolds(t, e, room, text) {
+			t.Errorf("the history holds %q, from before the edit", text)
+		}
+	}
 
-	assertSaw(t, e, room, after, true)
-	assertSaw(t, e, room, before, false)
+	// The quote knows which edit it holds, so the edit's redaction finds it (P3)
+	bob.Redact(t, room, repliedEdit)
+	eventually(t, "the quote to read as sent again", func() bool {
+		return historyHolds(t, e, room, repliedBefore) && !historyHolds(t, e, room, repliedAfter)
+	})
 }
 
 // A redaction made while the bot is down still takes the message out of the history when the bot starts again: when

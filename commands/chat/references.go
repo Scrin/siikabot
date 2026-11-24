@@ -116,17 +116,18 @@ func quoteOf(ctx context.Context, roomID string, msg *matrix.Message, room roomI
 	}
 
 	quote := &db.QuotedMessage{
-		EventID:    msg.EventID,
-		Sender:     msg.Sender,
-		SenderName: room.nameOf(ctx, msg.Sender),
-		SentAt:     msg.Timestamp,
-		RelayedBy:  msg.RelayedBy(),
+		EventID:     msg.EventID,
+		Sender:      msg.Sender,
+		SenderName:  room.nameOf(ctx, msg.Sender),
+		SentAt:      msg.Timestamp,
+		RelayedBy:   msg.RelayedBy(),
+		EditEventID: msg.EditEventID,
 	}
 	if isImage {
 		quote.Kind = db.QuoteImage
 		quote.Body = capQuote(msg.Caption())
 		if wasEdited {
-			quote.Body = edit.quoted
+			quote.Body, quote.EditEventID = edit.quoted, edit.eventID
 		}
 		return quote
 	}
@@ -140,7 +141,7 @@ func quoteOf(ctx context.Context, roomID string, msg *matrix.Message, room roomI
 	quote.Kind = db.QuoteText
 	quote.Body = capQuote(msg.Body)
 	if wasEdited {
-		quote.Body = edit.quoted
+		quote.Body, quote.EditEventID = edit.quoted, edit.eventID
 	}
 	return quote
 }

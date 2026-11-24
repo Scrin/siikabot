@@ -129,6 +129,9 @@ type QuotedMessage struct {
 	// RelayedBy is the name of the webhook the bot relayed the message from, empty for any other
 	// message
 	RelayedBy string
+	// EditEventID is the edit the quoted text comes from, empty for the message as sent. It is
+	// stored but not read back: a redaction of the edit finds the quote by it.
+	EditEventID string
 }
 
 // ChatImage is an image a user turn showed the model, as prepared for it
@@ -261,10 +264,11 @@ func insertReference(ctx context.Context, executor chatMessageExecutor, historyI
 	}
 
 	_, err := executor.Exec(ctx,
-		`INSERT INTO chat_references (history_id, position, relation, event_id, sender, sender_name, sent_at, kind, body, relayed_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, ''))`,
+		`INSERT INTO chat_references (history_id, position, relation, event_id, sender, sender_name, sent_at, kind, body,
+			relayed_by, edit_event_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, ''), NULLIF($11, ''))`,
 		historyID, position, reference.Relation, reference.EventID, reference.Sender, reference.SenderName,
-		reference.SentAt, reference.Kind, body, reference.RelayedBy)
+		reference.SentAt, reference.Kind, body, reference.RelayedBy, reference.EditEventID)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).
 			Int64("history_id", historyID).
