@@ -408,28 +408,40 @@ func TestQuotedMessageIsQuotedAsEdited(t *testing.T) {
 	})
 }
 
-// A redaction made while the bot is down still takes the message out of the history when the bot starts again: when
-// the redaction is in the sync the bot catches up with, and when more events than that came after it, which leaves
-// it in the gap behind the sync (P6). It stops the bot, so it doesn't run in parallel.
-func TestRedactionWhileTheBotIsDown(t *testing.T) {
+// A redaction or an edit made while the bot is down reaches the history when the bot starts again: when it is in
+// the sync the bot catches up with, and when more events than that came after it, which leaves it in the gap behind
+// the sync (P6), in an encrypted room too. It stops the bot, so it doesn't run in parallel.
+func TestChangesWhileTheBotIsDown(t *testing.T) {
 	e := setUp(t)
 	for _, test := range []struct {
-		name    string
-		fillers int
-		bug     bool
-	}{{"in_the_sync", 5, false}, {"behind_a_sync_gap", 60, true}} {
+		name      string
+		fillers   int
+		encrypted bool
+		edit      bool
+	}{
+		{"redaction_in_the_sync", 5, false, false},
+		{"redaction_behind_a_sync_gap", 60, false, false},
+		{"edit_behind_a_sync_gap", 60, false, true},
+		{"encrypted_edit_behind_a_sync_gap", 60, true, true},
+	} {
 		t.Run(test.name, func(t *testing.T) {
-			if test.bug {
-				knownBug(t, "P6", "redactions and edits that fall in a sync gap are never applied")
-			}
 			alice := e.User(t, "alice")
-			room := e.Room(t, alice, nil)
-			secret := marker(t, "secret")
+			var options []RoomOption
+			if test.encrypted {
+				alice = alice.Encrypted(t)
+				options = append(options, WithEncryption())
+			}
+			room := e.Room(t, alice, nil, options...)
+			secret, edited := marker(t, "secret"), marker(t, "edited")
 
 			asked := alice.Ask(t, room, secret)
 			room.WaitForBot(t, asked)
 			e.StopBot(t)
-			alice.Redact(t, room, asked)
+			if test.edit {
+				alice.Edit(t, room, asked, botName+": "+edited, nil)
+			} else {
+				alice.Redact(t, room, asked)
+			}
 			for i := range test.fillers {
 				alice.Say(t, room, fmt.Sprintf("filler %d", i))
 			}
@@ -437,7 +449,10 @@ func TestRedactionWhileTheBotIsDown(t *testing.T) {
 			conclude(t, alice, room)
 
 			if historyHolds(t, e, room, secret) {
-				t.Error("a question redacted while the bot was down is still in its history")
+				t.Error("the history still holds the question as it was before the bot went down")
+			}
+			if test.edit && !historyHolds(t, e, room, edited) {
+				t.Error("the history doesn't hold the question as edited")
 			}
 		})
 	}

@@ -92,6 +92,7 @@ The referenced events are resolved once, in `bot/reply.go`, and handed to the ch
 - **`./matrix/`** - All Matrix homeserver communication is abstracted here
   - `client.go` - Client initialization and event handling
   - `send.go`, `servers.go`, `media.go` - Protocol operations
+  - `gap.go` - After a break, such as the bot being down, reads the redactions and edits that a sync's limited timeline left out, so the chat history follows them
   - State stores for crypto, sync, and state management
 
 - **`./aigateway/`** - Cloudflare AI Gateway communication for LLM integration

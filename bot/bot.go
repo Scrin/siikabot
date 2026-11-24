@@ -66,7 +66,7 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 	case "m.text":
 		// An edit is never handled as a new message, not even when it reads like a command
 		if isEdit {
-			handled = routeEdit(ctx, evt, attrs)
+			handled = routeEdit(ctx, evt, attrs, false)
 			break
 		}
 
@@ -131,7 +131,7 @@ func handleTextEvent(ctx context.Context, evt *event.Event) {
 		// An image with a caption can address the bot like a text message does, and then the image
 		// comes with it
 		if isEdit {
-			handled = routeEdit(ctx, evt, attrs)
+			handled = routeEdit(ctx, evt, attrs, false)
 		} else if caption := content.GetCaption(); caption != "" {
 			handled = routeToChat(ctx, evt, attrs, caption, content.GetFormattedCaption(), matrix.MessageFromEvent(evt))
 		}
@@ -220,18 +220,7 @@ func handleMemberEvent(ctx context.Context, evt *event.Event) {
 // end the sync and with it the bot, and anyone in a room can send an event that the code doesn't
 // expect, so a panic is recovered and logged here.
 func handleEvent(ctx context.Context, evt *event.Event, wasEncrypted bool) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Error().Ctx(ctx).
-				Interface("panic", r).
-				Str("stack", string(debug.Stack())).
-				Str("room_id", evt.RoomID.String()).
-				Str("sender", evt.Sender.String()).
-				Str("event_id", evt.ID.String()).
-				Str("event_type", evt.Type.String()).
-				Msg("Recovered from a panic while handling an event")
-		}
-	}()
+	defer recoverFromEvent(ctx, evt)
 
 	switch evt.Type {
 	case event.EventMessage:
@@ -248,11 +237,46 @@ func handleEvent(ctx context.Context, evt *event.Event, wasEncrypted bool) {
 	metrics.RecordEventHandled(evt.Type.String(), subtype, wasEncrypted)
 }
 
+// handleMissedEvent handles a redaction or an edit that the bot missed while it was away, found in the
+// gap behind a sync. The chat history follows it, but a missed edit is never answered, as no message
+// in the gap is.
+func handleMissedEvent(ctx context.Context, evt *event.Event) {
+	defer recoverFromEvent(ctx, evt)
+
+	switch evt.Type {
+	case event.EventRedaction:
+		handleRedactionEvent(ctx, evt)
+	case event.EventMessage:
+		if evt.Sender.String() == config.UserID {
+			return
+		}
+		attrs := messageAttrs(evt.RoomID.String(), evt.Sender.String(), evt.ID.String())
+		tracing.Run(ctx, tracer, "message.missed_edit", func(ctx context.Context) {
+			routeEdit(ctx, evt, attrs, true)
+		}, trace.WithSpanKind(trace.SpanKindConsumer), trace.WithAttributes(attrs...))
+	}
+}
+
+// recoverFromEvent recovers from a panic while handling an event in the sync loop, where it would end
+// the sync and with it the bot, and logs it
+func recoverFromEvent(ctx context.Context, evt *event.Event) {
+	if r := recover(); r != nil {
+		log.Error().Ctx(ctx).
+			Interface("panic", r).
+			Str("stack", string(debug.Stack())).
+			Str("room_id", evt.RoomID.String()).
+			Str("sender", evt.Sender.String()).
+			Str("event_id", evt.ID.String()).
+			Str("event_type", evt.Type.String()).
+			Msg("Recovered from a panic while handling an event")
+	}
+}
+
 func Init(ctx context.Context) error {
 	if err := db.Init(); err != nil {
 		return err
 	}
-	if err := matrix.Init(ctx, handleEvent); err != nil {
+	if err := matrix.Init(ctx, handleEvent, handleMissedEvent); err != nil {
 		return err
 	}
 

@@ -91,8 +91,9 @@ func routeToChat(ctx context.Context, evt *event.Event, attrs []attribute.KeyVal
 // The chat history follows the edit, so that a turn the message started, or a quote of it, reads as
 // edited. The edit itself is answered only if it newly mentions the bot, and then as the message now
 // reads: clients list in an edit's own m.mentions only the users the edit adds. Any other edit
-// changes a message that was already handled when it was sent.
-func routeEdit(ctx context.Context, evt *event.Event, attrs []attribute.KeyValue) constants.Command {
+// changes a message that was already handled when it was sent. An edit the bot missed while it was
+// away is only followed.
+func routeEdit(ctx context.Context, evt *event.Event, attrs []attribute.KeyValue, missed bool) constants.Command {
 	roomID, sender := evt.RoomID.String(), evt.Sender.String()
 	content := evt.Content.AsMessage()
 	originalID := content.RelatesTo.GetReplaceID().String()
@@ -111,7 +112,7 @@ func routeEdit(ctx context.Context, evt *event.Event, attrs []attribute.KeyValue
 	text := turnText(ctx, roomID, body, formattedBody)
 	chat.FollowEdit(ctx, roomID, originalID, evt.ID.String(), sender, text, body)
 
-	if !mentionsBotExplicitly(evt.Content.Raw, config.UserID) || body == "" {
+	if missed || !mentionsBotExplicitly(evt.Content.Raw, config.UserID) || body == "" {
 		return ""
 	}
 

@@ -123,7 +123,11 @@ func GetRoomName(ctx context.Context, roomID string) string {
 	return nameContent.Name
 }
 
-func Init(ctx context.Context, handleEvent func(ctx context.Context, evt *event.Event, wasEncrypted bool)) error {
+// Init sets up the client, its stores and encryption, and what handles the events sync brings.
+// handleEvent handles the events of each sync, and handleMissedEvent the redactions and edits found in
+// the gap behind a limited timeline (see gap.go), before the sync's own events.
+func Init(ctx context.Context, handleEvent func(ctx context.Context, evt *event.Event, wasEncrypted bool),
+	handleMissedEvent func(ctx context.Context, evt *event.Event)) error {
 	var err error
 	stateStore = NewStateStore()
 	syncStore = NewSyncStore()
@@ -172,6 +176,8 @@ func Init(ctx context.Context, handleEvent func(ctx context.Context, evt *event.
 	}
 
 	client.Syncer.(mautrix.ExtensibleSyncer).OnSync(olmMachine.ProcessSyncResponse)
+	// After the room keys the sync brought, which the missed events may need
+	client.Syncer.(mautrix.ExtensibleSyncer).OnSync(missedChangesHandler(handleMissedEvent))
 
 	syncer := client.Syncer.(*mautrix.DefaultSyncer)
 
