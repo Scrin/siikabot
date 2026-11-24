@@ -283,7 +283,7 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 	// Save the user message to history
 	persist(ctx, turn, "user_turn", func(ctx context.Context) error {
 		return db.SaveUserTurn(ctx, prompt.userTurn)
-	})
+	}, storedEvents(prompt.userTurn)...)
 
 	// The response the answer comes from: this one, or the last one of the tool iterations
 	finalResp, failure := chatResp, ""
@@ -383,7 +383,7 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 	}
 	persist(ctx, turn, "answer", func(ctx context.Context) error {
 		return db.SaveAnswer(ctx, turn, config.UserID, assistantResponse, answerEventID)
-	})
+	}, answerEventID)
 }
 
 // chatRequest is a request to the model of the turn's configuration, under the limits it sets: the

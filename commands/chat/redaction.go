@@ -12,7 +12,8 @@ import (
 // A message deleted from the room leaves the bot's chat history too. That covers a message that
 // triggered a turn, the bot's answer to one, and a message a turn quoted or showed the image of. A
 // turn still running, or waiting for the room, when its trigger is deleted stops: it stores nothing
-// more and posts no answer.
+// more and posts no answer. A message it refers to that is deleted before its prompt is built isn't
+// shown to the model, and one deleted later leaves the history once the turn has stored it.
 
 // redactionMemory is how long a redaction is remembered for turns that haven't finished yet. It has
 // to outlast any turn, including its wait for the room lock: a turn that outlived it would write a
@@ -90,7 +91,12 @@ func forgotten(ctx context.Context, turn db.Turn) bool {
 // persist runs one of a turn's history writes, on a context that outlives a cancelled turn, unless
 // the turn's trigger has been redacted. If the redaction arrives while the write is in progress,
 // the check after it removes what was written.
-func persist(ctx context.Context, turn db.Turn, record string, write func(context.Context) error) {
+//
+// A write may also store what other messages hold, given as stored: the messages a question quotes
+// and shows the images of, or the event an answer was delivered as. The redaction of one of them
+// handled before the write found nothing to remove, so the part the write stored of it is removed
+// after it. One redacted later finds what was written.
+func persist(ctx context.Context, turn db.Turn, record string, write func(context.Context) error, stored ...string) {
 	if forgotten(ctx, turn) {
 		return
 	}
@@ -106,5 +112,40 @@ func persist(ctx context.Context, turn db.Turn, record string, write func(contex
 		// Continue even if saving fails
 	}
 
-	forgotten(ctx, turn)
+	if forgotten(ctx, turn) {
+		return
+	}
+	for _, eventID := range stored {
+		if !isRedacted(eventID) {
+			continue
+		}
+		if _, _, _, err := db.ForgetChatEvent(persistCtx, turn.RoomID, eventID); err != nil {
+			// Already logged
+			continue
+		}
+		log.Debug().Ctx(ctx).
+			Str("room_id", turn.RoomID).
+			Str("turn_event_id", turn.EventID).
+			Str("event_id", eventID).
+			Str("record", record).
+			Msg("Removed what a turn stored of an event redacted while it ran")
+	}
+}
+
+// storedEvents are the messages other than its trigger whose content a user turn stores: the one it
+// replies to, the ones it links to, and those whose images it shows
+func storedEvents(turn db.UserTurn) []string {
+	var events []string
+	if turn.ReplyTo != nil {
+		events = append(events, turn.ReplyTo.EventID)
+	}
+	for _, link := range turn.Links {
+		events = append(events, link.EventID)
+	}
+	for _, image := range turn.Images {
+		if image.EventID != turn.EventID {
+			events = append(events, image.EventID)
+		}
+	}
+	return events
 }

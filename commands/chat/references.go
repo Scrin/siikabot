@@ -94,6 +94,15 @@ func quoteOf(ctx context.Context, roomID string, msg *matrix.Message, room roomI
 		// Already logged where it was fetched
 		return nil
 	}
+	// It was fetched when the message referring to it was routed, and may have been deleted while
+	// the turn waited for the room
+	if isRedacted(msg.EventID) {
+		log.Debug().Ctx(ctx).
+			Str("room_id", roomID).
+			Str("event_id", msg.EventID).
+			Msg("Referenced message was redacted after it was fetched")
+		return nil
+	}
 
 	isImage := msg.MsgType == "m.image"
 	if !isImage && msg.Body == "" {

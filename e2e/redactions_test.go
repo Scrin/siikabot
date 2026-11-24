@@ -119,7 +119,6 @@ func TestEditedQuestionIsStoredAsEdited(t *testing.T) {
 
 // A quoted message redacted while the turn quoting it waits for the model (P1)
 func TestQuoteRedactedDuringItsTurn(t *testing.T) {
-	knownBug(t, "P1", "a redaction of a quoted message, during the turn quoting it, isn't applied")
 	e := setUp(t)
 	t.Parallel()
 	alice, bob := e.User(t, "alice"), e.User(t, "bob")
@@ -137,6 +136,35 @@ func TestQuoteRedactedDuringItsTurn(t *testing.T) {
 	release()
 	room.WaitForBot(t, asked)
 
+	if historyHolds(t, e, room, bobs) {
+		t.Error("the redacted quote is stored")
+	}
+}
+
+// A quoted message redacted while the turn quoting it waits for the room is never shown to the model, nor stored
+// (P1). The turn fetched it when the message was routed, before the redaction.
+func TestQuoteRedactedBeforeItsTurnStarts(t *testing.T) {
+	e := setUp(t)
+	t.Parallel()
+	alice, bob := e.User(t, "alice"), e.User(t, "bob")
+	room := e.Room(t, alice, []*User{bob})
+	release := heldModel(t, e, room)
+	bobs := marker(t, "bobs")
+
+	// The first turn keeps the room while the quoting one waits for it
+	alice.Ask(t, room, "first question")
+	waitForTheTurn(t, e, room)
+	quoted := bob.Say(t, room, bobs)
+	question := e.Pill("what do you think?")
+	question["m.relates_to"] = map[string]any{"m.in_reply_to": map[string]any{"event_id": quoted}}
+	alice.Send(t, room, question)
+	settle(t, e, room, bob)
+	bob.Redact(t, room, quoted)
+	settle(t, e, room, bob)
+	release()
+	conclude(t, alice, room)
+
+	assertSaw(t, e, room, bobs, false)
 	if historyHolds(t, e, room, bobs) {
 		t.Error("the redacted quote is stored")
 	}

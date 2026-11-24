@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Scrin/siikabot/config"
+	"github.com/Scrin/siikabot/testutil/pgtest"
 )
 
 // testBotUserID is the bot's user ID in these tests. Headers, quotes and the room section of the
@@ -21,5 +22,6 @@ func TestMain(m *testing.M) {
 	config.UserID = testBotUserID
 	config.SourceURL = testSourceURL
 	config.FrontendURL = testFrontendURL
-	os.Exit(m.Run())
+	// Some tests store turns in a PostgreSQL of their own (dbtest.Use)
+	os.Exit(pgtest.Run(m))
 }
