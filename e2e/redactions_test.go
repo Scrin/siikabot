@@ -172,7 +172,6 @@ func TestQuoteRedactedBeforeItsTurnStarts(t *testing.T) {
 
 // A question edited while its own turn waits for the model (P2)
 func TestQuestionEditedDuringItsTurn(t *testing.T) {
-	knownBug(t, "P2", "an edit made while the message's own turn is in flight is lost")
 	e := setUp(t)
 	t.Parallel()
 	alice := e.User(t, "alice")
@@ -189,6 +188,99 @@ func TestQuestionEditedDuringItsTurn(t *testing.T) {
 
 	if historyHolds(t, e, room, before) {
 		t.Error("the question is stored as it was before the edit")
+	}
+}
+
+// A question and the message it quotes, both edited while the turn waits for the room, reach the model and the
+// history as edited (P2). The turn fetched the quote, and took the question, when the message was routed.
+func TestEditsBeforeTheTurnStarts(t *testing.T) {
+	e := setUp(t)
+	t.Parallel()
+	alice, bob := e.User(t, "alice"), e.User(t, "bob")
+	room := e.Room(t, alice, []*User{bob})
+	release := heldModel(t, e, room)
+	askedBefore, askedAfter := marker(t, "asked-before"), marker(t, "asked-after")
+	quotedBefore, quotedAfter := marker(t, "quoted-before"), marker(t, "quoted-after")
+
+	// The first turn keeps the room while the edited one waits for it
+	alice.Ask(t, room, "first question")
+	waitForTheTurn(t, e, room)
+	quoted := bob.Say(t, room, quotedBefore)
+	question := e.Pill(askedBefore)
+	question["m.relates_to"] = map[string]any{"m.in_reply_to": map[string]any{"event_id": quoted}}
+	asked := alice.Send(t, room, question)
+	settle(t, e, room, bob)
+	bob.Edit(t, room, quoted, quotedAfter, nil)
+	alice.Edit(t, room, asked, botName+": "+askedAfter, nil)
+	settle(t, e, room, alice)
+	release()
+	conclude(t, alice, room)
+
+	for _, text := range []string{askedAfter, quotedAfter} {
+		assertSaw(t, e, room, text, true)
+		if !historyHolds(t, e, room, text) {
+			t.Errorf("the history doesn't hold %q", text)
+		}
+	}
+	for _, text := range []string{askedBefore, quotedBefore} {
+		assertSaw(t, e, room, text, false)
+		if historyHolds(t, e, room, text) {
+			t.Errorf("the history holds %q, from before the edit", text)
+		}
+	}
+}
+
+// A quoted message edited while the turn quoting it waits for the model is stored as edited (P2)
+func TestQuoteEditedDuringItsTurn(t *testing.T) {
+	e := setUp(t)
+	t.Parallel()
+	alice, bob := e.User(t, "alice"), e.User(t, "bob")
+	room := e.Room(t, alice, []*User{bob})
+	release := heldModel(t, e, room)
+	before, after := marker(t, "before"), marker(t, "after")
+
+	quoted := bob.Say(t, room, before)
+	question := e.Pill("what do you think?")
+	question["m.relates_to"] = map[string]any{"m.in_reply_to": map[string]any{"event_id": quoted}}
+	asked := alice.Send(t, room, question)
+	waitForTheTurn(t, e, room)
+	bob.Edit(t, room, quoted, after, nil)
+	settle(t, e, room, bob)
+	release()
+	room.WaitForBot(t, asked)
+
+	if historyHolds(t, e, room, before) || !historyHolds(t, e, room, after) {
+		t.Error("the quote is stored as it was before the edit")
+	}
+}
+
+// An edit that newly pills the bot, of a message whose turn is still running, starts no second turn (P2). Until
+// the turn stores its question, nothing in the history says the message has one.
+func TestEditAddingAPillDuringItsTurn(t *testing.T) {
+	e := setUp(t)
+	t.Parallel()
+	alice := e.User(t, "alice")
+	room := e.Room(t, alice, nil)
+	release := heldModel(t, e, room)
+	question := marker(t, "question")
+
+	asked := alice.Ask(t, room, question)
+	waitForTheTurn(t, e, room)
+	pill := e.Pill(question + " again")
+	alice.Edit(t, room, asked, pill["body"].(string), map[string]any{
+		"format": pill["format"], "formatted_body": pill["formatted_body"], "m.mentions": pill["m.mentions"]})
+	settle(t, e, room, alice)
+	release()
+	conclude(t, alice, room)
+
+	turns := 0
+	for _, req := range e.Model.Requests(room.ID.String()) {
+		if strings.Contains(req.LastUserText(), question) {
+			turns++
+		}
+	}
+	if turns != 1 {
+		t.Errorf("the message got %d turns, want 1", turns)
 	}
 }
 

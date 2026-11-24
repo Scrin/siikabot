@@ -122,6 +122,11 @@ func HandleMention(ctx context.Context, trigger Trigger) {
 			Msg("Skipping a chat turn whose trigger was redacted")
 		return
 	}
+	// One edited meanwhile asks what it now says. Its mentions stay as sent, since an edit lists only
+	// the users it adds.
+	if edit, ok := latestEdit(trigger.EventID, sender); ok && strings.TrimSpace(edit.text) != "" {
+		trigger.Body, msg = edit.text, edit.text
+	}
 
 	ctx, turnSpan := tracer.Start(ctx, "chat.turn", trace.WithAttributes(
 		attribute.String("matrix.room_id", roomID),

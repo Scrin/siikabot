@@ -103,6 +103,8 @@ func quoteOf(ctx context.Context, roomID string, msg *matrix.Message, room roomI
 			Msg("Referenced message was redacted after it was fetched")
 		return nil
 	}
+	// Or edited since, which the quote follows as the history would
+	edit, wasEdited := latestEdit(msg.EventID, msg.Sender)
 
 	isImage := msg.MsgType == "m.image"
 	if !isImage && msg.Body == "" {
@@ -123,6 +125,9 @@ func quoteOf(ctx context.Context, roomID string, msg *matrix.Message, room roomI
 	if isImage {
 		quote.Kind = db.QuoteImage
 		quote.Body = capQuote(msg.Caption())
+		if wasEdited {
+			quote.Body = edit.quoted
+		}
 		return quote
 	}
 
@@ -134,6 +139,9 @@ func quoteOf(ctx context.Context, roomID string, msg *matrix.Message, room roomI
 
 	quote.Kind = db.QuoteText
 	quote.Body = capQuote(msg.Body)
+	if wasEdited {
+		quote.Body = edit.quoted
+	}
 	return quote
 }
 

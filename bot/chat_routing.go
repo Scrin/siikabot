@@ -133,8 +133,8 @@ func routeEdit(ctx context.Context, evt *event.Event, attrs []attribute.KeyValue
 			Msg("Ignoring an edit of someone else's message")
 		return ""
 	}
-	if answered, err := db.HasChatTurn(ctx, roomID, originalID); err != nil || answered {
-		// A message the bot has answered already is only brought up to date, above
+	if answered, err := chat.HasTurn(ctx, roomID, originalID); err != nil || answered {
+		// A message the bot has answered, or is answering, is only brought up to date, above
 		return ""
 	}
 
@@ -234,7 +234,11 @@ func startChatTurn(ctx context.Context, attrs []attribute.KeyValue, msg chatStar
 		trigger.UnseenBefore--
 	}
 
+	// Recorded now, in the order messages arrive, so that an edit routed before the turn has stored
+	// its question finds it has one
+	over := chat.StartingTurn(msg.roomID, msg.eventID)
 	traced(ctx, "chat.mention", attrs, func(ctx context.Context) {
+		defer over()
 		chat.HandleMention(ctx, trigger)
 	})
 }

@@ -93,9 +93,10 @@ func forgotten(ctx context.Context, turn db.Turn) bool {
 // the check after it removes what was written.
 //
 // A write may also store what other messages hold, given as stored: the messages a question quotes
-// and shows the images of, or the event an answer was delivered as. The redaction of one of them
-// handled before the write found nothing to remove, so the part the write stored of it is removed
-// after it. One redacted later finds what was written.
+// and shows the images of, or the event an answer was delivered as. The redaction or edit of the
+// trigger or one of them handled before the write found nothing to change, so the part the write
+// stored of it follows the edit, or is removed, after it. One redacted or edited later finds what
+// was written.
 func persist(ctx context.Context, turn db.Turn, record string, write func(context.Context) error, stored ...string) {
 	if forgotten(ctx, turn) {
 		return
@@ -115,6 +116,7 @@ func persist(ctx context.Context, turn db.Turn, record string, write func(contex
 	if forgotten(ctx, turn) {
 		return
 	}
+	followEdits(persistCtx, turn, record, append([]string{turn.EventID}, stored...)...)
 	for _, eventID := range stored {
 		if !isRedacted(eventID) {
 			continue
