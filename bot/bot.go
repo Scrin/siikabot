@@ -180,8 +180,9 @@ func roomMembers(ctx context.Context, roomID string) []matrix.Member {
 	return room.Members
 }
 
-// handleRedactionEvent removes a redacted message from the chat history. The redacted event is in
-// the content from room version 11 on, and at the top level of the event before that.
+// handleRedactionEvent removes a redacted message from the chat history. A message whose edit was
+// redacted reads again as it did before the edit. The redacted event is in the content from room
+// version 11 on, and at the top level of the event before that.
 //
 // Handled right here in the sync loop rather than in a goroutine: a chat turn for the redacted
 // message may already be running, and it stops the moment the redaction is recorded. Redactions are
@@ -197,7 +198,11 @@ func handleRedactionEvent(ctx context.Context, evt *event.Event) {
 
 	attrs := messageAttrs(evt.RoomID.String(), evt.Sender.String(), evt.ID.String())
 	tracing.Run(ctx, tracer, "chat.forget", func(ctx context.Context) {
-		chat.ForgetEvent(ctx, evt.RoomID.String(), redacts.String())
+		roomID := evt.RoomID.String()
+		chat.ForgetEvent(ctx, roomID, redacts.String())
+		for _, msg := range chat.EditedBy(ctx, roomID, redacts.String()) {
+			revertEdit(ctx, roomID, msg)
+		}
 	}, trace.WithSpanKind(trace.SpanKindConsumer), trace.WithAttributes(attrs...))
 }
 

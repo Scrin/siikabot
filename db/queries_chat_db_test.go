@@ -323,14 +323,14 @@ func TestFollowChatEdit(t *testing.T) {
 	quoting.Links = []QuotedMessage{{EventID: "$img", Sender: alice, SenderName: "alice", SentAt: chatT0, Kind: QuoteImage, Body: "caption"}}
 	storeTurn(t, quoting, "", "ok", "$a2")
 
-	if turns, refs, err := FollowChatEdit(ctx, roomA, "$q1", bob, "bob's version", "bob's version"); err != nil || turns != 0 || refs != 0 {
+	if turns, refs, err := FollowChatEdit(ctx, roomA, "$q1", "$e0", bob, "bob's version", "bob's version"); err != nil || turns != 0 || refs != 0 {
 		t.Errorf("an edit by someone else changed %d turns and %d quotes, %v", turns, refs, err)
 	}
-	if turns, refs, err := FollowChatEdit(ctx, roomA, "$q1", alice, "my password is ****", "my password is ****"); err != nil || turns != 1 || refs != 1 {
+	if turns, refs, err := FollowChatEdit(ctx, roomA, "$q1", "$e1", alice, "my password is ****", "my password is ****"); err != nil || turns != 1 || refs != 1 {
 		t.Errorf("FollowChatEdit() = %d, %d, %v, want the turn and its quote", turns, refs, err)
 	}
 	// An image's caption can be edited away
-	if _, refs, err := FollowChatEdit(ctx, roomA, "$img", alice, "", ""); err != nil || refs != 1 {
+	if _, refs, err := FollowChatEdit(ctx, roomA, "$img", "$e2", alice, "", ""); err != nil || refs != 1 {
 		t.Errorf("removing a caption changed %d quotes, %v", refs, err)
 	}
 
@@ -345,8 +345,45 @@ func TestFollowChatEdit(t *testing.T) {
 	if _, _, _, err := ForgetChatEvent(ctx, roomA, "$img"); err != nil {
 		t.Fatal(err)
 	}
-	if _, refs, _ := FollowChatEdit(ctx, roomA, "$img", alice, "new caption", "new caption"); refs != 0 {
+	if _, refs, _ := FollowChatEdit(ctx, roomA, "$img", "$e3", alice, "new caption", "new caption"); refs != 0 {
 		t.Error("an edit brought a redacted quote back")
+	}
+}
+
+// The history says which edit its text comes from, so a redaction of the edit finds the messages it changed, and
+// none once a later edit, or the message as sent, has replaced its text
+func TestMessagesEditedBy(t *testing.T) {
+	useTestDatabase(t)
+	ctx := context.Background()
+	storeTurn(t, question(roomA, "$q1", alice, "first"), "", "noted", "$a1")
+	quoting := question(roomA, "$q2", bob, "look")
+	quoting.ReplyTo = &QuotedMessage{EventID: "$q1", Sender: alice, SenderName: "alice", SentAt: chatT0, Kind: QuoteText, Body: "first"}
+	storeTurn(t, quoting, "", "ok", "$a2")
+	storeTurn(t, question(roomB, "$q3", alice, "elsewhere"), "", "ok", "$a3")
+
+	editedBy := func(room, edit string) []EditedMessage {
+		t.Helper()
+		messages, err := MessagesEditedBy(ctx, room, edit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return messages
+	}
+	if _, _, err := FollowChatEdit(ctx, roomA, "$q1", "$e1", alice, "second", "second"); err != nil {
+		t.Fatal(err)
+	}
+	if got := editedBy(roomA, "$e1"); len(got) != 1 || got[0] != (EditedMessage{EventID: "$q1", Sender: alice}) {
+		t.Errorf("the edit changed %+v, want the message once, its turn and its quote together", got)
+	}
+	if got := editedBy(roomB, "$e1"); len(got) != 0 {
+		t.Errorf("the edit changed %+v in another room", got)
+	}
+
+	if _, _, err := FollowChatEdit(ctx, roomA, "$q1", "", alice, "first", "first"); err != nil {
+		t.Fatal(err)
+	}
+	if got := editedBy(roomA, "$e1"); len(got) != 0 {
+		t.Errorf("the edit still changed %+v after the message read as sent again", got)
 	}
 }
 

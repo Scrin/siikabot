@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/Scrin/siikabot/testutil/fakenet"
 	"github.com/Scrin/siikabot/testutil/knownbug"
@@ -284,24 +283,87 @@ func TestEditAddingAPillDuringItsTurn(t *testing.T) {
 	}
 }
 
-// Redacting an edit takes its text out of the history (P3)
+// Redacting an edit takes its text out of the history, and the message reads as it did before the edit (P3)
 func TestRedactedEditLeavesTheHistory(t *testing.T) {
-	knownBug(t, "P3", "redacting an edit leaves the edit's text stored")
 	e := setUp(t)
 	t.Parallel()
 	alice := e.User(t, "alice")
 	room := e.Room(t, alice, nil)
-	edited := marker(t, "edited")
+	original, edited := marker(t, "original"), marker(t, "edited")
 
-	asked := alice.Ask(t, room, "first version")
+	asked := alice.Ask(t, room, original)
 	room.WaitForBot(t, asked)
 	edit := alice.Edit(t, room, asked, botName+": "+edited, nil)
 	eventually(t, "the edit to reach the history", func() bool { return historyHolds(t, e, room, edited) })
 	alice.Redact(t, room, edit)
+	eventually(t, "the message to read as sent again", func() bool {
+		return historyHolds(t, e, room, original) && !historyHolds(t, e, room, edited)
+	})
+}
 
-	time.Sleep(2 * time.Second)
-	if historyHolds(t, e, room, edited) {
-		t.Error("the redacted edit's text is still stored")
+// With the latest of two edits redacted, the message reads as the one before it, not as sent: the first edit may
+// have taken something back (P3)
+func TestRedactedEditFallsBackToTheEditBefore(t *testing.T) {
+	e := setUp(t)
+	t.Parallel()
+	alice := e.User(t, "alice")
+	room := e.Room(t, alice, nil)
+	secret, retracted, later := marker(t, "secret"), marker(t, "retracted"), marker(t, "later")
+
+	asked := alice.Ask(t, room, secret)
+	room.WaitForBot(t, asked)
+	alice.Edit(t, room, asked, botName+": "+retracted, nil)
+	edit := alice.Edit(t, room, asked, botName+": "+later, nil)
+	eventually(t, "the edits to reach the history", func() bool { return historyHolds(t, e, room, later) })
+	alice.Redact(t, room, edit)
+	eventually(t, "the message to read as its first edit", func() bool {
+		return historyHolds(t, e, room, retracted) && !historyHolds(t, e, room, later)
+	})
+	if historyHolds(t, e, room, secret) {
+		t.Error("the message reads as sent, which its first edit took back")
+	}
+}
+
+// A quote of a message whose edit is redacted reads as the message did before the edit (P3)
+func TestRedactedEditOfAQuotedMessage(t *testing.T) {
+	e := setUp(t)
+	t.Parallel()
+	alice, bob := e.User(t, "alice"), e.User(t, "bob")
+	room := e.Room(t, alice, []*User{bob})
+	original, edited := marker(t, "original"), marker(t, "edited")
+
+	quoted := bob.Say(t, room, original)
+	question := e.Pill("what do you think?")
+	question["m.relates_to"] = map[string]any{"m.in_reply_to": map[string]any{"event_id": quoted}}
+	room.WaitForBot(t, alice.Send(t, room, question))
+	edit := bob.Edit(t, room, quoted, edited, nil)
+	eventually(t, "the edit to reach the quote", func() bool { return historyHolds(t, e, room, edited) })
+	bob.Redact(t, room, edit)
+	eventually(t, "the quote to read as sent again", func() bool {
+		return historyHolds(t, e, room, original) && !historyHolds(t, e, room, edited)
+	})
+}
+
+// An edit made and redacted while the message's turn waits for the model is never stored (P3)
+func TestEditRedactedDuringItsTurn(t *testing.T) {
+	e := setUp(t)
+	t.Parallel()
+	alice := e.User(t, "alice")
+	room := e.Room(t, alice, nil)
+	release := heldModel(t, e, room)
+	original, edited := marker(t, "original"), marker(t, "edited")
+
+	asked := alice.Ask(t, room, original)
+	waitForTheTurn(t, e, room)
+	edit := alice.Edit(t, room, asked, botName+": "+edited, nil)
+	settle(t, e, room, alice)
+	alice.Redact(t, room, edit)
+	settle(t, e, room, alice)
+	release()
+	room.WaitForBot(t, asked)
+
+	if historyHolds(t, e, room, edited) || !historyHolds(t, e, room, original) {
+		t.Error("the question is stored with its redacted edit")
 	}
 }
 

@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -16,6 +17,9 @@ import (
 
 // edited is a message's latest edit by one sender
 type edited struct {
+	// eventID is the edit's own event, empty for the message as sent, which an edit's redaction
+	// brings it back to
+	eventID string
 	// text is the message as its turn shows it, and quoted as a quote shows it
 	text, quoted string
 	at           time.Time
@@ -34,9 +38,10 @@ var edits = struct {
 // history keeps the words its sender settled on, just as it drops a message they delete. Only the
 // sender's own edits count.
 //
-// text is the message as its turn shows it, without a leading address to the bot. quoted is all of
-// what the sender wrote, as a quote shows it.
-func FollowEdit(ctx context.Context, roomID, eventID, sender, text, quoted string) {
+// editEventID is the edit's own event, or empty when a redacted edit brings the message back to how
+// it was sent. text is the message as its turn shows it, without a leading address to the bot.
+// quoted is all of what the sender wrote, as a quote shows it.
+func FollowEdit(ctx context.Context, roomID, eventID, editEventID, sender, text, quoted string) {
 	quoted = capQuote(quoted)
 
 	edits.Lock()
@@ -56,9 +61,9 @@ func FollowEdit(ctx context.Context, roomID, eventID, sender, text, quoted strin
 	if edits.latest[eventID] == nil {
 		edits.latest[eventID] = make(map[string]edited)
 	}
-	edits.latest[eventID][sender] = edited{text: text, quoted: quoted, at: now}
+	edits.latest[eventID][sender] = edited{eventID: editEventID, text: text, quoted: quoted, at: now}
 
-	turns, references, err := db.FollowChatEdit(ctx, roomID, eventID, sender, text, quoted)
+	turns, references, err := db.FollowChatEdit(ctx, roomID, eventID, editEventID, sender, text, quoted)
 	if err != nil {
 		// Already logged
 		return
@@ -90,7 +95,7 @@ func followEdits(ctx context.Context, turn db.Turn, record string, eventIDs ...s
 
 	for _, eventID := range eventIDs {
 		for sender, edit := range edits.latest[eventID] {
-			turns, references, err := db.FollowChatEdit(ctx, turn.RoomID, eventID, sender, edit.text, edit.quoted)
+			turns, references, err := db.FollowChatEdit(ctx, turn.RoomID, eventID, edit.eventID, sender, edit.text, edit.quoted)
 			if err != nil {
 				// Already logged
 				continue
@@ -105,4 +110,26 @@ func followEdits(ctx context.Context, turn db.Turn, record string, eventIDs ...s
 			}
 		}
 	}
+}
+
+// EditedBy returns the messages whose text, as the chat history or a running turn holds it, comes from
+// an edit: what has to change when the edit is redacted
+func EditedBy(ctx context.Context, roomID, editEventID string) []db.EditedMessage {
+	stored, err := db.MessagesEditedBy(ctx, roomID, editEventID)
+	if err != nil {
+		// Already logged. The running turns are still found below.
+		stored = nil
+	}
+
+	edits.Lock()
+	defer edits.Unlock()
+	for eventID, bySender := range edits.latest {
+		for sender, edit := range bySender {
+			message := db.EditedMessage{EventID: eventID, Sender: sender}
+			if edit.eventID == editEventID && !slices.Contains(stored, message) {
+				stored = append(stored, message)
+			}
+		}
+	}
+	return stored
 }

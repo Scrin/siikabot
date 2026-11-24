@@ -108,3 +108,27 @@ func TestEncryptedReferences(t *testing.T) {
 	assertSaw(t, e, room, linked, true)
 	assertNothingInTheClear(t, alice, room)
 }
+
+// In an encrypted room, a message whose latest edit is redacted reads as its edit before, which the bot decrypts
+// (P3)
+func TestRedactedEditInAnEncryptedRoom(t *testing.T) {
+	e := setUp(t)
+	t.Parallel()
+	alice := e.User(t, "alice").Encrypted(t)
+	room := e.Room(t, alice, nil, WithEncryption())
+	secret, retracted, later := marker(t, "secret"), marker(t, "retracted"), marker(t, "later")
+
+	asked := alice.Ask(t, room, secret)
+	room.WaitForBot(t, asked)
+	alice.Edit(t, room, asked, botName+": "+retracted, nil)
+	edit := alice.Edit(t, room, asked, botName+": "+later, nil)
+	eventually(t, "the edits to reach the history", func() bool { return historyHolds(t, e, room, later) })
+	alice.Redact(t, room, edit)
+	eventually(t, "the message to read as its first edit", func() bool {
+		return historyHolds(t, e, room, retracted) && !historyHolds(t, e, room, later)
+	})
+	if historyHolds(t, e, room, secret) {
+		t.Error("the message reads as sent, which its first edit took back")
+	}
+	assertNothingInTheClear(t, alice, room)
+}

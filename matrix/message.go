@@ -54,28 +54,74 @@ func FetchMessage(ctx context.Context, roomID, eventID string) (*Message, error)
 		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("event_id", eventID).Msg("Failed to fetch event")
 		return nil, fmt.Errorf("failed to fetch event: %w", err)
 	}
+	return messageFromEvent(roomID, decrypted(ctx, roomID, evt)), nil
+}
 
-	if evt.Type == event.EventEncrypted {
-		if err := evt.Content.ParseRaw(evt.Type); err != nil {
-			log.Error().Ctx(ctx).Err(err).
-				Str("room_id", roomID).
-				Str("event_id", eventID).
-				Msg("Failed to parse encrypted event content")
-		}
-
-		decryptedEvt, err := olmMachine.DecryptMegolmEvent(ctx, evt)
-		if err != nil {
-			log.Error().Ctx(ctx).Err(err).
-				Str("room_id", roomID).
-				Str("event_id", eventID).
-				Msg("Failed to decrypt event")
-			// Still encrypted, so only the envelope is read from it below
-		} else {
-			evt = decryptedEvt
-		}
+// LatestEdit returns the latest edit of a message by its sender that still stands, as the message
+// reads after it, or nil if none does. A redacted edit has no content left, and an edit by anyone
+// else doesn't count, as clients show neither. The message's EventID is the edit's.
+func LatestEdit(ctx context.Context, roomID, eventID, sender string) (*Message, error) {
+	resp, err := client.GetRelations(ctx, id.RoomID(roomID), id.EventID(eventID), &mautrix.ReqGetRelations{
+		RelationType: event.RelReplace,
+		Dir:          mautrix.DirectionBackward,
+		Limit:        50,
+	})
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("event_id", eventID).Msg("Failed to fetch a message's edits")
+		return nil, fmt.Errorf("failed to fetch the edits of a message: %w", err)
 	}
+	// Newest first
+	for _, evt := range resp.Chunk {
+		if evt.Sender.String() != sender {
+			continue
+		}
+		evt = decrypted(ctx, roomID, evt)
+		if evt.Type != event.EventMessage {
+			continue
+		}
+		newContent, ok := evt.Content.Raw["m.new_content"].(map[string]any)
+		if !ok {
+			continue
+		}
+		edit := &Message{
+			RoomID:    roomID,
+			EventID:   evt.ID.String(),
+			Sender:    evt.Sender.String(),
+			Timestamp: time.UnixMilli(evt.Timestamp),
+			content:   newContent,
+		}
+		edit.MsgType, _ = newContent["msgtype"].(string)
+		edit.Body, _ = newContent["body"].(string)
+		edit.FormattedBody, _ = newContent["formatted_body"].(string)
+		return edit, nil
+	}
+	return nil, nil
+}
 
-	return messageFromEvent(roomID, evt), nil
+// decrypted is an event decrypted, if it was encrypted and can be. One that can't be is returned as
+// it came, and only its envelope can be read.
+func decrypted(ctx context.Context, roomID string, evt *event.Event) *event.Event {
+	if evt.Type != event.EventEncrypted {
+		return evt
+	}
+	if evt.RoomID == "" {
+		evt.RoomID = id.RoomID(roomID)
+	}
+	if err := evt.Content.ParseRaw(evt.Type); err != nil {
+		log.Error().Ctx(ctx).Err(err).
+			Str("room_id", roomID).
+			Str("event_id", evt.ID.String()).
+			Msg("Failed to parse encrypted event content")
+	}
+	decryptedEvt, err := olmMachine.DecryptMegolmEvent(ctx, evt)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).
+			Str("room_id", roomID).
+			Str("event_id", evt.ID.String()).
+			Msg("Failed to decrypt event")
+		return evt
+	}
+	return decryptedEvt
 }
 
 // MessageFromEvent reads a message event as it arrived through sync, decrypted if it was encrypted,

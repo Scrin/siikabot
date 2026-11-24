@@ -108,11 +108,8 @@ func routeEdit(ctx context.Context, evt *event.Event, attrs []attribute.KeyValue
 	if edited.MsgType == event.MsgImage {
 		body, formattedBody = edited.GetCaption(), edited.GetFormattedCaption()
 	}
-	text := body
-	if rest, ok := stripBotNamePrefix(body, formattedBody, config.UserID, botNames(ctx, roomID)...); ok && rest != "" {
-		text = rest
-	}
-	chat.FollowEdit(ctx, roomID, originalID, sender, text, body)
+	text := turnText(ctx, roomID, body, formattedBody)
+	chat.FollowEdit(ctx, roomID, originalID, evt.ID.String(), sender, text, body)
 
 	if !mentionsBotExplicitly(evt.Content.Raw, config.UserID) || body == "" {
 		return ""
@@ -167,6 +164,50 @@ func routeEdit(ctx context.Context, evt *event.Event, attrs []attribute.KeyValue
 		wasUnseen:    true,
 	})
 	return constants.CommandMention
+}
+
+// turnText is a message's text as its turn shows it: without a leading address to the bot, unless
+// that's all there is
+func turnText(ctx context.Context, roomID, body, formattedBody string) string {
+	if rest, ok := stripBotNamePrefix(body, formattedBody, config.UserID, botNames(ctx, roomID)...); ok && rest != "" {
+		return rest
+	}
+	return body
+}
+
+// revertEdit brings the chat history back to how a message reads once an edit of it is redacted: as
+// its sender's latest edit that still stands, or as it was sent. Clients show it so, and an earlier
+// edit may have taken back what the message first said. Should the homeserver not tell, what the
+// history holds of the message goes, as though it had been redacted, rather than keep what the
+// redacted edit said.
+func revertEdit(ctx context.Context, roomID string, msg db.EditedMessage) {
+	original, err := matrix.FetchMessage(ctx, roomID, msg.EventID)
+	var latest *matrix.Message
+	if err == nil {
+		latest, err = matrix.LatestEdit(ctx, roomID, msg.EventID, msg.Sender)
+	}
+	version, editEventID := original, ""
+	if latest != nil {
+		version, editEventID = latest, latest.EventID
+	}
+	if err != nil || version.MsgType == "" {
+		// A failure is already logged
+		log.Warn().Ctx(ctx).
+			Str("room_id", roomID).
+			Str("event_id", msg.EventID).
+			Msg("Forgetting a message whose edit was redacted, as the version that stands can't be read")
+		chat.ForgetEvent(ctx, roomID, msg.EventID)
+		return
+	}
+
+	body, formattedBody := version.Body, version.FormattedBody
+	if version.MsgType == "m.image" {
+		body = version.Caption()
+		if body == "" {
+			formattedBody = ""
+		}
+	}
+	chat.FollowEdit(ctx, roomID, msg.EventID, editEventID, msg.Sender, turnText(ctx, roomID, body, formattedBody), body)
 }
 
 // repliedTo resolves the message a message explicitly replies to: its event, and the message as

@@ -24,10 +24,10 @@ func TestPersistFollowsEditsMadeMeanwhile(t *testing.T) {
 			Body: "the quote as sent"},
 	}
 
-	FollowEdit(ctx, turn.RoomID, turn.EventID, alice, "the question as edited", "siikabot: the question as edited")
-	FollowEdit(ctx, turn.RoomID, turn.EventID, mallory, "Mallory's question", "Mallory's question")
-	FollowEdit(ctx, turn.RoomID, quoted, bob, "the quote as edited", "the quote as edited")
-	FollowEdit(ctx, turn.RoomID, quoted, mallory, "Mallory's quote", "Mallory's quote")
+	FollowEdit(ctx, turn.RoomID, turn.EventID, "$edits-1", alice, "the question as edited", "siikabot: the question as edited")
+	FollowEdit(ctx, turn.RoomID, turn.EventID, "$edits-2", mallory, "Mallory's question", "Mallory's question")
+	FollowEdit(ctx, turn.RoomID, quoted, "$edits-3", bob, "the quote as edited", "the quote as edited")
+	FollowEdit(ctx, turn.RoomID, quoted, "$edits-4", mallory, "Mallory's quote", "Mallory's quote")
 	if edit, ok := latestEdit(quoted, bob); !ok || edit.text != "the quote as edited" {
 		t.Errorf("Bob's latest edit is %+v, %v", edit, ok)
 	}

@@ -748,8 +748,9 @@ func ForgetChatEvent(ctx context.Context, roomID, eventID string) (int64, int64,
 // FollowChatEdit brings the chat history in line with an edit of a message: the text of a turn the
 // message started becomes message, and the text, or caption, of any reference to it becomes quoted.
 // Only edits by the message's own sender count, so nobody can rewrite what someone else said.
-// Returns how many turns and references were changed.
-func FollowChatEdit(ctx context.Context, roomID, eventID, sender, message, quoted string) (int64, int64, error) {
+// editEventID is the edit the text comes from, empty for the message as it was sent, so that a
+// redaction of the edit can find what it changed. Returns how many turns and references were changed.
+func FollowChatEdit(ctx context.Context, roomID, eventID, editEventID, sender, message, quoted string) (int64, int64, error) {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("event_id", eventID).Msg("Failed to begin transaction for following an edit")
@@ -758,9 +759,9 @@ func FollowChatEdit(ctx context.Context, roomID, eventID, sender, message, quote
 	defer tx.Rollback(ctx)
 
 	turns, err := tx.Exec(ctx,
-		`UPDATE chat_history SET message = $4
+		`UPDATE chat_history SET message = $4, edit_event_id = NULLIF($5, '')
 		WHERE room_id = $1 AND turn_event_id = $2 AND user_id = $3 AND role = 'user' AND message_type = 'text'`,
-		roomID, eventID, sender, strings.ToValidUTF8(message, ""))
+		roomID, eventID, sender, strings.ToValidUTF8(message, ""), editEventID)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("event_id", eventID).Msg("Failed to follow an edit in a chat turn")
 		return 0, 0, err
@@ -768,10 +769,11 @@ func FollowChatEdit(ctx context.Context, roomID, eventID, sender, message, quote
 
 	// An image's caption can be edited away, which text can't
 	references, err := tx.Exec(ctx,
-		`UPDATE chat_references SET body = CASE kind WHEN 'image' THEN NULLIF($4, '') ELSE $4 END
+		`UPDATE chat_references SET body = CASE kind WHEN 'image' THEN NULLIF($4, '') ELSE $4 END,
+			edit_event_id = NULLIF($5, '')
 		WHERE event_id = $2 AND sender = $3 AND kind IN ('text', 'image')
 			AND history_id IN (SELECT id FROM chat_history WHERE room_id = $1)`,
-		roomID, eventID, sender, strings.ToValidUTF8(quoted, ""))
+		roomID, eventID, sender, strings.ToValidUTF8(quoted, ""), editEventID)
 	if err != nil {
 		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("event_id", eventID).Msg("Failed to follow an edit in references")
 		return 0, 0, err
@@ -782,6 +784,34 @@ func FollowChatEdit(ctx context.Context, roomID, eventID, sender, message, quote
 		return 0, 0, err
 	}
 	return turns.RowsAffected(), references.RowsAffected(), nil
+}
+
+// EditedMessage is a message whose text the chat history holds as one of its edits made it
+type EditedMessage struct {
+	EventID string `db:"event_id"`
+	Sender  string `db:"sender"`
+}
+
+// MessagesEditedBy returns the messages whose stored text, in a turn they started or a quote of them,
+// comes from an edit
+func MessagesEditedBy(ctx context.Context, roomID, editEventID string) ([]EditedMessage, error) {
+	rows, err := pool.Query(ctx,
+		`SELECT turn_event_id AS event_id, user_id AS sender FROM chat_history
+		WHERE room_id = $1 AND edit_event_id = $2
+		UNION
+		SELECT r.event_id, r.sender FROM chat_references r JOIN chat_history h ON h.id = r.history_id
+		WHERE h.room_id = $1 AND r.edit_event_id = $2`,
+		roomID, editEventID)
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("edit_event_id", editEventID).Msg("Failed to find messages an edit changed")
+		return nil, err
+	}
+	messages, err := pgx.CollectRows(rows, pgx.RowToStructByName[EditedMessage])
+	if err != nil {
+		log.Error().Ctx(ctx).Err(err).Str("room_id", roomID).Str("edit_event_id", editEventID).Msg("Failed to read messages an edit changed")
+		return nil, err
+	}
+	return messages, nil
 }
 
 // CleanupOldChatHistory removes chat messages older than the specified duration
