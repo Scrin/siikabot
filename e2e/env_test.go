@@ -452,6 +452,7 @@ type roomOptions struct {
 	historyVisibility event.HistoryVisibility
 	withoutBot        bool
 	encrypted         bool
+	name              string
 }
 
 // WithEncryption creates an end-to-end encrypted room. Its owner has to be Encrypted.
@@ -465,6 +466,11 @@ type RoomOption func(*roomOptions)
 // WithHistoryVisibility creates the room with a history visibility other than "shared"
 func WithHistoryVisibility(v event.HistoryVisibility) RoomOption {
 	return func(o *roomOptions) { o.historyVisibility = v }
+}
+
+// WithName creates the room with a name
+func WithName(name string) RoomOption {
+	return func(o *roomOptions) { o.name = name }
 }
 
 // WithoutBot creates the room without the bot in it
@@ -497,7 +503,8 @@ func (e *environment) Room(t *testing.T, owner *User, members []*User, options .
 			Content: event.Content{Parsed: &event.EncryptionEventContent{Algorithm: id.AlgorithmMegolmV1}},
 		})
 	}
-	created, err := owner.CreateRoom(ctx, &mautrix.ReqCreateRoom{Preset: "private_chat", Invite: invite, InitialState: initialState})
+	created, err := owner.CreateRoom(ctx, &mautrix.ReqCreateRoom{Preset: "private_chat", Name: opts.name, Invite: invite,
+		InitialState: initialState})
 	if err != nil {
 		t.Fatalf("creating a room: %v", err)
 	}

@@ -11,3 +11,7 @@ node_modules
 dist
 dist-ssr
 *.local
+
+# Playwright, when run by hand
+test-results/
+playwright-report/

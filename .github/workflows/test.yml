@@ -66,6 +66,15 @@ jobs:
           key: synapse-${{ runner.os }}-${{ hashFiles('scripts/install-synapse.sh') }}
       - name: Install Synapse
         run: scripts/install-synapse.sh
+      # The dashboard's packages and Playwright's Chromium, for the browser tests
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '26'
+          cache: 'npm'
+          cache-dependency-path: web_frontend/package-lock.json
+      - name: Install the dashboard's packages and Chromium
+        working-directory: web_frontend
+        run: npm ci && npx playwright install --with-deps chromium
       - name: Run end-to-end tests
         env:
           SIIKABOT_TEST_POSTGRES: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
@@ -96,3 +105,6 @@ jobs:
         run: npm ci
       - name: Run tests
         run: npm run test:run
+      # vitest doesn't type-check. tsc does, and checks the API's responses saved in src/api/contract against types.ts.
+      - name: Type-check
+        run: npx tsc -b

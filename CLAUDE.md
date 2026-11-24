@@ -127,6 +127,8 @@ The referenced events are resolved once, in `bot/reply.go`, and handed to the ch
 
 - **`./web_frontend/`** - React SPA for system monitoring
   - Built with Vite, embedded in Go binary via `bot/static.go`
+  - `e2e/` - Its tests in a browser (Playwright), which the Go end-to-end tests run (see *Testing*)
+  - `src/api/contract/` - A real response of each endpoint it calls, saved by the end-to-end tests and typed with `types.ts`, so `tsc` checks the two agree
 
 - **`./testutil/`** - Helpers for tests only, never imported by the bot itself
   - `pgtest` - A PostgreSQL database of a test's own (see *Testing*)
@@ -444,6 +446,7 @@ For each part of the dashboard a change touches, update:
 2. The types in `web_frontend/src/api/types.ts`
 3. The component, including its wording
 4. The tests on both sides
+5. The contract: run `TestAPIContract` with `SIIKABOT_E2E_UPDATE_FIXTURES=1` to save the responses again, and bring `types.ts` in line until `npx tsc -b` passes
 
 What the dashboard shows, and where the data comes from:
 
@@ -460,7 +463,7 @@ What the dashboard shows, and where the data comes from:
 | `ChatConfigCard` | `api/chat_config.go` | `chat_config`, written by `!chat set` and `!chat config revert` (`commands/chat/chat.go`), and read through the settings declared in `commands/chat/settings.go`. Read-only: the settings change only in a room |
 | `SystemStatusCard` | `api/healthcheck.go`, `api/metrics.go` | Process and connection pool stats |
 
-When a dashboard component or API endpoint is added, add it to this table.
+When a dashboard component or API endpoint is added, add it to this table, its response to `TestAPIContract` (`e2e/contract_test.go`), and what it shows to the browser tests (`web_frontend/e2e/dashboard.spec.ts`).
 
 The cards are laid out by topic in `web_frontend/src/App.tsx`. A new card goes in its topic's `DashboardSection`, wrapped in `DashboardCard`, and takes `adminOnly` if its endpoint is under `/api/admin`: the card is then left out for everyone but an admin.
 
@@ -504,7 +507,7 @@ SIIKABOT_TEST_POSTGRES="postgres://user@localhost:5432/postgres?sslmode=disable"
 
 Without libolm installed, build with `-tags goolm`.
 
-CI runs the Go tests with `-race`, the end-to-end tests and the frontend tests on every pull request, and all of them on every push to master, before `main.yml` builds and publishes the image. A failing test stops the image from being published.
+CI runs the Go tests with `-race`, the end-to-end tests (the browser tests among them), and the frontend's tests and type-check on every pull request, and all of them on every push to master, before `main.yml` builds and publishes the image. A failing test stops the image from being published.
 
 #### End-to-End Tests
 
@@ -532,7 +535,24 @@ The tests check what the model was shown (`e.Model.Requests`, `e.Model.Saw`), wh
 - **Restarts:** `StopBot` and `StartBot` stop and restart the bot, and `RestartBotWith` restarts it with more environment until the test ends. Every test shares it, so a test that stops it doesn't run in parallel, and nor does one that changes the chat settings (`changeSettings`).
 - **Other hosts:** `e.net.Handle` serves a host of the internet for a test, as `TestFMITool` does FMI's. Only one test at a time may serve a host.
 - **Known bugs:** a test for a known open bug calls `knownbug.Skip` (`testutil/knownbug`, `knownBug` in `e2e`) with the bug's ID, which skips it. Set `SIIKABOT_KNOWN_BUGS=1` to run those tests, unit and end-to-end alike, and see which bugs are still there. The fix removes the call.
-- **Logs and coverage:** a failing test logs the end of the bot's log and Synapse's errors. `SIIKABOT_E2E_LOGDIR` keeps both logs whole in a directory, and `SIIKABOT_E2E_COVERDIR` collects the bot's coverage for `go tool covdata`.
+- **Logs and coverage:** a failing test logs the end of the bot's log and Synapse's errors. `SIIKABOT_E2E_LOGDIR` keeps both logs whole in a directory, with the browser tests' traces, and `SIIKABOT_E2E_COVERDIR` collects the bot's coverage for `go tool covdata`.
+
+#### The Dashboard in a Browser, and the API's Contract
+
+`TestDashboardInABrowser` (`e2e/browser_test.go`) makes a world of data through the bot, builds the dashboard with Vite and serves it with the API from the bot, and runs Playwright's tests (`web_frontend/e2e/`) against it. They log in through `!auth`, sending the command as the person's Matrix client would, and check what each card shows. The Go test tells them about the world in a file (`SIIKABOT_E2E_WORLD`), so they run only through it:
+
+```bash
+cd web_frontend && npm ci          # once; the browser tests need the dashboard's packages
+go test -tags e2e ./e2e -run TestDashboardInABrowser
+```
+
+- **The browser:** Playwright's own Chromium when `npx playwright install chromium` has put it in place, as in CI, and the system's Chromium otherwise. `SIIKABOT_E2E_CHROMIUM` names another.
+- **Known bugs:** a browser test for a known open bug calls `knownBug`, and runs with `SIIKABOT_KNOWN_BUGS=1` like the Go ones.
+
+`TestAPIContract` (`e2e/contract_test.go`) checks the API's contract with the dashboard. A real response of each endpoint the dashboard calls is saved in `web_frontend/src/api/contract/`, as a TypeScript file that gives it its type from `types.ts`:
+- **`tsc` checks the types:** a field the type doesn't have, a required one missing, or a value of the wrong type fails `npx tsc -b`, at any depth.
+- **The Go test checks the responses:** it fails when a response no longer has its fixture's shape, its fields and the kinds of their values, and says which fields changed.
+- **Saving them again:** `SIIKABOT_E2E_UPDATE_FIXTURES=1` saves the fixtures whose shape changed, and only those, so their IDs and times don't churn. Never edit one by hand.
 
 #### Frontend Tests
 ```bash
@@ -545,12 +565,15 @@ npm test -- --watch
 
 # Run with coverage
 npm test -- --coverage
+
+# Type-check, the API's contract fixtures included; vitest doesn't
+npx tsc -b
 ```
 
 **When to run tests:**
 - After modifying any Go code → Run `go test ./...`
 - After modifying any TypeScript/React code → Run `cd web_frontend && npm test`
-- After modifying API types or interfaces → Run both Go and frontend tests
+- After modifying API types or interfaces → Run both Go and frontend tests, `TestAPIContract`, and `npx tsc -b`
 - Before creating a commit → Always run relevant tests
 - After updating dependencies → Run all tests
 

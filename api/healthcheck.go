@@ -16,9 +16,8 @@ func Init() {
 
 // HealthCheckResponse represents the response from the healthcheck endpoint
 type HealthCheckResponse struct {
-	Status   string            `json:"status"`
-	Uptime   string            `json:"uptime"`
-	Services map[string]string `json:"services"`
+	Status string `json:"status"`
+	Uptime string `json:"uptime"`
 }
 
 // HealthCheckHandler returns the health status of the bot
